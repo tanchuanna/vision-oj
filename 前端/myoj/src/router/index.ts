@@ -2,7 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { useAuthStore } from '@/stores/auth'
 import AppLayout from '@/layouts/AppLayout.vue'
-import { registerAdminRoutes, isAdminRoutesMounted } from '@/router/admin-dynamic'
+import { isAdminRoutesMounted, registerAdminRoutes } from '@/router/admin-dynamic'
 
 const SITE_TITLE = '码跃OJ'
 
@@ -114,6 +114,45 @@ const router = createRouter({
           meta: { title: '账户设置', requiresAuth: true },
         },
         {
+          path: 'manage/problems',
+          name: 'manage-problems',
+          component: () => import('@/views/admin/ProblemManageView.vue'),
+          meta: { title: '题目管理', requiresPermission: 'QUESTION_AUTHOR' },
+        },
+        {
+          path: 'manage/problems/new',
+          name: 'manage-problem-new',
+          component: () => import('@/views/admin/ProblemEditorView.vue'),
+          meta: { title: '新增题目', requiresPermission: 'QUESTION_AUTHOR' },
+        },
+        {
+          path: 'manage/problems/:id/edit',
+          name: 'manage-problem-edit',
+          component: () => import('@/views/admin/ProblemEditorView.vue'),
+          meta: { title: '编辑题目', requiresPermission: 'QUESTION_AUTHOR' },
+        },
+        {
+          path: 'teaching/students',
+          name: 'teaching-students',
+          component: () => import('@/views/teaching/TeachingStudentsView.vue'),
+          meta: {
+            title: '学生管理',
+            requiresAnyPermission: ['STUDENT_VIEW_ASSIGNED', 'STUDENT_VIEW_ALL'],
+          },
+        },
+        {
+          path: 'teaching/teachers',
+          name: 'teaching-teachers',
+          component: () => import('@/views/teaching/TeachingTeachersView.vue'),
+          meta: { title: '任课老师', requiresAuth: true },
+        },
+        {
+          path: 'admin/users',
+          name: 'admin-users',
+          component: () => import('@/views/admin/AdminUserManagementView.vue'),
+          meta: { title: '用户管理', requiresPermission: 'USER_ROLE_MANAGE' },
+        },
+        {
           path: 'legal/terms',
           name: 'legal-terms',
           component: () => import('@/views/legal/TermsView.vue'),
@@ -147,7 +186,7 @@ router.beforeEach((to) => {
     return { path: '/', replace: true }
   }
 
-  if (auth.isAdmin && !isAdminRoutesMounted()) {
+  if (auth.isLoggedIn && !isAdminRoutesMounted()) {
     registerAdminRoutes(router)
     if (to.path.startsWith('/admin')) {
       return { path: to.fullPath, query: to.query, hash: to.hash, replace: true }
@@ -162,16 +201,22 @@ router.beforeEach((to) => {
       return { path: '/' }
     }
   }
+  const required = typeof to.meta.requiresPermission === 'string' ? to.meta.requiresPermission : ''
+  const anyRequired = Array.isArray(to.meta.requiresAnyPermission)
+    ? (to.meta.requiresAnyPermission as string[])
+    : []
+  if (required || anyRequired.length) {
+    if (!auth.isLoggedIn) return { path: '/', query: { ...to.query, openAuth: '1' } }
+    if ((required && !auth.can(required)) || (anyRequired.length && !anyRequired.some(auth.can))) {
+      Message.warning('当前账号没有访问该工作区的权限')
+      return { path: '/' }
+    }
+  }
 })
 
 router.afterEach((to) => {
   const raw = to.meta.title
-  const page =
-    typeof raw === 'string' && raw.trim()
-      ? raw.trim()
-      : to.name === 'home'
-        ? '首页'
-        : ''
+  const page = typeof raw === 'string' && raw.trim() ? raw.trim() : to.name === 'home' ? '首页' : ''
   document.title = page ? `${page} · ${SITE_TITLE}` : SITE_TITLE
 })
 

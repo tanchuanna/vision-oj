@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AiPanel from '@/components/study/ai/AiPanel.vue'
+import type { CodeEdit } from '@/api/codeEdit'
 
 const open = defineModel<boolean>('open', { default: false })
 
@@ -14,6 +15,14 @@ const props = withDefaults(
     sampleCases: string
     runResult: string
     getCode: () => string
+    applyCodeEdits: (
+      base: string,
+      edits: CodeEdit[],
+      signal: AbortSignal,
+      onStep: (step: number, total: number, reason: string) => void,
+    ) => Promise<void>
+    undoCodeEdit: () => boolean
+    runSamples: () => Promise<void>
   }>(),
   {
     questionId: '',
@@ -26,10 +35,6 @@ const props = withDefaults(
     runResult: '',
   },
 )
-
-const emit = defineEmits<{
-  'insert-code': [code: string]
-}>()
 </script>
 
 <template>
@@ -44,6 +49,8 @@ const emit = defineEmits<{
     :sample-cases="props.sampleCases"
     :run-result="props.runResult"
     :get-code="props.getCode"
-    @insert-code="emit('insert-code', $event)"
+    :apply-code-edits="props.applyCodeEdits"
+    :undo-code-edit="props.undoCodeEdit"
+    :run-samples="props.runSamples"
   />
 </template>

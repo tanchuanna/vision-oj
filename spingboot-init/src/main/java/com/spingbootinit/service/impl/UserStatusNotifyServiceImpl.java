@@ -3,6 +3,7 @@ package com.spingbootinit.service.impl;
 import com.spingbootinit.common.constant.RedisKeyConstants;
 import com.spingbootinit.service.UserStatusNotifyService;
 import com.spingbootinit.utils.RedisUtil;
+import jakarta.annotation.PreDestroy;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -24,6 +25,26 @@ public class UserStatusNotifyServiceImpl implements UserStatusNotifyService {
 
     private final ConcurrentHashMap<Long, CopyOnWriteArrayList<SseEmitter>> emitters =
             new ConcurrentHashMap<>();
+
+    /**
+     * Release long-lived browser connections before Spring Boot restarts.
+     * Otherwise the old embedded server can keep waiting for SSE requests and
+     * the restarted application may fail to reclaim its HTTP port.
+     */
+    @PreDestroy
+    void closeAllEmitters() {
+        List<SseEmitter> activeEmitters = emitters.values().stream()
+                .flatMap(List::stream)
+                .toList();
+        emitters.clear();
+        for (SseEmitter emitter : activeEmitters) {
+            try {
+                emitter.complete();
+            } catch (Exception e) {
+                log.debug("SSE connection was already closed during shutdown", e);
+            }
+        }
+    }
 
     @Override
     public long bumpStatusRevision(Long userId) {
@@ -58,7 +79,10 @@ public class UserStatusNotifyServiceImpl implements UserStatusNotifyService {
         emitters.computeIfAbsent(userId, id -> new CopyOnWriteArrayList<>()).add(emitter);
         Runnable cleanup = () -> removeEmitter(userId, emitter);
         emitter.onCompletion(cleanup);
-        emitter.onTimeout(cleanup);
+        emitter.onTimeout(() -> {
+            cleanup.run();
+            emitter.complete();
+        });
         emitter.onError(ex -> cleanup.run());
         try {
             long rev = getStatusRevision(userId);

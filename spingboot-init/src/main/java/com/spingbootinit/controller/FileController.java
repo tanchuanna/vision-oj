@@ -2,12 +2,13 @@ package com.spingbootinit.controller;
 
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.spingbootinit.common.result.Result;
 import com.spingbootinit.common.exception.BusinessException;
+import com.spingbootinit.common.result.Result;
 import com.spingbootinit.common.result.ResultCode;
-import com.spingbootinit.context.UserContext.IsAdminRoleString;
 import com.spingbootinit.context.UserContext.UserContext;
 import com.spingbootinit.model.entity.User;
+import com.spingbootinit.security.UserPermission;
+import com.spingbootinit.security.UserRolePolicy;
 import com.spingbootinit.service.UserService;
 import com.spingbootinit.utils.MinioUtils;
 import io.swagger.v3.oas.annotations.Operation;
@@ -15,7 +16,6 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
-
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -32,7 +32,7 @@ public class FileController {
     @Resource
     private UserService userService;
     @Resource
-    private IsAdminRoleString isAdminRole;
+    private UserRolePolicy rolePolicy;
 
     @PostMapping("/upload")
     @Operation(summary = "文件上传", description = "上传用户头像")
@@ -59,9 +59,10 @@ public class FileController {
     public Result<String> uploadQuestionImage(@RequestParam("image") MultipartFile file) {
         Long currentUserId = UserContext.getCurrentUserId();
         User currentUser = currentUserId == null ? null : userService.getById(currentUserId);
-        if (currentUser == null || !isAdminRole.isAdminRoleString(currentUser.getUserRole())) {
+        if (currentUser == null) {
             throw new BusinessException(ResultCode.NO_AUTH_ERROR);
         }
+        rolePolicy.requirePermission(currentUser.getUserRole(), UserPermission.QUESTION_AUTHOR);
         if (file == null || file.isEmpty() || file.getSize() > 10 * 1024 * 1024L) {
             throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "请上传不超过 10MB 的图片");
         }

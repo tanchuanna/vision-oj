@@ -6,5 +6,7 @@ export type QuestionRunRequest = {
     questionId: string;
     language: string;
     code: string;
+    mode?: 'SAMPLE' | 'CUSTOM';
+    customInput?: string;
 };
 

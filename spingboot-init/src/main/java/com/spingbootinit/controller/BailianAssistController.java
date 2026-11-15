@@ -1,17 +1,21 @@
 package com.spingbootinit.controller;
 
+import com.spingbootinit.common.exception.BusinessException;
+import com.spingbootinit.common.result.Result;
+import com.spingbootinit.common.result.ResultCode;
 import com.spingbootinit.config.AsyncConfig;
 import com.spingbootinit.context.UserContext.UserContext;
 import com.spingbootinit.model.dto.bailian.BailianAssistChatRequest;
+import com.spingbootinit.model.dto.bailian.CodeEditRequest;
 import com.spingbootinit.model.dto.bailian.ProblemStructureRequest;
-import com.spingbootinit.model.vo.bailian.ProblemStructureVO;
-import com.spingbootinit.common.result.Result;
-import com.spingbootinit.common.exception.BusinessException;
-import com.spingbootinit.common.result.ResultCode;
-import com.spingbootinit.context.UserContext.IsAdminRoleString;
 import com.spingbootinit.model.entity.User;
+import com.spingbootinit.model.vo.bailian.CodeEditVO;
+import com.spingbootinit.model.vo.bailian.ProblemStructureVO;
+import com.spingbootinit.security.UserPermission;
+import com.spingbootinit.security.UserRolePolicy;
 import com.spingbootinit.service.UserService;
 import com.spingbootinit.service.impl.BailianAssistService;
+import com.spingbootinit.service.impl.CodeEditService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
@@ -37,8 +41,9 @@ public class BailianAssistController {
 
     @Resource
     private BailianAssistService bailianAssistService;
+    @Resource private CodeEditService codeEditService;
     @Resource private UserService userService;
-    @Resource private IsAdminRoleString isAdminRole;
+    @Resource private UserRolePolicy rolePolicy;
 
     @Resource
     @Qualifier(AsyncConfig.BAILIAN_ASSIST_EXECUTOR)
@@ -61,13 +66,21 @@ public class BailianAssistController {
         return emitter;
     }
 
+    @PostMapping(value = "/code-edit", consumes = MediaType.APPLICATION_JSON_VALUE)
+    @Operation(summary = "按当前题目和代码生成经过位置校验的修改片段")
+    public Result<CodeEditVO> codeEdit(@Valid @RequestBody CodeEditRequest request) {
+        Long uid = UserContext.getCurrentUserId();
+        if (uid == null) throw new BusinessException(ResultCode.NOT_LOGIN_ERROR);
+        return Result.success(codeEditService.propose(uid, request));
+    }
+
     @PostMapping(value = "/structure-problem", consumes = MediaType.APPLICATION_JSON_VALUE)
     @Operation(summary = "将 OCR 文本结构化为传统 OJ 题目")
     public Result<ProblemStructureVO> structureProblem(@Valid @RequestBody ProblemStructureRequest request) {
         Long uid = UserContext.getCurrentUserId();
         User user = uid == null ? null : userService.getById(uid);
         if (user == null) throw new BusinessException(ResultCode.NOT_LOGIN_ERROR);
-        if (!isAdminRole.isAdminRoleString(user.getUserRole())) throw new BusinessException(ResultCode.NO_AUTH_ERROR);
+        rolePolicy.requirePermission(user.getUserRole(), UserPermission.QUESTION_AUTHOR);
         return Result.success(bailianAssistService.structureProblem(uid, request));
     }
 }

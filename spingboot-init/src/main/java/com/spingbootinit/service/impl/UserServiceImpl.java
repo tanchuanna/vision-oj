@@ -10,30 +10,21 @@ import com.spingbootinit.common.constant.RedisKeyConstants;
 import com.spingbootinit.common.exception.BusinessException;
 import com.spingbootinit.common.result.ResultCode;
 import com.spingbootinit.common.security.PasswordProcessor;
+import com.spingbootinit.config.ModerationProperties;
 import com.spingbootinit.mapper.UserCheckInLogMapper;
 import com.spingbootinit.mapper.UserMapper;
 import com.spingbootinit.model.dto.user.*;
-import com.spingbootinit.config.ModerationProperties;
 import com.spingbootinit.model.entity.User;
 import com.spingbootinit.model.entity.UserCheckInLog;
 import com.spingbootinit.model.entity.UserInAppNotification;
-import com.spingbootinit.model.vo.uservo.LoginVO;
-import com.spingbootinit.model.vo.uservo.TokenRefreshVO;
-import com.spingbootinit.model.vo.uservo.UserAdminListItemVO;
-import com.spingbootinit.model.vo.uservo.UserAdminPageVO;
-import com.spingbootinit.model.vo.uservo.UserCheckInCalendarVO;
-import com.spingbootinit.model.vo.uservo.UserCheckInStatusVO;
-import com.spingbootinit.model.vo.uservo.UserLeaderboardRowVO;
-import com.spingbootinit.model.vo.uservo.UserSessionStatusVO;
+import com.spingbootinit.model.vo.uservo.*;
+import com.spingbootinit.security.UserRole;
+import com.spingbootinit.security.UserRolePolicy;
 import com.spingbootinit.service.InAppNotificationService;
 import com.spingbootinit.service.IpRegionService;
 import com.spingbootinit.service.UserService;
 import com.spingbootinit.service.UserStatusNotifyService;
-import com.spingbootinit.utils.ClientIpUtils;
-import com.spingbootinit.utils.LoginDeviceInfo;
-import com.spingbootinit.utils.JsonUtils;
-import com.spingbootinit.utils.JwtUtils;
-import com.spingbootinit.utils.RedisUtil;
+import com.spingbootinit.utils.*;
 import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
@@ -42,13 +33,9 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
-import java.time.format.DateTimeParseException;
 import java.time.ZoneId;
-import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.List;
-import java.util.UUID;
+import java.time.format.DateTimeParseException;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -112,6 +99,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
 
     @Resource
     private UserCheckInLogMapper userCheckInLogMapper;
+
+    @Resource
+    private UserRolePolicy userRolePolicy;
+
+    @Resource
+    private UserOnlineService userOnlineService;
 
     /**
      * 获取用户基本信息。
@@ -307,6 +300,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
         loginVO.setRefreshToken(pair.getRefreshToken());
         loginVO.setToken(pair.getToken());
         loginVO.setUserRole(user.getUserRole());
+        loginVO.setPermissions(userRolePolicy.permissionNamesFor(user.getUserRole()));
         loginVO.setUsername(user.getUsername());
         loginVO.setId(user.getId());
         loginVO.setAvatar(user.getAvatar());
@@ -497,7 +491,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
      * </p>
      */
     @Override
-    public UserAdminPageVO pageUsersForAdmin(long current, long size, String keyword) {
+    public UserAdminPageVO pageUsersForAdmin(long current, long size, String keyword, String role) {
         // 对分页参数做兜底，避免出现第 0 页、负数页、超大页大小等情况
         if (current < 1) {
             current = 1;
@@ -511,7 +505,17 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
         Page<User> page = new Page<>(current, size);
         LambdaQueryWrapper<User> q = new LambdaQueryWrapper<>();
         if (org.springframework.util.StringUtils.hasText(keyword)) {
-            q.like(User::getUsername, keyword.trim());
+            String value = keyword.trim();
+            q.and(wrapper -> wrapper.like(User::getUsername, value)
+                    .or().like(User::getNickname, value)
+                    .or().like(User::getEmail, value));
+        }
+        if (org.springframework.util.StringUtils.hasText(role)) {
+            UserRole resolvedRole = userRolePolicy.resolve(role);
+            if (resolvedRole != UserRole.STUDENT && resolvedRole != UserRole.TEACHER) {
+                throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "仅支持筛选学生或老师");
+            }
+            q.eq(User::getUserRole, resolvedRole.storageValue());
         }
         // 后台通常希望新用户排在前面，所以按 id 倒序
         q.orderByDesc(User::getId);
@@ -527,6 +531,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
             item.setId(u.getId());
             item.setUsername(u.getUsername());
             item.setNickname(u.getNickname());
+            item.setAvatar(u.getAvatar());
             item.setEmail(u.getEmail());
             item.setPhone(u.getPhone());
             item.setUserRole(u.getUserRole());
@@ -602,6 +607,15 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
             item.setAbnormalReason(abnormal ? reason.toString() : "正常");
             list.add(item);
         }
+        // 批量查询本页用户的在线状态（基于心跳 TTL）
+        Set<Long> ids = new HashSet<>();
+        for (User u : result.getRecords()) {
+            ids.add(u.getId());
+        }
+        Set<Long> onlineIds = userOnlineService.filterOnline(ids);
+        for (UserAdminListItemVO item : list) {
+            item.setOnline(onlineIds.contains(item.getId()));
+        }
         vo.setRecords(list);
         return vo;
     }
@@ -632,6 +646,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
         User target = this.getById(request.getUserId());
         if (target == null) {
             throw new BusinessException(ResultCode.NOT_FOUND.getCode(), "用户不存在");
+        }
+        if (userRolePolicy.isAdmin(target.getUserRole())) {
+            throw new BusinessException(ResultCode.NO_AUTH_ERROR.getCode(), "管理员账号不能在用户管理中禁用或解禁");
         }
         LambdaUpdateWrapper<User> uw = new LambdaUpdateWrapper<>();
         uw.eq(User::getId, request.getUserId()).set(User::getStatus, request.getStatus());
@@ -780,6 +797,8 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
         vo.setAiBanUntil(resolveAiBanUntil(user));
         vo.setAiBanReason(resolveAiBanReason(user));
         vo.setStatusRevision(userStatusNotifyService.getStatusRevision(userId));
+        vo.setUserRole(user.getUserRole());
+        vo.setPermissions(userRolePolicy.permissionNamesFor(user.getUserRole()));
         return vo;
     }
 
@@ -835,7 +854,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
         if (user == null) {
             return;
         }
-        if (isAdminRoleString(user.getUserRole())) {
+        if (userRolePolicy.isAdmin(user.getUserRole())) {
             throw new BusinessException(
                     ResultCode.COMMENT_PROFANITY_BANNED.getCode(),
                     "评论含违禁内容，管理员账号不会被自动封禁");
@@ -913,7 +932,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
         if (user == null) {
             return;
         }
-        if (isAdminRoleString(user.getUserRole())) {
+        if (userRolePolicy.isAdmin(user.getUserRole())) {
             throw new BusinessException(
                     ResultCode.AI_ASSIST_PROFANITY_BANNED.getCode(),
                     "消息含违禁内容，管理员账号不会被自动封禁");
@@ -1297,7 +1316,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
             throw new BusinessException(ResultCode.NOT_FOUND.getCode(), "用户不存在");
         }
         // 管理员账号通常承担系统管理职责，因此这里不允许直接自助注销
-        if (isAdminRoleString(user.getUserRole())) {
+        if (userRolePolicy.isAdmin(user.getUserRole())) {
             throw new BusinessException(ResultCode.BAD_REQUEST.getCode(), "管理员账号无法自助注销，请先移交权限后再操作");
         }
         if (!passwordProcessor.matches(request.getPassword(), user.getPassword())) {
@@ -1340,14 +1359,6 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>
      * 所以这里做了一个宽松匹配，方便复用。
      * </p>
      */
-    private static boolean isAdminRoleString(String role) {
-        if (role == null || role.isBlank()) {
-            return false;
-        }
-        String r = role.trim();
-        return "admin".equalsIgnoreCase(r) || "管理员".equals(r) || r.toUpperCase().contains("ADMIN");
-    }
-
     /**
      * 查询当前用户的签到展示状态。
      * <p>

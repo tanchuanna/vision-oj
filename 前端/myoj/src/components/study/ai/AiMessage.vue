@@ -2,6 +2,8 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useClipboard } from '@vueuse/core'
 import { extractMarkdownCodeBlocks } from '@/utils/extractMarkdownCodeBlocks'
+import { useAuthStore } from '@/stores/auth'
+import AiProviderAvatar from './AiProviderAvatar.vue'
 
 const props = defineProps<{
   message: {
@@ -9,6 +11,9 @@ const props = defineProps<{
     role: 'user' | 'assistant'
     content: string
     html?: string
+    imagePreview?: string
+    providerCode?: string
+    modelId?: string
   }
   /** 当前流式中的气泡 */
   isStreaming: boolean
@@ -17,10 +22,18 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  'insert-code': [code: string]
+  'auto-edit': [answer: string]
 }>()
 
 const mdRoot = ref<HTMLElement | null>(null)
+const auth = useAuthStore()
+const avatarFailed = ref(false)
+watch(
+  () => auth.avatarUrl,
+  () => {
+    avatarFailed.value = false
+  },
+)
 const { copy, isSupported } = useClipboard({ legacy: true })
 const copiedIdx = ref<number | null>(null)
 
@@ -31,21 +44,6 @@ const variant = computed(() => {
   if (/```/.test(c)) return 'code' as const
   if (/思路|提示|建议|注意/.test(c)) return 'hint' as const
   return 'analysis' as const
-})
-
-const barClass = computed(() => {
-  switch (variant.value) {
-    case 'user':
-      return 'tw-bg-zinc-400 dark:tw-bg-zinc-500'
-    case 'hint':
-      return 'tw-bg-violet-500'
-    case 'code':
-      return 'tw-bg-emerald-500'
-    case 'error':
-      return 'tw-bg-rose-500'
-    default:
-      return 'tw-bg-sky-500'
-  }
 })
 
 const fences = computed(() =>
@@ -100,7 +98,8 @@ watch(
   () => [props.message.html, props.message.id, props.isStreaming] as const,
   async () => {
     highlightCancelled = true
-    if (typeof cancelIdleCallback !== 'undefined' && highlightIdle) cancelIdleCallback(highlightIdle)
+    if (typeof cancelIdleCallback !== 'undefined' && highlightIdle)
+      cancelIdleCallback(highlightIdle)
     highlightCancelled = false
     await nextTick()
     void highlightCodeBlocksWithPrism()
@@ -121,37 +120,46 @@ async function onCopyBlock(code: string, idx: number) {
     if (copiedIdx.value === idx) copiedIdx.value = null
   }, 1600)
 }
-
-function onInsert(code: string) {
-  emit('insert-code', code)
-}
 </script>
 
 <template>
   <article
-    class="tw-group tw-relative tw-flex tw-gap-2.5 tw-rounded-2xl tw-border tw-border-black/[0.06] tw-bg-white/80 tw-px-3 tw-py-2.5 tw-pl-2 tw-shadow-md tw-shadow-black/5 tw-backdrop-blur-sm tw-transition-shadow hover:tw-shadow-lg dark:tw-border-white/10 dark:tw-bg-zinc-900/75 dark:tw-shadow-black/30"
+    class="tw-group tw-relative tw-flex tw-gap-2.5 tw-rounded-2xl tw-px-2 tw-py-2.5"
+    :class="
+      message.role === 'user'
+        ? 'tw-ml-auto tw-max-w-[88%] tw-bg-zinc-100/90 dark:tw-bg-zinc-800/85'
+        : 'tw-w-full'
+    "
   >
-    <span
-      class="tw-mt-0.5 tw-inline-block tw-w-1 tw-shrink-0 tw-self-stretch tw-rounded-full"
-      :class="barClass"
-      aria-hidden="true"
-    />
     <div class="tw-min-w-0 tw-flex-1">
       <div class="tw-mb-1 tw-flex tw-items-center tw-gap-2">
         <span
-          class="tw-inline-flex tw-h-7 tw-w-7 tw-shrink-0 tw-items-center tw-justify-center tw-rounded-full tw-text-[11px] tw-font-bold tw-text-white tw-shadow-sm"
-          :class="
-            message.role === 'user'
-              ? 'tw-bg-gradient-to-br tw-from-zinc-500 tw-to-zinc-700'
-              : isStreaming
-                ? 'tw-animate-pulse tw-bg-gradient-to-br tw-from-teal-500 tw-to-cyan-600'
-                : 'tw-bg-gradient-to-br tw-from-teal-500 tw-to-cyan-600'
-          "
+          v-if="message.role === 'user'"
+          class="tw-inline-flex tw-h-7 tw-w-7 tw-shrink-0 tw-items-center tw-justify-center tw-overflow-hidden tw-rounded-full tw-bg-zinc-600 tw-text-[11px] tw-font-bold tw-text-white"
         >
-          {{ message.role === 'user' ? '我' : 'AI' }}
+          <img
+            v-if="auth.avatarUrl && !avatarFailed"
+            :src="auth.avatarUrl"
+            alt=""
+            class="tw-h-full tw-w-full tw-object-cover"
+            @error="avatarFailed = true"
+          />
+          <template v-else>我</template>
         </span>
+        <AiProviderAvatar
+          v-else
+          :provider-code="message.providerCode"
+          :size="28"
+          :class="{ 'tw-animate-pulse': isStreaming }"
+        />
         <span class="tw-text-[11px] tw-font-medium tw-text-zinc-500 dark:tw-text-zinc-400">
-          {{ message.role === 'user' ? '你' : variant === 'error' ? '提示' : '助手' }}
+          {{
+            message.role === 'user'
+              ? '你'
+              : variant === 'error'
+                ? '提示'
+                : message.modelId || '助手'
+          }}
         </span>
       </div>
 
@@ -161,16 +169,39 @@ function onInsert(code: string) {
           class="tw-space-y-2 tw-py-1"
           aria-live="polite"
         >
-          <div class="tw-h-2.5 tw-w-[92%] tw-max-w-md tw-rounded-md tw-bg-gradient-to-r tw-from-zinc-200 tw-via-zinc-100 tw-to-zinc-200 tw-bg-[length:200%_100%] tw-animate-ai-shimmer dark:tw-from-zinc-700 dark:tw-via-zinc-600 dark:tw-to-zinc-700" />
-          <div class="tw-h-2.5 tw-w-[78%] tw-max-w-sm tw-rounded-md tw-bg-gradient-to-r tw-from-zinc-200 tw-via-zinc-100 tw-to-zinc-200 tw-bg-[length:200%_100%] tw-animate-ai-shimmer dark:tw-from-zinc-700 dark:tw-via-zinc-600 dark:tw-to-zinc-700" />
-          <div class="tw-h-2.5 tw-w-[64%] tw-max-w-xs tw-rounded-md tw-bg-gradient-to-r tw-from-zinc-200 tw-via-zinc-100 tw-to-zinc-200 tw-bg-[length:200%_100%] tw-animate-ai-shimmer dark:tw-from-zinc-700 dark:tw-via-zinc-600 dark:tw-to-zinc-700" />
+          <div
+            class="tw-h-2.5 tw-w-[92%] tw-max-w-md tw-rounded-md tw-bg-gradient-to-r tw-from-zinc-200 tw-via-zinc-100 tw-to-zinc-200 tw-bg-[length:200%_100%] tw-animate-ai-shimmer dark:tw-from-zinc-700 dark:tw-via-zinc-600 dark:tw-to-zinc-700"
+          />
+          <div
+            class="tw-h-2.5 tw-w-[78%] tw-max-w-sm tw-rounded-md tw-bg-gradient-to-r tw-from-zinc-200 tw-via-zinc-100 tw-to-zinc-200 tw-bg-[length:200%_100%] tw-animate-ai-shimmer dark:tw-from-zinc-700 dark:tw-via-zinc-600 dark:tw-to-zinc-700"
+          />
+          <div
+            class="tw-h-2.5 tw-w-[64%] tw-max-w-xs tw-rounded-md tw-bg-gradient-to-r tw-from-zinc-200 tw-via-zinc-100 tw-to-zinc-200 tw-bg-[length:200%_100%] tw-animate-ai-shimmer dark:tw-from-zinc-700 dark:tw-via-zinc-600 dark:tw-to-zinc-700"
+          />
         </div>
-        <div v-else-if="isStreaming" class="tw-whitespace-pre-wrap tw-break-words tw-text-sm tw-leading-relaxed tw-text-zinc-800 dark:tw-text-zinc-100">
-          {{ streamingPlainText }}<span class="tw-inline-block tw-w-2 tw-animate-ai-type-caret tw-align-text-bottom">▍</span>
+        <div
+          v-else-if="isStreaming"
+          class="tw-whitespace-pre-wrap tw-break-words tw-text-sm tw-leading-relaxed tw-text-zinc-800 dark:tw-text-zinc-100"
+        >
+          {{ streamingPlainText
+          }}<span class="tw-inline-block tw-w-2 tw-animate-ai-type-caret tw-align-text-bottom"
+            >▍</span
+          >
         </div>
         <div v-else>
-          <div ref="mdRoot" class="ai-msg-md oj-statement tw-text-sm tw-leading-relaxed tw-text-zinc-800 dark:tw-text-zinc-100" v-html="message.html" />
+          <div
+            ref="mdRoot"
+            class="ai-msg-md oj-statement tw-text-sm tw-leading-relaxed tw-text-zinc-800 dark:tw-text-zinc-100"
+            v-html="message.html"
+          />
           <div v-if="fences.length" class="tw-mt-2 tw-flex tw-flex-col tw-gap-2">
+            <button
+              type="button"
+              class="tw-self-start tw-rounded-lg tw-border tw-border-teal-500/35 tw-bg-teal-500/10 tw-px-2.5 tw-py-1 tw-text-[11px] tw-font-semibold tw-text-teal-800 hover:tw-bg-teal-500/20 dark:tw-text-teal-200"
+              @click="emit('auto-edit', message.content)"
+            >
+              {{ auth.isAdmin ? '自动写入编辑器并运行样例' : '自动修复局部代码并运行样例' }}
+            </button>
             <div
               v-for="(f, i) in fences"
               :key="i"
@@ -178,25 +209,28 @@ function onInsert(code: string) {
             >
               <button
                 type="button"
-                class="tw-rounded-lg tw-border tw-border-teal-500/35 tw-bg-teal-500/10 tw-px-2.5 tw-py-1 tw-text-[11px] tw-font-semibold tw-text-teal-800 tw-transition hover:tw-bg-teal-500/20 dark:tw-text-teal-200"
-                @click="onInsert(f.code)"
-              >
-                插入代码块 {{ i + 1 }}
-              </button>
-              <button
-                type="button"
                 class="tw-rounded-lg tw-border tw-border-zinc-300 tw-bg-white/60 tw-px-2.5 tw-py-1 tw-text-[11px] tw-font-semibold tw-text-zinc-700 tw-backdrop-blur hover:tw-bg-white dark:tw-border-zinc-600 dark:tw-bg-zinc-800/60 dark:tw-text-zinc-200"
                 @click="onCopyBlock(f.code, i)"
               >
-                {{ copiedIdx === i ? '已复制' : '复制' }}
+                {{ copiedIdx === i ? '已复制' : `复制代码块 ${i + 1}` }}
               </button>
             </div>
           </div>
         </div>
       </template>
-      <p v-else class="tw-m-0 tw-whitespace-pre-wrap tw-break-words tw-text-sm tw-leading-relaxed tw-text-zinc-800 dark:tw-text-zinc-100">
-        {{ message.content }}
-      </p>
+      <div v-else>
+        <img
+          v-if="message.imagePreview"
+          :src="message.imagePreview"
+          alt="本轮提问附带的图片"
+          class="tw-mb-2 tw-max-h-48 tw-max-w-full tw-rounded-lg tw-border tw-border-zinc-200 tw-object-contain dark:tw-border-zinc-700"
+        />
+        <p
+          class="tw-m-0 tw-whitespace-pre-wrap tw-break-words tw-text-sm tw-leading-relaxed tw-text-zinc-800 dark:tw-text-zinc-100"
+        >
+          {{ message.content }}
+        </p>
+      </div>
     </div>
   </article>
 </template>

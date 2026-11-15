@@ -1,55 +1,63 @@
 <script setup lang="ts">
-import { computed, inject } from 'vue'
-import AiHeroIcon from './AiHeroIcon.vue'
+import { inject } from 'vue'
 import { AI_COPILOT_ACTIVE_TAB_KEY, type AiCopilotTabId } from './keys'
 
 const activeTab = inject(AI_COPILOT_ACTIVE_TAB_KEY)!
 if (!activeTab) throw new Error('AiTabs: missing AI_COPILOT_ACTIVE_TAB_KEY')
 
-const tabs = computed(() =>
-  [
-    { id: 'chat' as const, label: '对话', icon: 'chat-bubble-left-right' as const },
-    { id: 'templates' as const, label: '快捷', icon: 'bolt' as const },
-  ].map((t) => ({ ...t })),
-)
-
-function select(id: AiCopilotTabId) {
-  activeTab.value = id
-}
-
-const activeIndex = computed(() => tabs.value.findIndex((t) => t.id === activeTab.value))
-const indicatorStyle = computed(() => {
-  const i = Math.max(0, activeIndex.value)
-  const pct = tabs.value.length ? 100 / tabs.value.length : 50
-  return {
-    width: `${pct}%`,
-    transform: `translateX(${i * 100}%)`,
-  }
-})
+const tabs: Array<{ id: AiCopilotTabId; label: string }> = [
+  { id: 'chat', label: '对话' },
+  { id: 'templates', label: '快捷提问' },
+]
 </script>
 
 <template>
-  <div class="tw-relative tw-rounded-xl tw-border tw-border-white/25 tw-bg-white/40 tw-p-1 tw-backdrop-blur-sm dark:tw-border-white/10 dark:tw-bg-zinc-900/50">
-    <div
-      class="tw-pointer-events-none tw-absolute tw-inset-y-1 tw-left-1 tw-rounded-lg tw-bg-gradient-to-r tw-from-teal-500/90 tw-to-cyan-600/90 tw-shadow-md tw-transition-transform tw-duration-300 tw-ease-out dark:tw-from-teal-400/85 dark:tw-to-cyan-500/85"
-      :style="indicatorStyle"
-    />
-    <div class="tw-relative tw-z-10 tw-grid tw-grid-cols-2 tw-gap-0">
-      <button
-        v-for="t in tabs"
-        :key="t.id"
-        type="button"
-        class="tw-flex tw-items-center tw-justify-center tw-gap-1.5 tw-rounded-lg tw-py-2 tw-text-xs tw-font-semibold tw-transition-colors tw-duration-200"
-        :class="
-          activeTab === t.id
-            ? 'tw-text-white'
-            : 'tw-text-zinc-600 hover:tw-text-zinc-900 dark:tw-text-zinc-300 dark:hover:tw-text-white'
-        "
-        @click="select(t.id)"
-      >
-        <AiHeroIcon :name="t.icon" />
-        {{ t.label }}
-      </button>
-    </div>
-  </div>
+  <nav class="chat-tabs" aria-label="助手视图">
+    <button
+      v-for="tab in tabs"
+      :key="tab.id"
+      type="button"
+      :class="{ active: activeTab === tab.id }"
+      :aria-current="activeTab === tab.id ? 'page' : undefined"
+      @click="activeTab = tab.id"
+    >
+      {{ tab.label }}
+    </button>
+  </nav>
 </template>
+
+<style scoped>
+.chat-tabs {
+  display: flex;
+  gap: 16px;
+  border-bottom: 1px solid var(--app-border, rgba(15, 23, 42, 0.1));
+}
+.chat-tabs button {
+  position: relative;
+  padding: 8px 2px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--app-text-subtle, #64748b);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+.chat-tabs button.active {
+  color: var(--app-text, #172b34);
+}
+.chat-tabs button.active::after {
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: #0f766e;
+  content: '';
+}
+.chat-tabs button:focus-visible {
+  outline: 2px solid #0d9488;
+  outline-offset: 2px;
+}
+</style>

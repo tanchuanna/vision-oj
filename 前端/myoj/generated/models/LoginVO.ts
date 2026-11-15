@@ -9,6 +9,7 @@ export type LoginVO = {
     refreshToken?: string;
     token?: string;
     userRole?: string;
+    permissions?: Array<string>;
     avatar?: string;
     status?: number;
 };

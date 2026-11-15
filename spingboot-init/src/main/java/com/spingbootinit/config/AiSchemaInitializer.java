@@ -46,6 +46,19 @@ public class AiSchemaInitializer {
                         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
                           COMMENT='不保存提示词和代码的模型调用统计'
                         """);
+                jdbcTemplate.execute("""
+                        CREATE TABLE IF NOT EXISTS `user_ai_image_config` (
+                            `user_id` BIGINT NOT NULL,
+                            `provider_code` VARCHAR(20) NOT NULL,
+                            `model_id` VARCHAR(100) NOT NULL,
+                            `key_cipher` TEXT DEFAULT NULL,
+                            `key_last4` VARCHAR(4) DEFAULT NULL,
+                            `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                            PRIMARY KEY (`user_id`, `provider_code`)
+                        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                          COMMENT='用户图片生成厂商配置（AES-GCM密文）'
+                        """);
             } catch (Exception e) {
                 // 站点默认模型和既有功能继续可用；可用完整 schema.sql 补建缺失表。
                 log.warn("AI model table initialization failed; check database permissions or apply db/schema.sql. errorType={}",

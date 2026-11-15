@@ -4,6 +4,7 @@ package com.spingbootinit.context.UserContext;
 public class UserContext {
 
     private static final ThreadLocal<Long> userIdHolder = new ThreadLocal<>();
+    private static final ThreadLocal<String> roleHolder = new ThreadLocal<>();
     private static final ThreadLocal<String> usernameHolder = new ThreadLocal<>();
 
     public static void setCurrenUserId(Long userId){
@@ -15,10 +16,10 @@ public class UserContext {
     }
 
     public static String getCurrentRole(){
-        return usernameHolder.get();
+        return roleHolder.get();
     }
     public static void setCurrentRole(String role) {
-        usernameHolder.set(role);
+        roleHolder.set(role);
     }
 
     public static void setCurrentUsername(String username) {
@@ -32,6 +33,7 @@ public class UserContext {
     // 清理所有
     public static void clear(){
         userIdHolder.remove();
+        roleHolder.remove();
         usernameHolder.remove();
     }
 

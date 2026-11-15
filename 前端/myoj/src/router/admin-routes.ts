@@ -24,13 +24,13 @@ export const adminRouteRecords: RouteRecordRaw[] = [
     path: 'admin/contests',
     name: 'admin-contests',
     component: () => import('@/views/admin/ContestManageView.vue'),
-    meta: { title: '赛事管理', requiresAdmin: true },
+    meta: { title: '赛事管理', requiresPermission: 'CONTEST_MANAGE' },
   },
   {
     path: 'admin/announcements',
     name: 'admin-announcements',
     component: () => import('@/views/admin/AnnouncementPublishView.vue'),
-    meta: { title: '发布公告', requiresAdmin: true },
+    meta: { title: '发布公告', requiresPermission: 'ANNOUNCEMENT_MANAGE' },
   },
 ]
 

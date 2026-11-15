@@ -51,4 +51,8 @@ public class BailianAssistChatRequest {
 
     @Size(max = 100)
     private String modelId;
+
+    /** 本轮临时图片；仅接受 JPEG/PNG data URL，不写入对话历史或数据库。 */
+    @Size(max = 5_600_000)
+    private String imageDataUrl;
 }

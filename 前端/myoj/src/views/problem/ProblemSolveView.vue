@@ -10,15 +10,28 @@ import {
   ApiError,
   CodeValidateService,
   ContestControllerService,
+  OpenAPI,
+  type QuestionSubmitAddRequest,
   QuestionSubmitControllerService,
   Service,
-  type QuestionSubmitAddRequest,
 } from '@generated'
 import { useAuthStore } from '@/stores/auth'
 import StudyAiCopilot from '@/components/study/StudyAiCopilot.vue'
+import SolveConsole from './SolveConsole.vue'
+import ProblemSolutionPanel from './ProblemSolutionPanel.vue'
+import ProblemStatisticsPanel from './ProblemStatisticsPanel.vue'
+import { type SolveLayoutMode, useSolveWorkbenchLayout } from './useSolveWorkbenchLayout'
+import type { SolveRunResult, SolveSubmitItem } from './solveWorkbenchTypes'
+import type { CodeEdit } from '@/api/codeEdit'
 import monaco, { type LoadedMonaco } from '@/lib/monacoEditor'
 import gsap from 'gsap'
-import { buildCppCompletions, buildJavaCompletions, buildPythonCompletions } from './solveEditorCompletions'
+import {
+  buildCppCompletions,
+  buildJavaCompletions,
+  buildPythonCompletions,
+} from './solveEditorCompletions'
+import { renderMarkdownToHtml } from '@/utils/renderMarkdown'
+import { normalizeOjStatement } from '@/utils/normalizeOjStatement'
 
 type ProblemDetail = {
   id: string
@@ -33,53 +46,28 @@ type ProblemDetail = {
   submitNum?: number
   acceptedNum?: number
   updateTime?: string
-  judgeConfig?: {
-    timeLimit?: number
-    memoryLimit?: number
-    stackLimit?: number
-  } | string
+  judgeConfig?:
+    | {
+        timeLimit?: number
+        memoryLimit?: number
+        stackLimit?: number
+      }
+    | string
   sampleJudgeCase?: Array<{ input?: string; output?: string }> | string
   judgeCase?: Array<{ input?: string; output?: string }> | string
-}
-
-type SubmitHistoryItem = {
-  id: string
-  time: string
-  language: string
-  status: 'Pending' | 'Accepted' | 'Wrong Answer' | 'Compile Error' | 'Submitted'
-  codeSize: number
-}
-
-/** POST /question/run 返回（与后端 QuestionRunVO 对齐） */
-type QuestionRunCase = {
-  index: number
-  input: string
-  expectedOutput: string
-  actualOutput: string
-  passed: boolean
-}
-
-type QuestionRunResult = {
-  sandboxCode?: number | null
-  sandboxMessage?: string | null
-  judgeInfo?: { message?: string | null; time?: number | null; memory?: number | null } | null
-  terminalError: boolean
-  cases: QuestionRunCase[]
-  allSamplePassed: boolean
-  /** 沙箱输出条数与样例组数不一致等（与 hints 可能重复，后端兼容字段） */
-  warning?: string | null
-  hints?: string[] | null
-  /** 后端启发式：疑似常量输出或未读 stdin */
-  suspectedShortcut?: boolean
 }
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const userScopeKey = computed(() => {
+  const uid = (auth.userId || '').trim()
+  return uid ? `u:${uid}` : 'guest'
+})
 const loading = ref(false)
 const submitting = ref(false)
 const running = ref(false)
-const runResult = ref<QuestionRunResult | null>(null)
+const runResult = ref<SolveRunResult | null>(null)
 /** 运行结果面板展开；每次有新运行结果时自动展开 */
 const runResultPanelExpanded = ref(true)
 const code = ref('// 请在此输入代码\n')
@@ -87,12 +75,22 @@ const language = ref('cpp')
 const EDITOR_THEME_KEY = 'myoj.solve.editor.theme'
 const editorTheme = ref<'dark-pro' | 'light-pro' | 'ocean-pro'>('dark-pro')
 const detail = ref<ProblemDetail | null>(null)
-const activeTab = ref<'statement' | 'meta'>('statement')
+const activeTab = ref<'statement' | 'solution' | 'submissions' | 'stats'>('statement')
 
 const screenWidth = ref(typeof window !== 'undefined' ? window.innerWidth : 1440)
-/** 左侧题面默认约 45%，与右侧编辑器约 55% */
-const leftPaneWidth = ref(45)
+const {
+  leftPercent: leftPaneWidth,
+  mode: workspaceMode,
+  consoleHeight,
+  consoleCollapsed,
+  resizeBy: resizeSplitBy,
+  setLeftPercent,
+  setConsoleHeight,
+} = useSolveWorkbenchLayout(userScopeKey)
 const isDragging = ref(false)
+const isConsoleDragging = ref(false)
+const consoleDragStartY = ref(0)
+const consoleDragStartHeight = ref(240)
 const statementRef = ref<HTMLElement | null>(null)
 const editorRef = ref<HTMLElement | null>(null)
 const monacoReady = ref(false)
@@ -125,33 +123,169 @@ const isTabletLayout = computed(() => screenWidth.value >= 768 && screenWidth.va
 /** 窄屏：单栏 + 顶栏 Tab 切换「题目 / 代码」 */
 const isMobileLayout = computed(() => screenWidth.value < 768)
 
-const mobileWorkspaceTab = ref<'problem' | 'editor'>('editor')
+const mobileWorkspaceTab = ref<'problem' | 'editor'>('problem')
 const expandedSampleIdx = ref(0)
 const showMinimap = ref(true)
 const showWhitespace = ref(false)
+const editorSettingsOpen = ref(false)
+const editorSettingsRef = ref<HTMLElement | null>(null)
 const pageReady = ref(false)
 const studyCopilotOpen = ref(false)
+const draftStatus = ref<'saved' | 'saving'>('saved')
+const cursorPosition = ref({ line: 1, column: 1 })
+const customInput = ref('')
+const submissionHistory = ref<SolveSubmitItem[]>([])
+const submitPolling = ref(false)
+const acceptedCelebration = ref<{ attempt: number; time?: number; memory?: number } | null>(null)
+const nextRecommendation = ref<{ questionId: string; title: string } | null>(null)
+let draftSaveTimer: number | null = null
+let submitPollTimer: number | null = null
+let submitPollGeneration = 0
 
-function onCopilotInsertCode(snippet: string) {
-  const text = snippet ?? ''
-  if (!text) return
-  const ed = monacoInstance
-  if (!ed) {
-    code.value += (code.value.endsWith('\n') ? '' : '\n') + text
-    return
+let lastAiEdit: { before: string; after: string } | null = null
+let aiEditDecorationIds: string[] = []
+const aiEditWriting = ref(false)
+
+function replaceEditorCode(text: string) {
+  const editor = monacoInstance
+  const model = editor?.getModel()
+  if (editor && model) {
+    // executeEdits silently returns false while the editor is read-only.
+    model.pushEditOperations(
+      null,
+      [{ range: model.getFullModelRange(), text, forceMoveMarkers: true }],
+      () => null,
+    )
+    code.value = editor.getValue()
+  } else {
+    code.value = text
   }
-  const sel = ed.getSelection()
-  const model = ed.getModel()
-  if (!model || !sel) {
-    code.value += (code.value.endsWith('\n') ? '' : '\n') + text
-    return
+}
+
+async function applyAiCodeEdits(
+  base: string,
+  edits: CodeEdit[],
+  signal: AbortSignal,
+  onStep: (step: number, total: number, reason: string) => void,
+) {
+  if (aiEditWriting.value) throw new Error('代码正在修改中')
+  if (currentEditorCode() !== base) throw new Error('你在生成期间修改了代码，请重新生成修改建议')
+  if (!edits.length) throw new Error('模型未给出可写入的修改')
+  let cursor = 0
+  for (const edit of edits) {
+    if (
+      !Number.isInteger(edit.startOffset) ||
+      !Number.isInteger(edit.endOffset) ||
+      edit.startOffset < cursor ||
+      edit.endOffset < edit.startOffset ||
+      (!edit.oldText && base !== '') ||
+      edit.endOffset > base.length ||
+      base.slice(edit.startOffset, edit.endOffset) !== edit.oldText ||
+      typeof edit.newText !== 'string'
+    )
+      throw new Error('修改位置校验失败，编辑器未改变')
+    cursor = edit.endOffset
   }
-  ed.executeEdits('study-ai-copilot', [{ range: sel, text, forceMoveMarkers: true }])
-  isSyncingFromEditor = true
-  code.value = ed.getValue()
-  void nextTick(() => {
-    isSyncingFromEditor = false
-  })
+  aiEditWriting.value = true
+  const editor = monacoInstance
+  const targetModel = editor?.getModel()
+  const startingLanguage = language.value
+  editor?.updateOptions({ readOnly: true })
+  targetModel?.pushStackElement()
+  let applied = 0
+  let expected = base
+  let delta = 0
+  try {
+    for (const [index, edit] of edits.entries()) {
+      if (signal.aborted) throw new DOMException('已停止修改', 'AbortError')
+      if (
+        language.value !== startingLanguage ||
+        editor?.getModel() !== targetModel ||
+        currentEditorCode() !== expected
+      ) {
+        throw new Error('代码在写入期间发生变化，已停止修改')
+      }
+      const start = edit.startOffset + delta
+      const end = edit.endOffset + delta
+      const model = targetModel
+      if (editor && model && monacoApi) {
+        const startPos = model.getPositionAt(start)
+        const endPos = model.getPositionAt(end)
+        const range = new monacoApi.Range(
+          startPos.lineNumber,
+          startPos.column,
+          endPos.lineNumber,
+          endPos.column,
+        )
+        model.pushEditOperations(
+          null,
+          [{ range, text: edit.newText, forceMoveMarkers: true }],
+          () => null,
+        )
+        applied++
+        expected = expected.slice(0, start) + edit.newText + expected.slice(end)
+        if (editor.getValue() !== expected) throw new Error('编辑器未按预期写入，已恢复原代码')
+        const afterPos = model.getPositionAt(start + edit.newText.length)
+        aiEditDecorationIds = editor.deltaDecorations(aiEditDecorationIds, [
+          {
+            range: new monacoApi.Range(
+              startPos.lineNumber,
+              startPos.column,
+              afterPos.lineNumber,
+              afterPos.column,
+            ),
+            options: { className: 'ai-edit-highlight', isWholeLine: true },
+          },
+        ])
+        editor.revealLineInCenter(startPos.lineNumber)
+        code.value = editor.getValue()
+      } else {
+        code.value = expected.slice(0, start) + edit.newText + expected.slice(end)
+        applied++
+        expected = code.value
+      }
+      delta += edit.newText.length - edit.oldText.length
+      onStep(applied, edits.length, edit.reason)
+      if (index < edits.length - 1) await new Promise((resolve) => setTimeout(resolve, 550))
+    }
+    if (signal.aborted) throw new DOMException('已停止修改', 'AbortError')
+    if (
+      language.value !== startingLanguage ||
+      editor?.getModel() !== targetModel ||
+      currentEditorCode() !== expected
+    ) {
+      throw new Error('代码在写入期间发生变化，已停止修改')
+    }
+    lastAiEdit = { before: base, after: expected }
+    targetModel?.pushStackElement()
+  } catch (error) {
+    // During writing the editor is read-only. Restore the original snapshot even
+    // if an intermediate operation did not produce the expected text.
+    if (
+      language.value === startingLanguage &&
+      editor?.getModel() === targetModel &&
+      currentEditorCode() !== base
+    ) {
+      if (targetModel && applied) {
+        targetModel.undo()
+      }
+      if (currentEditorCode() !== base) replaceEditorCode(base)
+    }
+    throw error
+  } finally {
+    if (editor) {
+      aiEditDecorationIds = editor.deltaDecorations(aiEditDecorationIds, [])
+      editor.updateOptions({ readOnly: false })
+    }
+    aiEditWriting.value = false
+  }
+}
+
+function undoAiCodeEdit(): boolean {
+  if (aiEditWriting.value || !lastAiEdit || currentEditorCode() !== lastAiEdit.after) return false
+  replaceEditorCode(lastAiEdit.before)
+  lastAiEdit = null
+  return true
 }
 
 const LANGUAGE_OPTIONS = [
@@ -161,17 +295,24 @@ const LANGUAGE_OPTIONS = [
 ]
 const isImageQuestion = computed(() => detail.value?.questionType?.startsWith('IMAGE_') === true)
 const availableLanguageOptions = computed(() =>
-  isImageQuestion.value ? LANGUAGE_OPTIONS.filter((item) => item.value === 'python') : LANGUAGE_OPTIONS,
+  isImageQuestion.value
+    ? LANGUAGE_OPTIONS.filter((item) => item.value === 'python')
+    : LANGUAGE_OPTIONS,
 )
-const visionModelPath = computed(() => detail.value?.visionModelKey === 'YOLO_HELMET'
-  ? '/models/hard-hat-best.pt'
-  : '/models/yolov8n.pt')
-const visionModelLabel = computed(() => ({
-  YOLO_GENERAL: 'YOLOv8n 通用检测',
-  YOLO_HELMET: '校园安全帽检测',
-  EASYOCR_ZH_EN: 'EasyOCR 中英文识别',
-  OPENCV_ANALYSIS: 'OpenCV 图像属性分析',
-}[detail.value?.visionModelKey || 'YOLO_GENERAL'] || '图像识别模型'))
+const visionModelPath = computed(() =>
+  detail.value?.visionModelKey === 'YOLO_HELMET'
+    ? '/models/hard-hat-best.pt'
+    : '/models/yolov8n.pt',
+)
+const visionModelLabel = computed(
+  () =>
+    ({
+      YOLO_GENERAL: 'YOLOv8n 通用检测',
+      YOLO_HELMET: '校园安全帽检测',
+      EASYOCR_ZH_EN: 'EasyOCR 中英文识别',
+      OPENCV_ANALYSIS: 'OpenCV 图像属性分析',
+    })[detail.value?.visionModelKey || 'YOLO_GENERAL'] || '图像识别模型',
+)
 
 const IMAGE_PYTHON_TEMPLATE = `from ultralytics import YOLO
 import json
@@ -189,10 +330,14 @@ if __name__ == "__main__":
 
 function imagePythonTemplate(): string {
   const type = detail.value?.questionType
-  if (type === 'IMAGE_OCR') return `import easyocr\n\nimage_path = input().strip()\nreader = easyocr.Reader(["ch_sim", "en"], gpu=False)\nlines = reader.readtext(image_path, detail=0, paragraph=True)\nprint(" ".join(lines))\n`
-  if (type === 'IMAGE_ANALYSIS') return `from PIL import Image\nimport numpy as np\nimport json\n\nimage_path = input().strip()\nimage = Image.open(image_path).convert("RGB")\ngray = np.asarray(image.convert("L"), dtype=np.float32)\ngx = abs(np.diff(gray, axis=1)).mean() if image.width > 1 else 0\ngy = abs(np.diff(gray, axis=0)).mean() if image.height > 1 else 0\nresult = {"width": image.width, "height": image.height, "mode": "RGB", "mean_gray": round(float(gray.mean()), 2), "edge_strength": round(float(gx + gy), 2)}\nprint(json.dumps(result, sort_keys=True))\n`
-  if (type === 'IMAGE_CLASSIFICATION') return `from ultralytics import YOLO\n\nimage_path = input().strip()\nresult = YOLO("${visionModelPath.value}").predict(image_path, verbose=False)[0]\nif result.boxes is None or len(result.boxes) == 0:\n    print("unknown")\nelse:\n    best = int(result.boxes.conf.argmax())\n    print(result.names[int(result.boxes.cls[best])])\n`
-  if (type === 'IMAGE_OBJECT_DETECTION') return `from ultralytics import YOLO\nfrom PIL import Image\nimport json\n\nimage_path = input().strip()\nw, h = Image.open(image_path).size\nr = YOLO("${visionModelPath.value}").predict(image_path, verbose=False)[0]\nboxes = []\nfor xyxy, cls in zip(r.boxes.xyxy.tolist(), r.boxes.cls.tolist()):\n    x1, y1, x2, y2 = xyxy\n    boxes.append({"label": r.names[int(cls)], "x1": round(x1/w, 6), "y1": round(y1/h, 6), "x2": round(x2/w, 6), "y2": round(y2/h, 6)})\nprint(json.dumps(boxes))\n`
+  if (type === 'IMAGE_OCR')
+    return `import easyocr\n\nimage_path = input().strip()\nreader = easyocr.Reader(["ch_sim", "en"], gpu=False)\nlines = reader.readtext(image_path, detail=0, paragraph=True)\nprint(" ".join(lines))\n`
+  if (type === 'IMAGE_ANALYSIS')
+    return `from PIL import Image\nimport numpy as np\nimport json\n\nimage_path = input().strip()\nimage = Image.open(image_path).convert("RGB")\ngray = np.asarray(image.convert("L"), dtype=np.float32)\ngx = abs(np.diff(gray, axis=1)).mean() if image.width > 1 else 0\ngy = abs(np.diff(gray, axis=0)).mean() if image.height > 1 else 0\nresult = {"width": image.width, "height": image.height, "mode": "RGB", "mean_gray": round(float(gray.mean()), 2), "edge_strength": round(float(gx + gy), 2)}\nprint(json.dumps(result, sort_keys=True))\n`
+  if (type === 'IMAGE_CLASSIFICATION')
+    return `from ultralytics import YOLO\n\nimage_path = input().strip()\nresult = YOLO("${visionModelPath.value}").predict(image_path, verbose=False)[0]\nif result.boxes is None or len(result.boxes) == 0:\n    print("unknown")\nelse:\n    best = int(result.boxes.conf.argmax())\n    print(result.names[int(result.boxes.cls[best])])\n`
+  if (type === 'IMAGE_OBJECT_DETECTION')
+    return `from ultralytics import YOLO\nfrom PIL import Image\nimport json\n\nimage_path = input().strip()\nw, h = Image.open(image_path).size\nr = YOLO("${visionModelPath.value}").predict(image_path, verbose=False)[0]\nboxes = []\nfor xyxy, cls in zip(r.boxes.xyxy.tolist(), r.boxes.cls.tolist()):\n    x1, y1, x2, y2 = xyxy\n    boxes.append({"label": r.names[int(cls)], "x1": round(x1/w, 6), "y1": round(y1/h, 6), "x2": round(x2/w, 6), "y2": round(y2/h, 6)})\nprint(json.dumps(boxes))\n`
   return IMAGE_PYTHON_TEMPLATE.replace('/models/yolov8n.pt', visionModelPath.value)
 }
 
@@ -213,9 +358,16 @@ const splitStyle = computed(() => {
       gap: '14px',
     }
   }
+  if (workspaceMode.value === 'problem') return { gridTemplateColumns: 'minmax(0, 1fr)' }
+  if (workspaceMode.value === 'editor') return { gridTemplateColumns: 'minmax(0, 1fr)' }
   return {
-    gridTemplateColumns: `minmax(360px, ${leftPaneWidth.value}%) 8px minmax(360px, ${100 - leftPaneWidth.value}%)`,
+    gridTemplateColumns: `minmax(360px, calc(${leftPaneWidth.value}% - 4px)) 8px minmax(420px, calc(${100 - leftPaneWidth.value}% - 4px))`,
   }
+})
+
+const difficultyLabel = computed(() => {
+  const tags = detail.value?.tags ?? []
+  return ['入门', '简单', '中等', '困难'].find((item) => tags.includes(item)) ?? '练习'
 })
 
 const passRate = computed(() => {
@@ -353,7 +505,10 @@ watch(
   () =>
     [
       String(route.params.id || '').trim(),
-      ((Array.isArray(route.query.contestId) ? route.query.contestId[0] : route.query.contestId) || '').trim(),
+      (
+        (Array.isArray(route.query.contestId) ? route.query.contestId[0] : route.query.contestId) ||
+        ''
+      ).trim(),
     ] as const,
   ([qid, cid]) => {
     if (typeof sessionStorage === 'undefined' || !/^\d+$/.test(qid)) return
@@ -459,11 +614,7 @@ async function syncContestClosedGate() {
 }
 
 watch(
-  () => [
-    String(route.params.id || ''),
-    route.query.contestId,
-    contestStorageRev.value,
-  ],
+  () => [String(route.params.id || ''), route.query.contestId, contestStorageRev.value],
   () => {
     void syncContestClosedGate()
   },
@@ -471,11 +622,6 @@ watch(
 )
 
 const contentLength = computed(() => (detail.value?.content || '').trim().length)
-const userScopeKey = computed(() => {
-  const uid = (auth.userId || '').trim()
-  return uid ? `u:${uid}` : 'guest'
-})
-
 const headingAnchors = computed(() => {
   const raw = detail.value?.content || ''
   const lines = raw.split('\n')
@@ -495,13 +641,18 @@ const headingAnchors = computed(() => {
   return list.length ? list : [{ id: 'h-1', title: '题目描述', start: 0 }]
 })
 
-function normalizeSampleJudgeCases(raw: ProblemDetail | null): Array<{ id: string; input: string; output: string }> {
+function normalizeSampleJudgeCases(
+  raw: ProblemDetail | null,
+): Array<{ id: string; input: string; output: string }> {
   if (!raw) return []
   let source: Array<{ input?: string; output?: string }> = []
   if (Array.isArray(raw.sampleJudgeCase)) {
     source = raw.sampleJudgeCase
   } else if (typeof raw.sampleJudgeCase === 'string') {
-    const parsed = safeJsonParse<Array<{ input?: string; output?: string }>>(raw.sampleJudgeCase, [])
+    const parsed = safeJsonParse<Array<{ input?: string; output?: string }>>(
+      raw.sampleJudgeCase,
+      [],
+    )
     source = Array.isArray(parsed) ? parsed : []
   } else if (Array.isArray(raw.judgeCase)) {
     source = raw.judgeCase
@@ -512,10 +663,9 @@ function normalizeSampleJudgeCases(raw: ProblemDetail | null): Array<{ id: strin
   return source
     .map((item, index) => ({
       id: `case-${index + 1}`,
-      input:
-        raw.questionType?.startsWith('IMAGE_')
-          ? '[系统题图：运行时以只读路径提供]'
-          : String(item?.input ?? '').trim(),
+      input: raw.questionType?.startsWith('IMAGE_')
+        ? '[系统题图：运行时以只读路径提供]'
+        : String(item?.input ?? '').trim(),
       output: String(item?.output ?? '').trim(),
     }))
     .filter((item) => item.input || item.output)
@@ -563,7 +713,10 @@ const judgeConfigDisplay = computed(() => {
   if (!cfg) return null
   let parsed: { timeLimit?: number; memoryLimit?: number; stackLimit?: number } = {}
   if (typeof cfg === 'string') {
-    parsed = safeJsonParse<{ timeLimit?: number; memoryLimit?: number; stackLimit?: number }>(cfg, {})
+    parsed = safeJsonParse<{ timeLimit?: number; memoryLimit?: number; stackLimit?: number }>(
+      cfg,
+      {},
+    )
   } else {
     parsed = cfg
   }
@@ -573,23 +726,25 @@ const judgeConfigDisplay = computed(() => {
     stackLimit: Number(parsed.stackLimit ?? 0) || 0,
   }
 })
-const aiJudgeContext = computed(() => JSON.stringify({
-  limits: judgeConfigDisplay.value,
-  questionType: detail.value?.questionType ?? 'TEXT',
-  countTolerance: detail.value?.countTolerance ?? 0,
-  imageProtocol: isImageQuestion.value
-    ? {
-        stdin: '沙箱内只读图片路径',
-        language: 'python',
-        model: '/models/yolov8n.pt',
-        libraries: ['ultralytics', 'cv2', 'Pillow', 'numpy'],
-        output: '只输出目标类别到数量的 JSON 对象',
-        network: false,
-      }
-    : undefined,
-}))
+const aiJudgeContext = computed(() =>
+  JSON.stringify({
+    limits: judgeConfigDisplay.value,
+    questionType: detail.value?.questionType ?? 'TEXT',
+    countTolerance: detail.value?.countTolerance ?? 0,
+    imageProtocol: isImageQuestion.value
+      ? {
+          stdin: '沙箱内只读图片路径',
+          language: 'python',
+          model: '/models/yolov8n.pt',
+          libraries: ['ultralytics', 'cv2', 'Pillow', 'numpy'],
+          output: '只输出目标类别到数量的 JSON 对象',
+          network: false,
+        }
+      : undefined,
+  }),
+)
 const aiSampleCases = computed(() => JSON.stringify(displayJudgeCases.value.slice(0, 5)))
-const aiRunResult = computed(() => runResult.value ? JSON.stringify(runResult.value) : '')
+const aiRunResult = computed(() => (runResult.value ? JSON.stringify(runResult.value) : ''))
 const statementHtml = computed(() => renderStatementToHtml(detail.value?.content || ''))
 const editorThemeLabel = computed(() => {
   if (editorTheme.value === 'light-pro') return '浅色'
@@ -597,10 +752,15 @@ const editorThemeLabel = computed(() => {
   return '深色'
 })
 
-const draftKey = computed(() => {
+function draftStorageKey(targetLanguage = language.value) {
   const id = String(route.params.id || '').trim()
-  return `myoj.solve.draft:${userScopeKey.value}:${id}:${language.value}`
-})
+  return `myoj.solve.draft:${userScopeKey.value}:${id}:${targetLanguage}`
+}
+
+function customInputStorageKey(targetLanguage = language.value) {
+  const id = String(route.params.id || '').trim()
+  return `myoj.solve.customInput:${userScopeKey.value}:${id}:${targetLanguage}`
+}
 
 function formatDateTime(raw?: string): string {
   if (!raw) return '-'
@@ -619,48 +779,21 @@ function formatDateTime(raw?: string): string {
     .replace(/\//g, '-')
 }
 
-function escapeHtml(raw: string): string {
-  return raw
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-}
-
 function renderStatementToHtml(raw: string): string {
-  const safe = escapeHtml(raw || '')
-  if (!safe.trim()) return '<p>暂无题面描述</p>'
-  let html = safe
-  html = html.replace(/^###\s+(.+)$/gm, '<h3>$1</h3>')
-  html = html.replace(/^##\s+(.+)$/gm, '<h2>$1</h2>')
-  html = html.replace(/^#\s+(.+)$/gm, '<h1>$1</h1>')
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-  html = html.replace(/`([^`]+)`/g, '<code>$1</code>')
-  html = html.replace(/^\d+\.\s+(.+)$/gm, '<li>$1</li>')
-  html = html.replace(/^(?:-|\*)\s+(.+)$/gm, '<li>$1</li>')
-  html = html.replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>')
-  html = html.replace(/<\/ul>\s*<ul>/g, '')
-  html = html
-    .split(/\n{2,}/)
-    .map((block) => {
-      const trimmed = block.trim()
-      if (!trimmed) return ''
-      if (/^<(h1|h2|h3|ul)/.test(trimmed)) return trimmed
-      return `<p>${trimmed.replace(/\n/g, '<br />')}</p>`
-    })
-    .join('')
-  return html
+  if (!raw.trim()) return '<p>暂无题面描述</p>'
+  return renderMarkdownToHtml(normalizeOjStatement(raw))
 }
 
-function loadDraft() {
+function loadDraft(targetLanguage = language.value) {
   if (typeof window === 'undefined') return
-  const raw = window.localStorage.getItem(draftKey.value)
-  if (!raw) {
+  const raw = window.localStorage.getItem(draftStorageKey(targetLanguage))
+  if (raw == null) {
     code.value = isImageQuestion.value ? imagePythonTemplate() : '// 请在此输入代码\n'
-    return
+  } else {
+    code.value = raw
   }
-  code.value = raw
+  customInput.value = window.localStorage.getItem(customInputStorageKey(targetLanguage)) ?? ''
+  draftStatus.value = 'saved'
 }
 
 function safeJsonParse<T>(raw: string | null, fallback: T): T {
@@ -678,9 +811,21 @@ function getToken(): string {
   return auth.token?.trim() ?? ''
 }
 
-function saveDraft() {
+function saveDraft(targetLanguage = language.value, value = code.value) {
   if (typeof window === 'undefined') return
-  window.localStorage.setItem(draftKey.value, code.value || '')
+  window.localStorage.setItem(draftStorageKey(targetLanguage), value || '')
+  draftStatus.value = 'saved'
+}
+
+function scheduleDraftSave() {
+  draftStatus.value = 'saving'
+  if (draftSaveTimer != null) window.clearTimeout(draftSaveTimer)
+  draftSaveTimer = window.setTimeout(() => saveDraft(), 450)
+}
+
+function saveCustomInput() {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(customInputStorageKey(), customInput.value)
 }
 
 function applyCodeTemplate() {
@@ -730,7 +875,11 @@ if __name__ == "__main__":
 }
 
 function toggleEditorTheme() {
-  const order: Array<'dark-pro' | 'light-pro' | 'ocean-pro'> = ['dark-pro', 'light-pro', 'ocean-pro']
+  const order: Array<'dark-pro' | 'light-pro' | 'ocean-pro'> = [
+    'dark-pro',
+    'light-pro',
+    'ocean-pro',
+  ]
   const idx = order.indexOf(editorTheme.value)
   const next = order[(idx + 1) % order.length] ?? 'dark-pro'
   editorTheme.value = next
@@ -764,7 +913,7 @@ function defineMonacoThemes(monaco: LoadedMonaco) {
       'editor.foreground': '#abb2bf',
       'editorLineNumber.foreground': '#495162',
       'editorLineNumber.activeForeground': '#c8ccd4',
-      'editorLineHighlightBackground': '#2c313c',
+      editorLineHighlightBackground: '#2c313c',
       'editorCursor.foreground': '#61afef',
       'editor.selectionBackground': '#3e445133',
       'editorWhitespace.foreground': '#3e4451',
@@ -783,7 +932,7 @@ function defineMonacoThemes(monaco: LoadedMonaco) {
       'editor.foreground': '#24292f',
       'editorLineNumber.foreground': '#959da5',
       'editorLineNumber.activeForeground': '#24292f',
-      'editorLineHighlightBackground': '#f6f8fa',
+      editorLineHighlightBackground: '#f6f8fa',
       'editorCursor.foreground': '#0969da',
       'editor.selectionBackground': '#add6ff99',
       'editorWhitespace.foreground': '#d0d7de',
@@ -801,7 +950,7 @@ function defineMonacoThemes(monaco: LoadedMonaco) {
       'editor.foreground': '#d1f5ff',
       'editorLineNumber.foreground': '#67e8f9',
       'editorLineNumber.activeForeground': '#a5f3fc',
-      'editorLineHighlightBackground': '#0b3a47',
+      editorLineHighlightBackground: '#0b3a47',
       'editorCursor.foreground': '#22d3ee',
       'editor.selectionBackground': '#0e749066',
       'minimap.background': '#06202d',
@@ -1070,7 +1219,8 @@ async function initMonacoEditor() {
       minimap: { enabled: showMinimap.value, scale: 0.85, showSlider: 'mouseover' },
       fontSize: 14,
       lineHeight: 22,
-      fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Courier New', monospace",
+      fontFamily:
+        "'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', 'Courier New', monospace",
       fontLigatures: true,
       tabSize: 2,
       wordWrap: 'on',
@@ -1104,6 +1254,9 @@ async function initMonacoEditor() {
       isSyncingFromEditor = false
       scheduleSyntaxValidation(loadedMonaco)
     })
+    editor.onDidChangeCursorPosition((event) => {
+      cursorPosition.value = { line: event.position.lineNumber, column: event.position.column }
+    })
   } catch (error) {
     monacoReady.value = false
     monacoLoadFailed.value = true
@@ -1128,6 +1281,7 @@ async function loadDetail() {
       language.value = 'python'
     }
     loadDraft()
+    void loadSubmissionHistory()
   } catch (error) {
     Message.error(mapApiError(error, getBackendErrorMessage(error, '题目加载失败')))
   } finally {
@@ -1151,13 +1305,13 @@ function beginResize() {
   document.body.style.cursor = 'col-resize'
 }
 
-function onMouseMove(e: MouseEvent) {
+function onMouseMove(e: MouseEvent | PointerEvent) {
   if (!isDragging.value || !isDesktop.value) return
   const container = document.querySelector<HTMLElement>('.content-grid')
   if (!container) return
   const rect = container.getBoundingClientRect()
   const ratio = ((e.clientX - rect.left) / rect.width) * 100
-  leftPaneWidth.value = Math.min(68, Math.max(32, ratio))
+  setLeftPercent(ratio)
 }
 
 function stopResize() {
@@ -1168,10 +1322,69 @@ function stopResize() {
 }
 
 function resetSplit() {
-  leftPaneWidth.value = 45
+  setLeftPercent(50)
+  workspaceMode.value = 'split'
+}
+
+function onSplitterKeydown(event: KeyboardEvent) {
+  if (event.key === 'ArrowLeft') {
+    event.preventDefault()
+    resizeSplitBy(-2)
+  } else if (event.key === 'ArrowRight') {
+    event.preventDefault()
+    resizeSplitBy(2)
+  } else if (event.key === 'Home') {
+    event.preventDefault()
+    setLeftPercent(32)
+  } else if (event.key === 'End') {
+    event.preventDefault()
+    setLeftPercent(68)
+  }
+}
+
+function setWorkspaceMode(mode: SolveLayoutMode) {
+  workspaceMode.value = mode
+  nextTick(() => monacoInstance?.layout())
+}
+
+async function toggleEditorFullscreen() {
+  const panel = document.querySelector<HTMLElement>('.answer-panel')
+  if (!panel) return
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen()
+    else if (panel.requestFullscreen) await panel.requestFullscreen()
+    else setWorkspaceMode('editor')
+  } catch {
+    setWorkspaceMode('editor')
+  }
+  await nextTick()
+  monacoInstance?.layout()
+}
+
+function beginConsoleResize(event: PointerEvent) {
+  if (consoleCollapsed.value) return
+  isConsoleDragging.value = true
+  consoleDragStartY.value = event.clientY
+  consoleDragStartHeight.value = consoleHeight.value
+  document.body.style.userSelect = 'none'
+  document.body.style.cursor = 'row-resize'
+}
+
+function onConsolePointerMove(event: PointerEvent) {
+  if (!isConsoleDragging.value) return
+  setConsoleHeight(consoleDragStartHeight.value + consoleDragStartY.value - event.clientY)
+  monacoInstance?.layout()
+}
+
+function stopConsoleResize() {
+  if (!isConsoleDragging.value) return
+  isConsoleDragging.value = false
+  document.body.style.userSelect = ''
+  document.body.style.cursor = ''
 }
 
 function clearCode() {
+  if (aiEditWriting.value) return
   code.value = ''
   saveDraft()
   Message.success('已清空代码草稿')
@@ -1185,8 +1398,13 @@ function currentEditorCode(): string {
   return code.value
 }
 
-async function runCode() {
+async function runCode(mode: 'SAMPLE' | 'CUSTOM' = 'SAMPLE') {
+  if (aiEditWriting.value) return
   if (running.value) return
+  if (mode === 'CUSTOM' && isImageQuestion.value) {
+    Message.info('图像题由评测环境提供只读图片路径，不支持自定义输入')
+    return
+  }
   if (!currentEditorCode().trim()) {
     Message.warning('请先输入代码')
     return
@@ -1204,11 +1422,14 @@ async function runCode() {
   }
   running.value = true
   runResult.value = null
+  consoleCollapsed.value = false
   try {
     const data = await Service.runQuestionSample({
       questionId,
       language: language.value,
       code: currentEditorCode(),
+      mode,
+      ...(mode === 'CUSTOM' ? { customInput: customInput.value } : {}),
     })
     if (!isResultSuccess(data.code)) {
       Message.error(data.message || '运行失败')
@@ -1218,16 +1439,18 @@ async function runCode() {
       Message.error('未获取到运行结果')
       return
     }
-    runResult.value = data.data as unknown as QuestionRunResult
+    runResult.value = data.data as unknown as SolveRunResult
     if (runResult.value.warning) {
       Message.warning(runResult.value.warning)
     }
     if (runResult.value.terminalError) {
-      Message.warning(runResult.value.judgeInfo?.message || runResult.value.sandboxMessage || '运行未成功完成')
-    } else if (runResult.value.allSamplePassed && runResult.value.suspectedShortcut) {
       Message.warning(
-        '输出与公开样例文本一致，但代码可能未读入或未按题意计算；请以提交评测为准。',
+        runResult.value.judgeInfo?.message || runResult.value.sandboxMessage || '运行未成功完成',
       )
+    } else if (mode === 'CUSTOM') {
+      Message.success('自定义输入运行完成')
+    } else if (runResult.value.allSamplePassed && runResult.value.suspectedShortcut) {
+      Message.warning('输出与公开样例文本一致，但代码可能未读入或未按题意计算；请以提交评测为准。')
     } else if (runResult.value.allSamplePassed && !runResult.value.warning) {
       Message.success('样例全部通过（提交仍会评测全部隐藏用例）')
     } else if (!runResult.value.terminalError && !runResult.value.allSamplePassed) {
@@ -1245,7 +1468,144 @@ async function runCode() {
   }
 }
 
+function stopSubmitPolling() {
+  submitPollGeneration++
+  submitPolling.value = false
+  if (submitPollTimer != null) {
+    window.clearTimeout(submitPollTimer)
+    submitPollTimer = null
+  }
+}
+
+function parseSubmitJudgeInfo(raw?: string) {
+  if (!raw) return {} as { message?: string; time?: number; memory?: number }
+  try {
+    return JSON.parse(raw) as { message?: string; time?: number; memory?: number }
+  } catch {
+    return { message: raw }
+  }
+}
+
+function submissionVerdict(item: SolveSubmitItem): string {
+  if (item.status === 0) return '等待判题'
+  if (item.status === 1) return '判题中'
+  const message = parseSubmitJudgeInfo(item.judgeInfo).message
+  if (message) return message
+  return item.status === 2 ? 'Accepted' : '未通过'
+}
+
+async function loadNextRecommendation() {
+  nextRecommendation.value = null
+  if (!auth.isLoggedIn) return
+  try {
+    const token =
+      typeof OpenAPI.TOKEN === 'function' ? await OpenAPI.TOKEN({} as never) : OpenAPI.TOKEN
+    const response = await fetch(`${OpenAPI.BASE.replace(/\/+$/, '')}/question/recommend/my`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: 'no-store',
+    })
+    const body = (await response.json()) as {
+      code?: number
+      data?: Array<{ questionId?: string; title?: string }>
+    }
+    if (!response.ok || !isResultSuccess(body.code)) return
+    const currentId = String(route.params.id || '')
+    const next = (body.data ?? []).find(
+      (item) => item.questionId && String(item.questionId) !== currentId,
+    )
+    if (next?.questionId)
+      nextRecommendation.value = {
+        questionId: String(next.questionId),
+        title: next.title || '推荐下一题',
+      }
+  } catch {
+    // 推荐失败时保留“返回题库”，不影响 AC 结果。
+  }
+}
+
+async function loadSubmissionHistory() {
+  const questionId = String(route.params.id || '').trim()
+  if (!auth.isLoggedIn || !/^\d+$/.test(questionId)) {
+    submissionHistory.value = []
+    return
+  }
+  try {
+    const response = await QuestionSubmitControllerService.pageMyAllQuestionSubmits(
+      undefined,
+      1,
+      10,
+      questionId,
+    )
+    if (isResultSuccess(response.code)) {
+      submissionHistory.value = (response.data?.records ?? []) as SolveSubmitItem[]
+    }
+  } catch {
+    // 提交记录不可用不应阻断编辑与运行。
+  }
+}
+
+async function pollSubmitResult(questionId: string, submitNo: number) {
+  stopSubmitPolling()
+  const generation = submitPollGeneration
+  submitPolling.value = true
+  const startedAt = Date.now()
+  const poll = async () => {
+    if (generation !== submitPollGeneration) return
+    if (Date.now() - startedAt > 120_000) {
+      submitPolling.value = false
+      submitting.value = false
+      Message.warning('评测时间较长，可稍后在“提交记录”中查看结果')
+      return
+    }
+    try {
+      const response = await QuestionSubmitControllerService.getSubmitStatusBySubmitNo(
+        questionId,
+        submitNo,
+      )
+      if (generation !== submitPollGeneration) return
+      if (isResultSuccess(response.code) && response.data) {
+        const item = response.data as SolveSubmitItem
+        const index = submissionHistory.value.findIndex((row) => row.submitNo === submitNo)
+        if (index >= 0)
+          submissionHistory.value[index] = { ...submissionHistory.value[index], ...item }
+        else submissionHistory.value = [item, ...submissionHistory.value]
+        if (item.status === 2 || item.status === 3) {
+          submitPolling.value = false
+          submitting.value = false
+          const judge = parseSubmitJudgeInfo(item.judgeInfo)
+          const accepted =
+            item.status === 2 && (!judge.message || /accept|成功|通过/i.test(judge.message))
+          if (accepted) {
+            acceptedCelebration.value = {
+              attempt: submitNo,
+              time: judge.time,
+              memory: judge.memory,
+            }
+            void loadNextRecommendation()
+            window.setTimeout(() => {
+              acceptedCelebration.value = null
+            }, 1200)
+          } else {
+            Message.warning(judge.message || '本次提交未通过，请查看提交记录')
+          }
+          await loadSubmissionHistory()
+          return
+        }
+      }
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        stopSubmitPolling()
+        submitting.value = false
+        return
+      }
+    }
+    submitPollTimer = window.setTimeout(poll, 400)
+  }
+  await poll()
+}
+
 async function submitCode() {
+  if (aiEditWriting.value) return
   if (submitting.value) return
   if (!currentEditorCode().trim()) {
     Message.warning('请先输入代码')
@@ -1263,6 +1623,7 @@ async function submitCode() {
     return
   }
   submitting.value = true
+  consoleCollapsed.value = false
   try {
     const submitBody: QuestionSubmitAddRequest = {
       language: language.value,
@@ -1283,22 +1644,8 @@ async function submitCode() {
       return
     }
 
-    // 与常见 OJ 一致：跳转提交列表但不改筛选条件；session 驱动轮询。globalSubmitNo 与「全部提交」列表行 submitNo 一致，便于自动刷新该行
-    if (typeof sessionStorage !== 'undefined') {
-      sessionStorage.setItem(
-        'oj:pendingSubmitHighlight',
-        JSON.stringify({
-          questionId: String(payload.questionId),
-          submitNo: String(payload.submitNo),
-          globalSubmitNo: String(payload.globalSubmitNo),
-          t: Date.now(),
-        }),
-      )
-    }
-
-    Message.success('提交成功，已前往提交记录')
-    // 带一次性 query，避免从「提交记录」再交卷时 fullPath 不变导致列表页不刷新、session 不消费
-    void router.push({ name: 'submissions', query: { fromSubmit: '1' } })
+    Message.success('提交成功，正在评测')
+    await pollSubmitResult(String(payload.questionId), Number(payload.submitNo))
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
       Message.error('登录已失效，请重新登录后提交')
@@ -1307,12 +1654,30 @@ async function submitCode() {
     }
     Message.error(mapApiError(error, getBackendErrorMessage(error, '提交失败')))
   } finally {
-    submitting.value = false
+    if (!submitPolling.value) submitting.value = false
   }
 }
 
 function onResize() {
   screenWidth.value = window.innerWidth
+}
+
+function onWorkbenchShortcut(event: KeyboardEvent) {
+  if (event.key === 'Escape' && editorSettingsOpen.value) {
+    editorSettingsOpen.value = false
+    return
+  }
+  if (!(event.ctrlKey || event.metaKey) || event.key !== 'Enter') return
+  event.preventDefault()
+  if (event.shiftKey) void submitCode()
+  else void runCode('SAMPLE')
+}
+
+function onEditorSettingsOutsidePointer(event: PointerEvent) {
+  if (!editorSettingsOpen.value) return
+  const target = event.target
+  if (target instanceof Node && editorSettingsRef.value?.contains(target)) return
+  editorSettingsOpen.value = false
 }
 
 onMounted(() => {
@@ -1327,7 +1692,11 @@ onMounted(() => {
   if (typeof window !== 'undefined') {
     window.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup', stopResize)
+    window.addEventListener('pointermove', onConsolePointerMove)
+    window.addEventListener('pointerup', stopConsoleResize)
     window.addEventListener('resize', onResize)
+    window.addEventListener('keydown', onWorkbenchShortcut)
+    window.addEventListener('pointerdown', onEditorSettingsOutsidePointer)
   }
 })
 
@@ -1349,9 +1718,16 @@ onBeforeUnmount(() => {
   if (typeof window !== 'undefined') {
     window.removeEventListener('mousemove', onMouseMove)
     window.removeEventListener('mouseup', stopResize)
+    window.removeEventListener('pointermove', onConsolePointerMove)
+    window.removeEventListener('pointerup', stopConsoleResize)
     window.removeEventListener('resize', onResize)
+    window.removeEventListener('keydown', onWorkbenchShortcut)
+    window.removeEventListener('pointerdown', onEditorSettingsOutsidePointer)
   }
   stopResize()
+  stopConsoleResize()
+  stopSubmitPolling()
+  if (draftSaveTimer != null) window.clearTimeout(draftSaveTimer)
   monacoInstance?.dispose()
   completionDisposables.forEach((d) => d.dispose())
   completionDisposables.length = 0
@@ -1359,14 +1735,28 @@ onBeforeUnmount(() => {
   monacoApi = null
 })
 
-watch([code, language], saveDraft)
-watch(language, () => {
-  loadDraft()
+watch(code, () => {
+  scheduleDraftSave()
+})
+watch(language, (next, previous) => {
+  if (previous) saveDraft(previous, currentEditorCode())
+  loadDraft(next)
 })
 watch([userScopeKey, () => route.params.id], () => {
   loadDraft()
   runResult.value = null
+  stopSubmitPolling()
+  void loadSubmissionHistory()
 })
+
+watch(customInput, saveCustomInput)
+watch(
+  () => auth.isLoggedIn,
+  (loggedIn) => {
+    if (!loggedIn) stopSubmitPolling()
+    void loadSubmissionHistory()
+  },
+)
 
 watch(runResult, (v) => {
   if (v) runResultPanelExpanded.value = true
@@ -1385,7 +1775,7 @@ const runResultStatusShort = computed(() => {
   return '部分样例未通过'
 })
 watch(code, (next) => {
-  if (!monacoInstance || isSyncingFromEditor) return
+  if (!monacoInstance || isSyncingFromEditor || aiEditWriting.value) return
   if (monacoInstance.getValue() !== next) {
     monacoInstance.setValue(next)
   }
@@ -1445,17 +1835,22 @@ watch(
 </script>
 
 <template>
-  <div class="solve-page" :class="{ 'solve-page--ready': pageReady }">
+  <div class="solve-page solve-page--edge-to-edge" :class="{ 'solve-page--ready': pageReady }">
     <section class="topbar panel solve-stagger">
       <div class="topbar-left">
         <div class="title-wrap">
-          <p class="kicker">Online Judge Workspace</p>
           <h1>{{ detail?.title || '作答页面' }}</h1>
+          <div class="problem-quick-meta">
+            <span class="difficulty-pill">{{ difficultyLabel }}</span>
+            <span>通过率 {{ passRate }}</span>
+            <span>{{ Math.round((judgeConfigDisplay?.timeLimit ?? 0) / 1000) || 0 }} 秒</span>
+            <span>{{ Math.round((judgeConfigDisplay?.memoryLimit ?? 0) / 1024) }} MB</span>
+          </div>
         </div>
       </div>
       <div class="stat-chips">
-        <span v-if="contestIdForSubmit" class="chip chip--contest">计入本场比赛 · 提交将上榜</span>
-        <span v-else class="chip chip--practice">练习提交 · 不计入任何比赛</span>
+        <span v-if="contestIdForSubmit" class="chip chip--contest">比赛作答</span>
+        <span v-else class="chip chip--practice">练习模式</span>
         <button
           v-if="contestIdForSubmit"
           type="button"
@@ -1464,10 +1859,29 @@ watch(
         >
           改为练习提交
         </button>
-        <span class="chip">解决次数 {{ detail?.acceptedNum ?? 0 }}</span>
-        <span class="chip">提交次数 {{ detail?.submitNum ?? 0 }}</span>
-        <span class="chip">内存限制 {{ Math.round((judgeConfigDisplay?.memoryLimit ?? 0) / 1024) }}MB</span>
-        <span class="chip">评测限时 {{ Math.round((judgeConfigDisplay?.timeLimit ?? 0) / 1000) || 0 }}s</span>
+        <div v-if="isDesktop" class="workspace-mode-switch" aria-label="工作区布局">
+          <button
+            type="button"
+            :class="{ active: workspaceMode === 'split' }"
+            @click="setWorkspaceMode('split')"
+          >
+            分屏
+          </button>
+          <button
+            type="button"
+            :class="{ active: workspaceMode === 'problem' }"
+            @click="setWorkspaceMode('problem')"
+          >
+            专注题面
+          </button>
+          <button
+            type="button"
+            :class="{ active: workspaceMode === 'editor' }"
+            @click="setWorkspaceMode('editor')"
+          >
+            专注编码
+          </button>
+        </div>
       </div>
     </section>
 
@@ -1496,7 +1910,10 @@ watch(
             剩余赛程可视化；顶部「评测限时」为单题程序运行上限，与本场比赛时长无关。
           </p>
           <div class="contest-clock__progress contest-clock__progress--bar" aria-hidden="true">
-            <div class="contest-clock__progress-fill" :style="{ width: `${contestProgressPct}%` }" />
+            <div
+              class="contest-clock__progress-fill"
+              :style="{ width: `${contestProgressPct}%` }"
+            />
           </div>
           <p class="contest-clock__progress-label">
             赛程进度 <strong>{{ Math.round(contestProgressPct) }}%</strong>
@@ -1514,9 +1931,7 @@ watch(
                 r="44"
                 fill="none"
                 :stroke-dasharray="String(contestRingCircumference)"
-                :stroke-dashoffset="
-                  contestRingCircumference * (1 - contestRemainingPct / 100)
-                "
+                :stroke-dashoffset="contestRingCircumference * (1 - contestRemainingPct / 100)"
                 transform="rotate(-90 50 50)"
               />
             </svg>
@@ -1533,17 +1948,23 @@ watch(
           >
             <div class="contest-clock__unit">
               <span class="contest-clock__unit-label">时</span>
-              <span class="contest-clock__block">{{ String(contestCountdownParts.h).padStart(2, '0') }}</span>
+              <span class="contest-clock__block">{{
+                String(contestCountdownParts.h).padStart(2, '0')
+              }}</span>
             </div>
             <span class="contest-clock__sep">:</span>
             <div class="contest-clock__unit">
               <span class="contest-clock__unit-label">分</span>
-              <span class="contest-clock__block">{{ String(contestCountdownParts.m).padStart(2, '0') }}</span>
+              <span class="contest-clock__block">{{
+                String(contestCountdownParts.m).padStart(2, '0')
+              }}</span>
             </div>
             <span class="contest-clock__sep">:</span>
             <div class="contest-clock__unit">
               <span class="contest-clock__unit-label">秒</span>
-              <span class="contest-clock__block">{{ String(contestCountdownParts.s).padStart(2, '0') }}</span>
+              <span class="contest-clock__block">{{
+                String(contestCountdownParts.s).padStart(2, '0')
+              }}</span>
             </div>
           </div>
         </div>
@@ -1582,18 +2003,49 @@ watch(
       v-if="detail"
       class="content-grid"
       :class="{
-        'content-grid--tablet-editor-first': isTabletLayout && !isMobileLayout,
+        'content-grid--tablet': isTabletLayout && !isMobileLayout,
         'content-grid--mobile': isMobileLayout,
+        'content-grid--problem-focus': workspaceMode === 'problem',
+        'content-grid--editor-focus': workspaceMode === 'editor',
       }"
       :style="splitStyle"
     >
       <article
-        v-show="!isMobileLayout || mobileWorkspaceTab === 'problem'"
+        v-show="
+          (!isMobileLayout || mobileWorkspaceTab === 'problem') &&
+          (!isDesktop || workspaceMode !== 'editor')
+        "
         class="problem-panel panel solve-stagger"
       >
         <div class="problem-tabs">
-          <button class="tab-btn" :class="{ active: activeTab === 'statement' }" @click="activeTab = 'statement'">题面</button>
-          <button class="tab-btn" :class="{ active: activeTab === 'meta' }" @click="activeTab = 'meta'">信息</button>
+          <button
+            class="tab-btn tab-btn--statement"
+            :class="{ active: activeTab === 'statement' }"
+            @click="activeTab = 'statement'"
+          >
+            题目描述
+          </button>
+          <button
+            class="tab-btn tab-btn--solution"
+            :class="{ active: activeTab === 'solution' }"
+            @click="activeTab = 'solution'"
+          >
+            题解
+          </button>
+          <button
+            class="tab-btn tab-btn--submissions"
+            :class="{ active: activeTab === 'submissions' }"
+            @click="activeTab = 'submissions'"
+          >
+            提交记录
+          </button>
+          <button
+            class="tab-btn tab-btn--stats"
+            :class="{ active: activeTab === 'stats' }"
+            @click="activeTab = 'stats'"
+          >
+            统计
+          </button>
         </div>
 
         <div class="problem-body-scroll">
@@ -1610,16 +2062,30 @@ watch(
                 </button>
               </div>
               <div class="tags">
-                <span v-for="tag in detail.tags || []" :key="`${detail.id}-${tag}`" class="tag tag--pill">{{ tag }}</span>
+                <span
+                  v-for="tag in detail.tags || []"
+                  :key="`${detail.id}-${tag}`"
+                  class="tag tag--pill"
+                  >{{ tag }}</span
+                >
               </div>
-              <section v-if="detail.questionType?.startsWith('IMAGE_') && detail.imageUrl" class="vision-problem">
+              <section
+                v-if="detail.questionType?.startsWith('IMAGE_') && detail.imageUrl"
+                class="vision-problem"
+              >
                 <div class="vision-problem__head">
                   <strong>图像智能编程题</strong>
                   <span>{{ visionModelLabel }} · 判题参数 {{ detail.countTolerance ?? 0 }}</span>
                 </div>
                 <img :src="detail.imageUrl" alt="待识别题图" class="vision-problem__image" />
                 <p>请严格按照题目约定输出结果，避免额外日志影响判题。</p>
-                <p>评测时会通过 stdin 提供沙箱内题图路径；可使用 Ultralytics、EasyOCR、OpenCV、Pillow 和 NumPy<span v-if="detail.visionModelKey?.startsWith('YOLO') || !detail.visionModelKey">，本题模型位于 <code>{{ visionModelPath }}</code></span>。</p>
+                <p>
+                  评测时会通过 stdin 提供沙箱内题图路径；可使用 Ultralytics、EasyOCR、OpenCV、Pillow
+                  和 NumPy<span
+                    v-if="detail.visionModelKey?.startsWith('YOLO') || !detail.visionModelKey"
+                    >，本题模型位于 <code>{{ visionModelPath }}</code></span
+                  >。
+                </p>
               </section>
               <div ref="statementRef" class="statement oj-statement" v-html="statementHtml"></div>
             </div>
@@ -1644,7 +2110,9 @@ watch(
                     @click="toggleSampleAccordion(idx)"
                   >
                     <span class="judge-case-card__toggle-title">样例 {{ idx + 1 }}</span>
-                    <span class="judge-case-card__chev" aria-hidden="true">{{ isSampleExpanded(idx) ? '▾' : '▸' }}</span>
+                    <span class="judge-case-card__chev" aria-hidden="true">{{
+                      isSampleExpanded(idx) ? '▾' : '▸'
+                    }}</span>
                   </button>
                   <p v-else class="judge-case-card__title">样例 {{ idx + 1 }}</p>
                   <div v-show="isSampleExpanded(idx)" class="judge-case-card__body">
@@ -1677,9 +2145,7 @@ watch(
                   </div>
                 </article>
               </div>
-              <div v-else class="judge-cases__empty">
-                请在题目编辑页配置判题用例后重试。
-              </div>
+              <div v-else class="judge-cases__empty">请在题目编辑页配置判题用例后重试。</div>
             </section>
             <section class="judge-config oj-card oj-card--limits">
               <header class="judge-config__head">
@@ -1690,7 +2156,9 @@ watch(
                   <span class="judge-limit-card__icon" aria-hidden="true">⏱️</span>
                   <span class="judge-limit-card__key">时间限制</span>
                   <p class="judge-limit-card__val">
-                    <strong>{{ Math.round((judgeConfigDisplay.timeLimit || 0) / 100) / 10 }}</strong>
+                    <strong>{{
+                      Math.round((judgeConfigDisplay.timeLimit || 0) / 100) / 10
+                    }}</strong>
                     <span class="judge-limit-card__unit">s</span>
                   </p>
                   <span class="judge-limit-card__raw">{{ judgeConfigDisplay.timeLimit }} ms</span>
@@ -1715,41 +2183,80 @@ watch(
               <div v-else class="judge-config__empty">当前题目未配置判题参数</div>
             </section>
           </template>
-          <template v-else>
-            <div class="meta-grid">
-              <div class="meta-item">
-                <span>题目编号</span>
-                <strong>#{{ detail.id }}</strong>
+          <section
+            v-else-if="activeTab === 'solution'"
+            class="problem-tab-page problem-solution-page"
+          >
+            <ProblemSolutionPanel
+              :question-id="String(route.params.id || '')"
+              :question-title="detail.title || ''"
+            />
+          </section>
+
+          <section
+            v-else-if="activeTab === 'submissions'"
+            class="problem-tab-page problem-submission-page"
+          >
+            <header class="problem-tab-page__head">
+              <div>
+                <h3>本题提交记录</h3>
+                <p>仅展示当前账号在这道题中的最近提交。</p>
               </div>
-              <div class="meta-item">
-                <span>出题人</span>
-                <strong>{{ detail.userNickname || '-' }}</strong>
-              </div>
-              <div class="meta-item">
-                <span>最近更新</span>
-                <strong>{{ formatDateTime(detail.updateTime) }}</strong>
-              </div>
-              <div class="meta-item">
-                <span>题面字数</span>
-                <strong>{{ contentLength }}</strong>
-              </div>
+              <span>{{ submissionHistory.length }} 条</span>
+            </header>
+            <div v-if="!auth.isLoggedIn" class="problem-tab-empty">
+              <p>登录后可查看自己的提交记录。</p>
             </div>
-          </template>
+            <div v-else-if="!submissionHistory.length" class="problem-tab-empty">
+              <p>你还没有提交过这道题。</p>
+            </div>
+            <div v-else class="problem-submit-list">
+              <article
+                v-for="item in submissionHistory"
+                :key="`${item.questionId}-${item.submitNo}`"
+              >
+                <strong
+                  :class="{ 'is-accepted': /accept|通过|成功/i.test(submissionVerdict(item)) }"
+                  >{{ submissionVerdict(item) }}</strong
+                >
+                <span>第 {{ item.submitNo ?? '-' }} 次</span>
+                <span>{{ item.language || '-' }}</span>
+                <time>{{ formatDateTime(item.createTime) }}</time>
+              </article>
+            </div>
+          </section>
+
+          <section v-else class="problem-tab-page problem-stats-page">
+            <ProblemStatisticsPanel :question-id="String(route.params.id || '')" />
+          </section>
         </div>
       </article>
 
-      <div v-if="isDesktop" class="splitter" @mousedown="beginResize" />
+      <div
+        v-if="isDesktop && workspaceMode === 'split'"
+        class="splitter"
+        role="separator"
+        tabindex="0"
+        aria-orientation="vertical"
+        :aria-valuenow="Math.round(leftPaneWidth)"
+        aria-valuemin="25"
+        aria-valuemax="75"
+        @pointerdown="beginResize"
+        @keydown="onSplitterKeydown"
+        @dblclick="resetSplit"
+      />
 
       <article
-        v-show="!isMobileLayout || mobileWorkspaceTab === 'editor'"
+        v-show="
+          (!isMobileLayout || mobileWorkspaceTab === 'editor') &&
+          (!isDesktop || workspaceMode !== 'problem')
+        "
         class="answer-panel panel answer-panel--stack solve-stagger"
         :class="`answer-panel--${editorTheme}`"
       >
         <div class="answer-panel__editor-section">
           <div class="editor-head">
-            <h2 title="Ctrl+Space 打开补全；↑↓ 选择；Enter 或 Tab 插入。">
-              代码编辑器
-            </h2>
+            <h2 title="Ctrl+Space 打开补全；↑↓ 选择；Enter 或 Tab 插入。">代码编辑器</h2>
             <div class="editor-tools">
               <a-select
                 v-model="language"
@@ -1760,54 +2267,90 @@ watch(
                 placeholder="语言"
                 style="width: 156px"
               />
-              <a-tooltip content="百炼学习助手（题意 / 思路 / 复杂度）">
-                <a-button
-                  class="ghost-btn editor-icon-btn btn-tap study-copilot-launch"
-                  :class="{ 'editor-icon-btn--on': studyCopilotOpen }"
-                  @click="studyCopilotOpen = true"
+              <a-button
+                class="ghost-btn editor-text-btn btn-tap study-copilot-launch"
+                :class="{ 'editor-icon-btn--on': studyCopilotOpen }"
+                @click="studyCopilotOpen = true"
+                >AI 助手</a-button
+              >
+              <a-button class="ghost-btn editor-text-btn btn-tap" @click="applyCodeTemplate"
+                >插入模板</a-button
+              >
+              <div ref="editorSettingsRef" class="editor-settings">
+                <button
+                  type="button"
+                  class="editor-settings-trigger"
+                  aria-haspopup="menu"
+                  :aria-expanded="editorSettingsOpen"
+                  @click.stop="editorSettingsOpen = !editorSettingsOpen"
                 >
-                  ✦
-                </a-button>
-              </a-tooltip>
-              <a-tooltip content="插入本题语言模板">
-                <a-button class="ghost-btn editor-icon-btn btn-tap" @click="applyCodeTemplate">📋</a-button>
-              </a-tooltip>
-              <a-tooltip :content="`切换编辑器配色（当前：${editorThemeLabel}）`">
-                <a-button class="ghost-btn editor-icon-btn btn-tap" @click="toggleEditorTheme">◐</a-button>
-              </a-tooltip>
-              <a-tooltip content="清空编辑器内容">
-                <a-button class="ghost-btn editor-icon-btn btn-tap" @click="clearCode">⌧</a-button>
-              </a-tooltip>
-              <a-tooltip v-if="isDesktop" content="左右分栏恢复为默认比例">
-                <a-button class="ghost-btn editor-icon-btn btn-tap" @click="resetSplit">⬌</a-button>
-              </a-tooltip>
-              <a-tooltip :content="showMinimap ? '隐藏 minimap' : '显示 minimap'">
-                <a-button
-                  class="ghost-btn editor-icon-btn btn-tap"
-                  :class="{ 'editor-icon-btn--on': showMinimap }"
-                  @click="showMinimap = !showMinimap"
+                  编辑器设置
+                  <span aria-hidden="true">⌄</span>
+                </button>
+                <div
+                  v-if="editorSettingsOpen"
+                  class="editor-settings-popover"
+                  role="menu"
+                  aria-label="编辑器设置"
                 >
-                  ⧉
-                </a-button>
-              </a-tooltip>
-              <a-tooltip :content="showWhitespace ? '隐藏空白符' : '显示空白符（空格/Tab）'">
-                <a-button
-                  class="ghost-btn editor-icon-btn btn-tap"
-                  :class="{ 'editor-icon-btn--on': showWhitespace }"
-                  @click="showWhitespace = !showWhitespace"
-                >
-                  ··
-                </a-button>
-              </a-tooltip>
+                  <p class="editor-settings-popover__title">显示与布局</p>
+                  <button type="button" role="menuitem" @click="toggleEditorTheme">
+                    <span>编辑器主题</span><strong>{{ editorThemeLabel }}</strong>
+                  </button>
+                  <button type="button" role="menuitem" @click="showMinimap = !showMinimap">
+                    <span>代码缩略图</span><strong>{{ showMinimap ? '显示' : '隐藏' }}</strong>
+                  </button>
+                  <button type="button" role="menuitem" @click="showWhitespace = !showWhitespace">
+                    <span>空白字符</span><strong>{{ showWhitespace ? '显示' : '隐藏' }}</strong>
+                  </button>
+                  <div class="editor-settings-popover__divider" />
+                  <button
+                    v-if="isDesktop"
+                    type="button"
+                    role="menuitem"
+                    @click="
+                      resetSplit()
+                      editorSettingsOpen = false
+                    "
+                  >
+                    <span>恢复默认分栏</span><strong>50 / 50</strong>
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    class="editor-settings-popover__danger"
+                    @click="
+                      clearCode()
+                      editorSettingsOpen = false
+                    "
+                  >
+                    <span>清空当前代码</span><strong>清空</strong>
+                  </button>
+                </div>
+              </div>
+              <a-button class="ghost-btn editor-text-btn btn-tap" @click="toggleEditorFullscreen"
+                >全屏</a-button
+              >
             </div>
           </div>
-          <div v-if="!monacoLoadFailed" class="editor-hint-inline" aria-hidden="true">
-            <kbd>Ctrl</kbd>+<kbd>Space</kbd> 补全 · 登录后约 1s 检查语法；错误行<strong>浅红底</strong>，下方「问题」列表可跳转
+          <div v-if="!monacoLoadFailed" class="editor-hint-inline">
+            <span
+              ><kbd>Ctrl</kbd>+<kbd>Enter</kbd> 运行 · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd
+                >Enter</kbd
+              >
+              提交</span
+            >
+            <span class="editor-live-status"
+              >{{ draftStatus === 'saving' ? '保存中…' : '草稿已保存' }} · 行
+              {{ cursorPosition.line }}，列 {{ cursorPosition.column }}</span
+            >
           </div>
-          <div v-else class="editor-hint-inline editor-hint-inline--warn">Monaco 未加载，请刷新后使用补全。</div>
+          <div v-else class="editor-hint-inline editor-hint-inline--warn">
+            Monaco 未加载，请刷新后使用补全。
+          </div>
           <div v-show="!monacoLoadFailed" ref="editorRef" class="code-area" />
           <div
-            v-if="!monacoLoadFailed && syntaxIssues.length > 0"
+            v-if="false && !monacoLoadFailed && syntaxIssues.length > 0"
             class="syntax-issues-panel"
             role="region"
             aria-label="语法与编译问题"
@@ -1840,14 +2383,45 @@ watch(
           <a-textarea
             v-if="monacoLoadFailed"
             v-model="code"
+            :disabled="aiEditWriting"
             :auto-size="{ minRows: 20, maxRows: 30 }"
             class="code-area code-area--fallback"
           />
         </div>
 
-        <div class="answer-panel__footer">
+        <SolveConsole
+          v-model:custom-input="customInput"
+          v-model:collapsed="consoleCollapsed"
+          class="workbench-console"
+          :style="{ height: consoleCollapsed ? '45px' : `${consoleHeight}px` }"
+          :result="runResult"
+          :running="running"
+          :image-question="isImageQuestion"
+          :syntax-issues="syntaxIssues"
+          @run-samples="runCode('SAMPLE')"
+          @run-custom="runCode('CUSTOM')"
+          @jump-issue="jumpToSyntaxIssue"
+          @resize-start="beginConsoleResize"
+        />
+
+        <div class="editor-primary-actions">
+          <span class="editor-primary-actions__hint">运行公开样例后，再提交隐藏评测</span>
+          <a-button class="run-btn btn-tap" :loading="running" @click="runCode('SAMPLE')"
+            >运行</a-button
+          >
+          <a-button
+            type="primary"
+            class="submit-code-btn btn-tap"
+            :loading="submitting"
+            @click="submitCode"
+          >
+            {{ submitting ? '评测中…' : '提交代码' }}
+          </a-button>
+        </div>
+
+        <div class="answer-panel__footer legacy-run-footer">
           <div class="submit-row">
-            <a-button class="run-btn btn-tap" :loading="running" @click="runCode">运行</a-button>
+            <a-button class="run-btn btn-tap" :loading="running" @click="runCode()">运行</a-button>
             <a-button
               type="primary"
               class="submit-code-btn btn-tap"
@@ -1891,7 +2465,9 @@ watch(
                 <span class="run-result-shell__pill">{{ runResultStatusShort }}</span>
               </button>
               <div class="run-result-shell__actions">
-                <a-tooltip :content="runResultPanelExpanded ? '收起详情，腾出编辑区' : '展开查看完整对比'">
+                <a-tooltip
+                  :content="runResultPanelExpanded ? '收起详情，腾出编辑区' : '展开查看完整对比'"
+                >
                   <button
                     type="button"
                     class="run-result-shell__toggle btn-tap"
@@ -1900,7 +2476,12 @@ watch(
                     :aria-label="runResultPanelExpanded ? '收起运行结果详情' : '展开运行结果详情'"
                     @click.stop="toggleRunResultPanel"
                   >
-                    <svg v-if="runResultPanelExpanded" class="run-result-shell__toggle-ico" viewBox="0 0 16 16" fill="none">
+                    <svg
+                      v-if="runResultPanelExpanded"
+                      class="run-result-shell__toggle-ico"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                    >
                       <path
                         d="M4 10l4-4 4 4"
                         stroke="currentColor"
@@ -1909,7 +2490,12 @@ watch(
                         stroke-linejoin="round"
                       />
                     </svg>
-                    <svg v-else class="run-result-shell__toggle-ico" viewBox="0 0 16 16" fill="none">
+                    <svg
+                      v-else
+                      class="run-result-shell__toggle-ico"
+                      viewBox="0 0 16 16"
+                      fill="none"
+                    >
                       <path
                         d="M4 6l4 4 4-4"
                         stroke="currentColor"
@@ -1934,72 +2520,84 @@ watch(
                 aria-label="运行结果详情"
               >
                 <div class="run-result__head run-result__head--chips-only">
-            <span
-              v-if="runResult.terminalError"
-              class="run-result__badge run-result__badge--err"
-            >
-              {{ runResult.judgeInfo?.message || '执行异常' }}
-            </span>
-            <span
-              v-else-if="runResult.allSamplePassed && runResult.suspectedShortcut"
-              class="run-result__badge run-result__badge--soft-warn"
-              title="输出文本与公开样例一致，但代码可能未按题意读入或计算"
-            >
-              输出匹配样例（请核对逻辑）
-            </span>
-            <span
-              v-else-if="runResult.allSamplePassed"
-              class="run-result__badge run-result__badge--ok"
-            >
-              样例全部通过
-            </span>
-            <span v-else class="run-result__badge run-result__badge--warn">样例未全部通过</span>
-            <span v-if="runResult.judgeInfo?.time != null" class="run-result__meta">
-              用时 {{ runResult.judgeInfo.time }} ms
-            </span>
-            <span v-if="runResult.judgeInfo?.memory != null" class="run-result__meta">
-              内存 {{ runResult.judgeInfo.memory }} KB
-            </span>
-          </div>
-          <p v-if="runResult.warning" class="run-result__warn">
-            {{ runResult.warning }}
-          </p>
-          <ul v-if="runResult.hints?.length" class="run-result__hints">
-            <li v-for="(h, hi) in runResult.hints" :key="hi">{{ h }}</li>
-          </ul>
-          <p v-if="!runResult.terminalError" class="run-result__hint">
-            说明：「运行」仅在<strong>公开样例</strong>上对比<strong>标准输出</strong>与<strong>预期输出</strong>（右侧已列出<strong>输入 / 预期 / 你的输出</strong>）；无法代替对算法正确性的证明。隐藏用例请以<strong>提交代码</strong>评测为准。
-          </p>
-          <p v-if="runResult.terminalError && runResult.sandboxMessage" class="run-result__msg">
-            {{ runResult.sandboxMessage }}
-          </p>
-          <div v-if="!runResult.terminalError && runResult.cases?.length" class="run-cases">
-            <div
-              v-for="c in runResult.cases"
-              :key="c.index"
-              class="run-case"
-              :class="{ 'run-case--fail': !c.passed }"
-            >
-              <div class="run-case__label">
-                样例 {{ c.index }}
-                <span class="run-case__tag">{{ c.passed ? '通过' : '未通过' }}</span>
-              </div>
-              <div class="run-case__grid">
-                <div>
-                  <span class="run-case__k">输入</span>
-                  <pre class="run-case__pre">{{ c.input }}</pre>
+                  <span
+                    v-if="runResult.terminalError"
+                    class="run-result__badge run-result__badge--err"
+                  >
+                    {{ runResult.judgeInfo?.message || '执行异常' }}
+                  </span>
+                  <span
+                    v-else-if="runResult.allSamplePassed && runResult.suspectedShortcut"
+                    class="run-result__badge run-result__badge--soft-warn"
+                    title="输出文本与公开样例一致，但代码可能未按题意读入或计算"
+                  >
+                    输出匹配样例（请核对逻辑）
+                  </span>
+                  <span
+                    v-else-if="runResult.allSamplePassed"
+                    class="run-result__badge run-result__badge--ok"
+                  >
+                    样例全部通过
+                  </span>
+                  <span v-else class="run-result__badge run-result__badge--warn"
+                    >样例未全部通过</span
+                  >
+                  <span v-if="runResult.judgeInfo?.time != null" class="run-result__meta">
+                    用时 {{ runResult.judgeInfo.time }} ms
+                  </span>
+                  <span v-if="runResult.judgeInfo?.memory != null" class="run-result__meta">
+                    内存 {{ runResult.judgeInfo.memory }} KB
+                  </span>
                 </div>
-                <div>
-                  <span class="run-case__k">预期输出</span>
-                  <pre class="run-case__pre">{{ c.expectedOutput }}</pre>
+                <p v-if="runResult.warning" class="run-result__warn">
+                  {{ runResult.warning }}
+                </p>
+                <ul v-if="runResult.hints?.length" class="run-result__hints">
+                  <li v-for="(h, hi) in runResult.hints" :key="hi">{{ h }}</li>
+                </ul>
+                <p v-if="!runResult.terminalError" class="run-result__hint">
+                  说明：「运行」仅在<strong>公开样例</strong>上对比<strong>标准输出</strong>与<strong>预期输出</strong>（右侧已列出<strong
+                    >输入 / 预期 / 你的输出</strong
+                  >）；无法代替对算法正确性的证明。隐藏用例请以<strong>提交代码</strong>评测为准。
+                </p>
+                <p
+                  v-if="runResult.terminalError && runResult.sandboxMessage"
+                  class="run-result__msg"
+                >
+                  {{ runResult.sandboxMessage }}
+                </p>
+                <pre
+                  v-if="runResult.terminalError && runResult.judgeInfo?.detail"
+                  class="run-result__compile-detail"
+                  >{{ runResult.judgeInfo.detail }}</pre
+                >
+                <div v-if="!runResult.terminalError && runResult.cases?.length" class="run-cases">
+                  <div
+                    v-for="c in runResult.cases"
+                    :key="c.index"
+                    class="run-case"
+                    :class="{ 'run-case--fail': !c.passed }"
+                  >
+                    <div class="run-case__label">
+                      样例 {{ c.index }}
+                      <span class="run-case__tag">{{ c.passed ? '通过' : '未通过' }}</span>
+                    </div>
+                    <div class="run-case__grid">
+                      <div>
+                        <span class="run-case__k">输入</span>
+                        <pre class="run-case__pre">{{ c.input }}</pre>
+                      </div>
+                      <div>
+                        <span class="run-case__k">预期输出</span>
+                        <pre class="run-case__pre">{{ c.expectedOutput }}</pre>
+                      </div>
+                      <div>
+                        <span class="run-case__k">你的输出</span>
+                        <pre class="run-case__pre">{{ c.actualOutput }}</pre>
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <span class="run-case__k">你的输出</span>
-                  <pre class="run-case__pre">{{ c.actualOutput }}</pre>
-                </div>
-              </div>
-            </div>
-          </div>
               </div>
             </transition>
           </section>
@@ -2007,6 +2605,47 @@ watch(
       </article>
     </section>
     <div v-else class="empty-inline">{{ loading ? '题目加载中...' : '题目不存在或已删除' }}</div>
+
+    <transition name="ac-pop">
+      <aside v-if="acceptedCelebration" class="ac-celebration" role="status" aria-live="polite">
+        <span class="ac-celebration__mark">✓</span>
+        <div>
+          <strong>{{
+            acceptedCelebration.attempt === 1
+              ? '一次通过！'
+              : `第 ${acceptedCelebration.attempt} 次提交通过`
+          }}</strong>
+          <p>
+            Accepted
+            <template v-if="acceptedCelebration.time != null">
+              · {{ acceptedCelebration.time }} ms</template
+            >
+            <template v-if="acceptedCelebration.memory != null">
+              · {{ acceptedCelebration.memory }} KB</template
+            >
+          </p>
+        </div>
+        <button
+          v-if="contestIdForSubmit"
+          type="button"
+          @click="
+            router.push({ name: 'contest-rank-detail', params: { contestId: contestIdForSubmit } })
+          "
+        >
+          返回比赛
+        </button>
+        <button
+          v-else-if="nextRecommendation"
+          type="button"
+          @click="
+            router.push({ name: 'problem-solve', params: { id: nextRecommendation.questionId } })
+          "
+        >
+          下一题：{{ nextRecommendation.title }}
+        </button>
+        <button v-else type="button" @click="router.push({ name: 'problems' })">返回题库</button>
+      </aside>
+    </transition>
 
     <StudyAiCopilot
       v-if="detail"
@@ -2020,12 +2659,18 @@ watch(
       :sample-cases="aiSampleCases"
       :run-result="aiRunResult"
       :get-code="currentEditorCode"
-      @insert-code="onCopilotInsertCode"
+      :apply-code-edits="applyAiCodeEdits"
+      :undo-code-edit="undoAiCodeEdit"
+      :run-samples="runCode"
     />
   </div>
 </template>
 
 <style scoped>
+:global(.ai-edit-highlight) {
+  background: rgba(20, 184, 166, 0.22);
+  border-left: 3px solid #0d9488;
+}
 .solve-page {
   position: relative;
   isolation: isolate;
@@ -2092,7 +2737,11 @@ watch(
   height: 300px;
   top: 50px;
   left: -80px;
-  background: radial-gradient(circle, color-mix(in srgb, var(--app-accent) 70%, transparent), transparent 72%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--app-accent) 70%, transparent),
+    transparent 72%
+  );
 }
 
 .solve-page::after {
@@ -2100,12 +2749,20 @@ watch(
   height: 320px;
   top: 220px;
   right: -90px;
-  background: radial-gradient(circle, color-mix(in srgb, var(--app-success) 68%, transparent), transparent 72%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--app-success) 68%, transparent),
+    transparent 72%
+  );
 }
 
 .panel {
   border: 1px solid var(--app-border);
-  background: linear-gradient(145deg, color-mix(in srgb, var(--app-surface) 94%, #ffffff 6%), var(--app-surface));
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--app-surface) 94%, #ffffff 6%),
+    var(--app-surface)
+  );
   box-shadow: var(--app-card-shadow);
   border-radius: 20px;
   backdrop-filter: blur(16px);
@@ -2249,7 +2906,11 @@ watch(
   opacity: 0.35;
   background-image:
     linear-gradient(color-mix(in srgb, var(--app-accent) 22%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--app-accent) 22%, transparent) 1px, transparent 1px);
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--app-accent) 22%, transparent) 1px,
+      transparent 1px
+    );
   background-size: 28px 28px;
   mask-image: radial-gradient(ellipse 80% 70% at 70% 35%, #000 22%, transparent 72%);
   -webkit-mask-image: radial-gradient(ellipse 80% 70% at 70% 35%, #000 22%, transparent 72%);
@@ -2496,7 +3157,9 @@ watch(
   stroke: color-mix(in srgb, var(--app-accent) 88%, #22d3ee);
   stroke-width: 5;
   stroke-linecap: round;
-  transition: stroke-dashoffset 0.85s cubic-bezier(0.22, 1, 0.36, 1), stroke 0.3s ease;
+  transition:
+    stroke-dashoffset 0.85s cubic-bezier(0.22, 1, 0.36, 1),
+    stroke 0.3s ease;
 }
 
 .contest-clock__ring-caption {
@@ -2658,7 +3321,9 @@ watch(
   cursor: col-resize;
   background: transparent;
   opacity: 1;
-  transition: opacity 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .splitter::after {
@@ -2775,7 +3440,10 @@ watch(
   padding: 0 14px;
   cursor: pointer;
   font-weight: 600;
-  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease;
 }
 
 .tab-btn.active {
@@ -2804,7 +3472,10 @@ watch(
   cursor: pointer;
   color: var(--app-text-subtle);
   font-size: 12px;
-  transition: border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    color 0.2s ease,
+    transform 0.2s ease;
 }
 
 .anchor-btn:hover {
@@ -2931,6 +3602,24 @@ watch(
   font-size: 0.92em;
 }
 
+.oj-statement :deep(pre) {
+  margin: 12px 0 18px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--app-surface) 85%, #0f172a 15%);
+  white-space: pre;
+}
+
+.oj-statement :deep(pre code) {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  white-space: inherit;
+}
+
 .statement::-webkit-scrollbar {
   width: 8px;
 }
@@ -2989,7 +3678,9 @@ watch(
   border-radius: 12px;
   padding: 10px 12px;
   background: color-mix(in srgb, var(--app-surface) 88%, #ffffff 12%);
-  transition: transform 0.2s ease, border-color 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease;
 }
 
 .judge-case-card--flat {
@@ -3167,7 +3858,9 @@ watch(
     color-mix(in srgb, var(--app-surface) 88%, #ffffff 12%)
   );
   box-shadow: 0 1px 0 color-mix(in srgb, #ffffff 70%, transparent) inset;
-  transition: transform 0.2s ease, border-color 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease;
 }
 
 .judge-limit-card:hover {
@@ -3335,7 +4028,9 @@ watch(
   border-radius: 12px;
   overflow: hidden;
   border: 1px solid var(--app-border);
-  transition: border-color 0.22s ease, box-shadow 0.22s ease;
+  transition:
+    border-color 0.22s ease,
+    box-shadow 0.22s ease;
 }
 
 .code-area :deep(.monaco-editor .margin) {
@@ -3538,11 +4233,7 @@ watch(
 .submit-row :deep(.run-btn:hover) {
   border-color: var(--app-accent);
   color: #fff;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--app-accent) 78%, #2563eb),
-    #1d4ed8
-  );
+  background: linear-gradient(135deg, color-mix(in srgb, var(--app-accent) 78%, #2563eb), #1d4ed8);
   box-shadow: 0 10px 22px color-mix(in srgb, var(--app-accent) 22%, transparent);
   transform: translateY(-1px);
 }
@@ -3851,6 +4542,20 @@ watch(
   word-break: break-word;
 }
 
+.run-result__compile-detail {
+  max-height: 220px;
+  margin: 0 0 10px;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--app-border, rgba(15, 23, 42, 0.12));
+  border-radius: 8px;
+  background: var(--app-surface, rgba(15, 23, 42, 0.04));
+  color: var(--app-text-main);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .run-result__hint {
   margin: 0 0 10px;
   font-size: 12px;
@@ -3998,7 +4703,6 @@ watch(
   outline-offset: 2px;
 }
 
-
 .empty-inline {
   margin-top: 12px;
   text-align: center;
@@ -4033,6 +4737,810 @@ watch(
 
   .code-area {
     min-height: 420px;
+  }
+}
+
+/* Modern learning workbench overrides */
+.solve-page {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  height: calc(100dvh - var(--app-header-height));
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+  background: var(--app-bg);
+}
+
+.topbar {
+  flex: 0 0 64px;
+  min-height: 64px;
+  margin: 0;
+  padding: 9px 16px;
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--app-surface) 96%, #f6ead6 4%);
+}
+
+.title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.title-wrap h1 {
+  margin: 0;
+  font-size: clamp(18px, 1.45vw, 23px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.problem-quick-meta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.difficulty-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 99px;
+  background: color-mix(in srgb, #e58a35 12%, var(--app-surface));
+  color: #a75515;
+  font-weight: 800;
+}
+.stat-chips {
+  flex-wrap: nowrap;
+}
+.stat-chips > .chip:not(.chip--contest):not(.chip--practice) {
+  display: none;
+}
+.workspace-mode-switch {
+  display: flex;
+  padding: 3px;
+  border: 1px solid var(--app-border);
+  border-radius: 11px;
+  background: var(--app-bg-soft, var(--app-bg));
+}
+.workspace-mode-switch button {
+  min-height: 36px;
+  border: 0;
+  border-radius: 8px;
+  padding: 0 11px;
+  background: transparent;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.workspace-mode-switch button.active {
+  background: var(--app-surface);
+  color: var(--app-accent);
+  box-shadow: 0 1px 4px rgba(53, 45, 35, 0.08);
+}
+
+.contest-clock {
+  flex: 0 0 66px;
+  min-height: 66px;
+  margin: 0;
+  padding: 8px 14px;
+  overflow: hidden;
+  border-right: 0;
+  border-left: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+.contest-clock__layout {
+  min-height: 48px;
+  grid-template-columns: 1fr auto;
+}
+.contest-clock__hint,
+.contest-clock__progress,
+.contest-clock__progress-label,
+.contest-clock__ring-wrap {
+  display: none;
+}
+.contest-clock__intro {
+  gap: 3px;
+}
+.contest-clock__title {
+  margin: 0;
+  font-size: 15px;
+}
+.contest-clock__digits {
+  transform: scale(0.82);
+  transform-origin: right center;
+}
+
+.content-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  gap: 0;
+  align-items: stretch;
+  width: 100%;
+}
+.content-grid--problem-focus .problem-panel,
+.content-grid--editor-focus .answer-panel {
+  grid-column: 1 / -1;
+}
+.problem-panel,
+.answer-panel {
+  min-height: 0;
+  height: 100%;
+  max-height: none;
+  border-radius: 0;
+  box-shadow: none;
+  overflow: hidden;
+}
+.problem-panel {
+  border-bottom: 0;
+  border-left: 0;
+}
+.answer-panel {
+  border-right: 0;
+  border-bottom: 0;
+}
+.problem-panel {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.problem-tabs {
+  display: flex;
+  flex: 0 0 52px;
+  width: 100%;
+  box-sizing: border-box;
+  gap: 0;
+  margin: 0;
+  padding: 0 8px;
+  border: 0;
+  border-bottom: 1px solid var(--app-border);
+  border-radius: 0;
+  background: var(--app-surface);
+}
+.tab-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 51px;
+  border-radius: 0;
+  padding: 0 16px;
+  color: var(--app-text-muted);
+  font-size: 14px;
+  font-weight: 650;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
+}
+.tab-btn::before {
+  display: inline-grid;
+  width: 17px;
+  place-items: center;
+  color: #7b8387;
+  font-size: 15px;
+  font-weight: 800;
+}
+.tab-btn--statement::before {
+  content: '▤';
+}
+.tab-btn--solution::before {
+  content: '◧';
+}
+.tab-btn--submissions::before {
+  content: '☷';
+}
+.tab-btn--stats::before {
+  content: '▥';
+}
+.tab-btn.active {
+  background: color-mix(in srgb, var(--app-accent) 9%, var(--app-surface));
+  color: var(--app-accent);
+}
+.tab-btn.active::before {
+  color: var(--app-accent);
+}
+.tab-btn.active::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: var(--app-accent);
+}
+.tab-btn:hover:not(.active) {
+  background: color-mix(in srgb, var(--app-accent) 5%, transparent);
+  color: var(--app-text);
+}
+.problem-body-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px 24px;
+  scrollbar-gutter: stable;
+}
+.problem-tab-page {
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: 8px 4px 24px;
+  color: var(--app-text);
+}
+.problem-tab-page__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--app-border);
+  padding: 5px 4px 14px;
+}
+.problem-tab-page__head h3 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+.problem-tab-page__head p {
+  margin: 0;
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+.problem-tab-page__head > span {
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+.problem-tab-empty {
+  display: grid;
+  min-height: 280px;
+  place-items: center;
+  align-content: center;
+  gap: 9px;
+  border: 1px dashed var(--app-border);
+  border-radius: 12px;
+  padding: 24px;
+  text-align: center;
+}
+.problem-tab-empty__icon {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--app-accent) 10%, var(--app-surface));
+  color: var(--app-accent);
+  font-size: 22px;
+}
+.problem-tab-empty h3 {
+  margin: 0;
+  font-size: 17px;
+}
+.problem-tab-empty p {
+  max-width: 420px;
+  margin: 0;
+  color: var(--app-text-muted);
+  line-height: 1.7;
+}
+.problem-tab-empty button {
+  min-height: 40px;
+  border: 1px solid color-mix(in srgb, var(--app-accent) 45%, var(--app-border));
+  border-radius: 9px;
+  padding: 0 16px;
+  background: color-mix(in srgb, var(--app-accent) 9%, var(--app-surface));
+  color: var(--app-accent);
+  cursor: pointer;
+  font-weight: 750;
+}
+.problem-submit-list {
+  display: grid;
+  gap: 0;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.problem-submit-list article {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) 82px 90px minmax(130px, 1.4fr);
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--app-border);
+  font-size: 12px;
+}
+.problem-submit-list article:last-child {
+  border-bottom: 0;
+}
+.problem-submit-list strong {
+  color: #b42318;
+}
+.problem-submit-list strong.is-accepted {
+  color: #08745c;
+}
+.problem-submit-list span,
+.problem-submit-list time {
+  color: var(--app-text-muted);
+}
+.problem-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.problem-stat-grid article {
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  padding: 15px;
+  background: var(--app-surface);
+}
+.problem-stat-grid span {
+  display: block;
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+.problem-stat-grid strong {
+  display: block;
+  margin-top: 7px;
+  color: var(--app-text);
+  font-size: 20px;
+}
+.problem-meta-grid {
+  margin-top: 12px;
+}
+.oj-card {
+  box-shadow: none;
+}
+.oj-card--statement {
+  padding: 14px;
+}
+.statement {
+  max-height: none !important;
+  overflow: visible !important;
+  font-size: 15px;
+  line-height: 1.78;
+}
+.anchor-nav {
+  position: sticky;
+  top: -12px;
+  z-index: 2;
+  margin: -12px -2px 12px;
+  padding: 9px 2px 7px;
+  background: color-mix(in srgb, var(--app-surface) 94%, transparent);
+  backdrop-filter: blur(8px);
+}
+.judge-config {
+  display: none;
+}
+
+.splitter {
+  width: 8px;
+  min-width: 8px;
+  border-radius: 0;
+  background: color-mix(in srgb, var(--app-border) 65%, var(--app-bg));
+  cursor: col-resize;
+  outline: none;
+}
+.splitter::after {
+  width: 2px;
+  background: color-mix(in srgb, var(--app-accent) 35%, var(--app-border));
+}
+.splitter:hover::after,
+.splitter:focus-visible::after {
+  width: 4px;
+  background: var(--app-accent);
+}
+
+.answer-panel {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.answer-panel__editor-section {
+  flex: 1 1 auto;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.editor-head {
+  flex: 0 0 54px;
+  min-height: 54px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--app-border);
+  background: color-mix(in srgb, var(--app-surface) 96%, var(--app-accent) 4%);
+}
+.editor-head h2 {
+  font-size: 15px;
+}
+.editor-tools {
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+.editor-text-btn {
+  min-height: 40px;
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.editor-settings {
+  position: relative;
+  flex: 0 0 auto;
+}
+.editor-settings-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  padding: 0 12px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 750;
+}
+.editor-settings-trigger:hover,
+.editor-settings-trigger[aria-expanded='true'] {
+  border-color: color-mix(in srgb, var(--app-accent) 48%, var(--app-border));
+  background: color-mix(in srgb, var(--app-accent) 7%, var(--app-surface));
+  color: var(--app-accent);
+}
+.editor-settings-trigger span {
+  transition: transform 0.16s ease;
+}
+.editor-settings-trigger[aria-expanded='true'] span {
+  transform: rotate(180deg);
+}
+.editor-settings-popover {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 8px);
+  right: 0;
+  box-sizing: border-box;
+  width: 236px;
+  overflow: hidden;
+  border: 1px solid var(--app-border);
+  border-radius: 14px;
+  padding: 7px;
+  background: var(--app-surface);
+  box-shadow: 0 18px 45px rgba(40, 33, 24, 0.18);
+}
+.editor-settings-popover__title {
+  margin: 0;
+  padding: 6px 9px 7px;
+  color: var(--app-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+.editor-settings-popover button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 42px;
+  border: 0;
+  border-radius: 9px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--app-text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+}
+.editor-settings-popover button:hover,
+.editor-settings-popover button:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--app-accent) 9%, transparent);
+}
+.editor-settings-popover button strong {
+  flex: 0 0 auto;
+  color: var(--app-accent);
+  font-size: 11px;
+}
+.editor-settings-popover__divider {
+  height: 1px;
+  margin: 6px 7px;
+  background: var(--app-border);
+}
+.editor-settings-popover .editor-settings-popover__danger {
+  color: #b42318;
+}
+.editor-settings-popover .editor-settings-popover__danger strong {
+  color: #b42318;
+}
+.editor-hint-inline {
+  flex: 0 0 32px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--app-border);
+  font-size: 11px;
+}
+.editor-live-status {
+  color: var(--app-text-muted);
+  white-space: nowrap;
+}
+.code-area {
+  flex: 1 1 auto;
+  min-height: 0 !important;
+  height: auto !important;
+  border: 0;
+  border-radius: 0;
+}
+.syntax-issues-panel {
+  display: none;
+}
+.legacy-run-footer {
+  display: none !important;
+}
+.editor-primary-actions {
+  flex: 0 0 54px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--app-border);
+  background: var(--app-surface);
+}
+.editor-primary-actions__hint {
+  margin-right: auto;
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+.editor-primary-actions :deep(.arco-btn) {
+  min-height: 40px;
+  border-radius: 10px;
+  padding: 0 20px;
+  font-weight: 800;
+}
+.editor-primary-actions :deep(.submit-code-btn.arco-btn-primary) {
+  border: 0;
+  background: linear-gradient(135deg, #0f9f88, #287ccf);
+  box-shadow: 0 5px 14px rgba(15, 159, 136, 0.18);
+}
+.workbench-console {
+  flex: 0 0 auto;
+  min-height: 45px;
+  max-height: 55vh;
+}
+
+.ac-celebration {
+  position: fixed;
+  z-index: 1200;
+  left: 50%;
+  top: 88px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 340px;
+  border: 1px solid color-mix(in srgb, #10a37f 45%, var(--app-border));
+  border-radius: 16px;
+  padding: 13px 16px;
+  background: color-mix(in srgb, var(--app-surface) 94%, #dff8ef 6%);
+  color: var(--app-text);
+  box-shadow: 0 18px 50px rgba(19, 78, 64, 0.18);
+}
+.ac-celebration__mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: #10a37f;
+  color: white;
+  font-size: 22px;
+  font-weight: 900;
+}
+.ac-celebration strong {
+  font-size: 15px;
+}
+.ac-celebration p {
+  margin: 3px 0 0;
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+.ac-celebration button {
+  margin-left: auto;
+  min-height: 38px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--app-surface);
+  color: var(--app-accent);
+  font-weight: 800;
+  cursor: pointer;
+}
+.ac-pop-enter-active,
+.ac-pop-leave-active {
+  transition:
+    opacity 0.18s ease,
+    transform 0.18s ease;
+}
+.ac-pop-enter-from,
+.ac-pop-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -8px);
+}
+
+@media (min-width: 768px) and (max-width: 1099px) {
+  .solve-page {
+    height: auto;
+    min-height: calc(100dvh - var(--app-header-height));
+    overflow: visible;
+    padding: 12px;
+  }
+  .content-grid {
+    grid-template-rows: minmax(420px, 52vh) minmax(560px, auto) !important;
+    gap: 10px;
+  }
+  .problem-panel {
+    order: 1;
+    min-height: 420px;
+  }
+  .answer-panel {
+    order: 2;
+    min-height: 620px;
+  }
+  .topbar {
+    height: auto;
+    flex-basis: auto;
+  }
+  .title-wrap {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
+  }
+}
+
+@media (max-width: 767px) {
+  .solve-page {
+    width: 100%;
+    height: auto;
+    min-height: calc(100dvh - var(--app-header-height));
+    overflow: visible;
+    padding: 8px 8px 88px;
+    gap: 8px;
+  }
+  .topbar {
+    min-height: 74px;
+    height: auto;
+    flex-basis: auto;
+    padding: 10px 12px;
+  }
+  .title-wrap {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .problem-quick-meta {
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+  .stat-chips {
+    display: none;
+  }
+  .workspace-mobile-tabs {
+    position: sticky;
+    top: var(--app-header-height);
+    z-index: 30;
+    margin: 0;
+    box-shadow: 0 5px 16px rgba(44, 38, 30, 0.08);
+  }
+  .content-grid {
+    display: block;
+    min-height: 0;
+  }
+  .problem-panel,
+  .answer-panel {
+    min-height: calc(100dvh - 210px);
+    height: auto;
+  }
+  .problem-tabs {
+    overflow-x: auto;
+    padding: 0 4px;
+  }
+  .tab-btn {
+    flex: 0 0 auto;
+    padding: 0 12px;
+    font-size: 13px;
+  }
+  .problem-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .problem-submit-list article {
+    grid-template-columns: 1fr 72px;
+    padding: 8px 10px;
+  }
+  .problem-submit-list time {
+    grid-column: 1 / -1;
+  }
+  .problem-body-scroll {
+    max-height: none;
+    overflow: visible;
+  }
+  .answer-panel__editor-section {
+    min-height: 520px;
+  }
+  .code-area {
+    min-height: 430px !important;
+  }
+  .editor-head {
+    height: auto;
+    min-height: 58px;
+    align-items: flex-start;
+  }
+  .editor-tools {
+    flex-wrap: wrap;
+  }
+  .editor-text-btn,
+  .editor-settings {
+    display: none;
+  }
+  .editor-tools :deep(.arco-select) {
+    width: 130px !important;
+  }
+  .editor-hint-inline {
+    align-items: flex-start;
+    flex-direction: column;
+    height: auto;
+    padding: 7px 10px;
+  }
+  .editor-live-status {
+    white-space: normal;
+  }
+  .editor-primary-actions {
+    position: fixed;
+    z-index: 80;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: calc(66px + env(safe-area-inset-bottom));
+    padding: 9px 12px calc(9px + env(safe-area-inset-bottom));
+    box-shadow: 0 -8px 24px rgba(40, 34, 26, 0.12);
+  }
+  .editor-primary-actions__hint {
+    display: none;
+  }
+  .editor-primary-actions :deep(.arco-btn) {
+    flex: 1;
+  }
+  .workbench-console {
+    min-height: 180px;
+    height: auto !important;
+    max-height: none;
+  }
+  .ac-celebration {
+    top: 72px;
+    width: calc(100vw - 24px);
+    min-width: 0;
+    box-sizing: border-box;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .solve-page *,
+  .solve-page *::before,
+  .solve-page *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }
 </style>

@@ -6,13 +6,14 @@ import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.spingbootinit.common.exception.BusinessException;
 import com.spingbootinit.common.exception.ThrowUtils;
 import com.spingbootinit.common.result.ResultCode;
-import com.spingbootinit.context.UserContext.IsAdminRoleString;
+import com.spingbootinit.context.UserContext.UserContext;
 import com.spingbootinit.mapper.QuestionMapper;
 import com.spingbootinit.model.dto.question.*;
 import com.spingbootinit.model.entity.Question;
 import com.spingbootinit.model.entity.User;
 import com.spingbootinit.model.vo.questionvo.QuestionAdminListItemVO;
 import com.spingbootinit.model.vo.questionvo.QuestionPublicDetailVO;
+import com.spingbootinit.security.UserRolePolicy;
 import com.spingbootinit.service.QuestionService;
 import com.spingbootinit.service.UserService;
 import com.spingbootinit.utils.MinioUtils;
@@ -39,11 +40,10 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
     @Resource
     private UserService userService;
 
-    /**
-     * 判断是否是管理员
-     */
     @Resource
-    private IsAdminRoleString isAdminRole;
+    private UserRolePolicy userRolePolicy;
+    @Resource
+    private QuestionAuthorizationService questionAuthorizationService;
     @Resource
     private MinioUtils minioUtils;
 
@@ -89,7 +89,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
             }
             question.setVisionModelKey(modelKey);
             String generationSource = StringUtils.defaultIfBlank(question.getGenerationSource(), "UPLOAD");
-            if (!Set.of("UPLOAD", "LOCAL_COMFYUI", "DASHSCOPE").contains(generationSource)) {
+            if (!Set.of("UPLOAD", "LOCAL_COMFYUI", "DASHSCOPE", "VOLCENGINE", "BAIDU_QIANFAN", "SILICONFLOW").contains(generationSource)) {
                 throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "不支持的题图来源");
             }
             question.setGenerationSource(generationSource);
@@ -224,7 +224,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         if (currentUser == null) {
             throw new BusinessException(ResultCode.NOT_LOGIN_ERROR);
         }
-        if (!isAdminRole.isAdminRoleString(currentUser.getUserRole())) {
+        if (!userRolePolicy.canAuthorQuestions(currentUser.getUserRole())) {
             throw new BusinessException(ResultCode.NO_AUTH_ERROR);
         }
         Question question = new Question();
@@ -320,6 +320,17 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         Page<QuestionAdminListItemVO> voPage = new Page<>(page.getCurrent(), page.getSize(), page.getTotal());
         voPage.setRecords(voRecords);
         return voPage;
+    }
+
+    @Override
+    public Page<QuestionAdminListItemVO> pageSelectManaged(QuestionQueryRequest queryRequest, Long currentUserId) {
+        User actor = questionAuthorizationService.requireAuthor(currentUserId);
+        if (!questionAuthorizationService.canManageAll(actor)) {
+            if (queryRequest == null) queryRequest = new QuestionQueryRequest();
+            queryRequest.setUserId(currentUserId);
+            queryRequest.setUserNickname(null);
+        }
+        return pageSelect(queryRequest);
     }
 
     /**
@@ -425,11 +436,18 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
      */
     @Override
     public void updateByIdQuestion(QuestionUpdateRequest  request) {
+        Long currentUserId = UserContext.getCurrentUserId();
+        if (currentUserId == null) throw new BusinessException(ResultCode.NOT_LOGIN_ERROR);
+        updateByIdQuestion(request, currentUserId);
+    }
+
+    @Override
+    public void updateByIdQuestion(QuestionUpdateRequest request, Long currentUserId) {
         Question oldQuestion = this.getById(request.getId());
         if (oldQuestion == null) {
             throw new BusinessException(ResultCode.NOT_FOUND_ERROR);
         }
-        // 仅管理员可更新
+        questionAuthorizationService.requireCanManage(currentUserId, oldQuestion.getId());
         Question question = new Question();
         BeanUtils.copyProperties(request, question);
         this.validQuestion(question, false);
@@ -442,11 +460,19 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
      */
     @Override
     public void removeBatchByIdsQuestion(QuestionBatchDeleteRequest request) {
-        // 仅管理员可删除
+        Long currentUserId = UserContext.getCurrentUserId();
+        if (currentUserId == null) throw new BusinessException(ResultCode.NOT_LOGIN_ERROR);
+        removeBatchByIdsQuestion(request, currentUserId);
+    }
+
+    @Override
+    public void removeBatchByIdsQuestion(QuestionBatchDeleteRequest request, Long currentUserId) {
         Set<Long> ids = request.getIds().stream().filter(Objects::nonNull).collect(Collectors.toSet());
         if (ids.isEmpty()) {
             throw new BusinessException(ResultCode.PARAMS_ERROR);
         }
+        // Validate the whole batch before deleting anything, preventing partial unauthorized deletes.
+        ids.forEach(id -> questionAuthorizationService.requireCanManage(currentUserId, id));
         boolean deleted = this.removeByIds(ids);
         ThrowUtils.throwIf(!deleted, ResultCode.OPERATION_ERROR);
     }

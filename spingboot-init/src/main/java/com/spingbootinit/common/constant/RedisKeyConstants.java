@@ -50,4 +50,11 @@ public final class RedisKeyConstants {
         return STATUS_REVISION_PREFIX + userId;
     }
 
+    /** 用户在线心跳：前端定时刷新，TTL 到期即视为离线 */
+    public static final String ONLINE_USER_PREFIX = "online:user:";
+
+    public static String onlineUserKey(Long userId) {
+        return ONLINE_USER_PREFIX + userId;
+    }
+
 }

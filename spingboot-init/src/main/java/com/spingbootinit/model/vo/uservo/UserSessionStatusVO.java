@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
 import java.util.Date;
+import java.util.Set;
 
 /**
  * 当前登录用户的账号状态（供前端轮询：禁用/解禁实时生效）。
@@ -34,4 +35,6 @@ public class UserSessionStatusVO {
     /** 状态版本号（变更时递增，前端对比后决定是否刷新 UI） */
     @JsonSerialize(using = ToStringSerializer.class)
     private Long statusRevision;
+    private String userRole;
+    private Set<String> permissions;
 }

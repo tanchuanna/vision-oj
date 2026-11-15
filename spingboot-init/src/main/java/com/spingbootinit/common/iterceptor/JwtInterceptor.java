@@ -71,6 +71,7 @@ public class JwtInterceptor implements HandlerInterceptor {
         // 将用户信息保存到ThreadLocal中
         UserContext.setCurrenUserId(userIdFromToken);
         UserContext.setCurrentRole(user.getUserRole());
+        UserContext.setCurrentUsername(user.getUsername());
         log.info("用户ID: {}", UserContext.getCurrentUserId());
         log.info("用户角色: {}", UserContext.getCurrentRole());
         return true;

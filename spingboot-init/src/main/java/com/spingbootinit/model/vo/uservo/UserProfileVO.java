@@ -48,5 +48,6 @@ public class UserProfileVO {
 
     /** 0-禁用 1-正常 */
     private Integer status;
+    private String userRole;
 }
 

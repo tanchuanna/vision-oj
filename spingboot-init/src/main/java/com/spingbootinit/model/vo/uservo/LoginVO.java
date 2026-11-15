@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.ser.std.ToStringSerializer;
 import lombok.Data;
 
+import java.util.Set;
+
 @Data
 public class LoginVO {
     @JsonSerialize(using = ToStringSerializer.class)
@@ -16,6 +18,7 @@ public class LoginVO {
     /** 兼容旧前端：等同 accessToken */
     private String token;
     private String userRole;
+    private Set<String> permissions;
     private String avatar;
     /** 0-禁用 1-正常 */
     private Integer status;

@@ -1,86 +1,307 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { nextTick } from 'vue'
+import { ref } from 'vue'
+import { Message } from '@arco-design/web-vue'
 import { useStudyAiCopilotStore } from '@/stores/studyAiCopilot'
 
-export type QuickChip = { label: string; text: string; icon?: string }
-
 const props = defineProps<{
-  quickActions: QuickChip[]
   disabled: boolean
+  attachment: { name: string; dataUrl: string } | null
 }>()
 
 const emit = defineEmits<{
   send: []
   stop: []
+  attach: [attachment: { name: string; dataUrl: string }]
+  removeAttachment: []
 }>()
 
 const store = useStudyAiCopilotStore()
 const { draft, sending } = storeToRefs(store)
+const fileInput = ref<HTMLInputElement | null>(null)
+const dragActive = ref(false)
+
+function chooseImage() {
+  fileInput.value?.click()
+}
+
+async function readImage(file: File) {
+  if (props.disabled) return
+  if (!['image/png', 'image/jpeg'].includes(file.type))
+    return void Message.warning('请选择 PNG 或 JPEG 图片')
+  if (file.size > 4 * 1024 * 1024) return void Message.warning('图片不能超过 4 MB')
+  try {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ''))
+      reader.onerror = () => reject(new Error('读取图片失败'))
+      reader.readAsDataURL(file)
+    })
+    emit('attach', { name: file.name, dataUrl })
+  } catch {
+    Message.error('读取图片失败，请重新选择')
+  }
+}
+
+function onFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (file) void readImage(file)
+}
+
+function onPaste(event: ClipboardEvent) {
+  const image = Array.from(event.clipboardData?.files || []).find((file) =>
+    file.type.startsWith('image/'),
+  )
+  if (!image) return
+  event.preventDefault()
+  void readImage(image)
+}
+
+function onDrop(event: DragEvent) {
+  dragActive.value = false
+  const file = event.dataTransfer?.files?.[0]
+  if (file) void readImage(file)
+}
 
 function onSend() {
   emit('send')
 }
-
-function pickQuick(c: QuickChip) {
-  draft.value = c.text
-  void nextTick(() => emit('send'))
-}
 </script>
 
 <template>
-  <div class="tw-flex tw-flex-col tw-gap-2">
-    <div
-      class="tw-no-scrollbar tw-flex tw-gap-2 tw-overflow-x-auto tw-pb-0.5 tw-pl-0.5"
-      style="-webkit-overflow-scrolling: touch"
-    >
+  <div
+    class="composer"
+    :class="{ 'is-dragging': dragActive }"
+    @dragenter.prevent="dragActive = true"
+    @dragover.prevent="dragActive = true"
+    @dragleave.prevent="dragActive = false"
+    @drop.prevent="onDrop"
+  >
+    <input
+      ref="fileInput"
+      type="file"
+      accept="image/png,image/jpeg"
+      class="file-input"
+      aria-label="选择要分析的图片"
+      @change="onFileChange"
+    />
+    <div v-if="props.attachment" class="attachment-preview">
+      <img :src="props.attachment.dataUrl" alt="待分析图片预览" />
+      <span class="attachment-name">{{ props.attachment.name }}</span>
       <button
-        v-for="(c, i) in quickActions"
-        :key="i"
         type="button"
-        class="tw-shrink-0 tw-rounded-full tw-border tw-border-teal-500/15 tw-bg-teal-500/[0.06] tw-px-3 tw-py-1.5 tw-text-[11px] tw-font-semibold tw-text-zinc-700 tw-transition hover:-tw-translate-y-0.5 hover:tw-border-teal-400/50 hover:tw-bg-teal-500/10 disabled:tw-opacity-40 dark:tw-border-teal-400/15 dark:tw-bg-teal-400/[0.07] dark:tw-text-zinc-100"
+        aria-label="移除图片"
+        title="移除图片"
         :disabled="disabled"
-        @click="pickQuick(c)"
+        @click="emit('removeAttachment')"
       >
-        <span v-if="c.icon" class="tw-mr-1">{{ c.icon }}</span>{{ c.label }}
+        ×
       </button>
     </div>
-
-    <div class="tw-flex tw-items-end tw-gap-2 tw-rounded-2xl tw-border tw-border-black/[0.06] tw-bg-white/70 tw-p-2 tw-shadow-[0_8px_24px_rgba(15,118,110,0.08)] dark:tw-border-white/10 dark:tw-bg-zinc-900/70">
-      <textarea
-        v-model="draft"
-        rows="2"
-        class="tw-min-h-[56px] tw-flex-1 tw-resize-none tw-border-0 tw-bg-transparent tw-px-2 tw-py-2 tw-text-sm tw-text-zinc-900 tw-outline-none tw-ring-0 placeholder:tw-text-zinc-400 disabled:tw-opacity-50 dark:tw-text-zinc-50 dark:placeholder:tw-text-zinc-500"
-        placeholder="描述你的疑问，Enter 发送（Shift+Enter 换行）…"
+    <textarea
+      v-model="draft"
+      rows="2"
+      class="composer-textarea"
+      placeholder="向助手提问，也可以粘贴图片…"
+      :disabled="disabled"
+      @paste="onPaste"
+      @keydown.enter.exact.prevent="onSend"
+    />
+    <div class="composer-footer">
+      <button
+        type="button"
+        class="attach-button"
+        aria-label="添加图片"
+        title="添加图片"
         :disabled="disabled"
-        @keydown.enter.exact.prevent="onSend"
-      />
-      <button
-        v-if="sending"
-        type="button"
-        class="tw-shrink-0 tw-rounded-xl tw-border tw-border-rose-300 tw-bg-rose-500/15 tw-px-3 tw-py-2 tw-text-xs tw-font-bold tw-text-rose-700 dark:tw-border-rose-500/40 dark:tw-text-rose-200"
-        @click="emit('stop')"
+        @click="chooseImage"
       >
-        停止
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.9"
+          stroke-linecap="round"
+          aria-hidden="true"
+        >
+          <path d="M12 5v14M5 12h14" />
+        </svg>
       </button>
+      <span class="composer-hint">{{
+        props.attachment ? '已附加图片 · 发送时会用于分析' : '可上传、粘贴或拖入 PNG/JPEG 图片'
+      }}</span>
+      <button v-if="sending" type="button" class="stop-button" @click="emit('stop')">停止</button>
       <button
         type="button"
-        class="tw-grid tw-h-10 tw-w-10 tw-shrink-0 tw-place-items-center tw-rounded-xl tw-bg-gradient-to-br tw-from-teal-500 tw-to-cyan-600 tw-text-base tw-font-bold tw-text-white tw-shadow-lg tw-shadow-teal-500/25 tw-transition hover:-tw-translate-y-0.5 disabled:tw-cursor-not-allowed disabled:tw-opacity-40"
-        :disabled="disabled || !draft.trim()"
+        class="send-button"
+        aria-label="发送消息"
+        title="发送消息"
+        :disabled="disabled || (!draft.trim() && !props.attachment)"
         @click="onSend"
       >
-        ↑
+        <svg
+          width="17"
+          height="17"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M12 19V5m-6 6 6-6 6 6" />
+        </svg>
       </button>
     </div>
   </div>
 </template>
 
 <style scoped>
-.tw-no-scrollbar::-webkit-scrollbar {
+.file-input {
   display: none;
 }
-.tw-no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+.composer {
+  padding: 10px 11px 9px;
+  border: 1px solid var(--app-border, rgba(15, 23, 42, 0.13));
+  border-radius: 19px;
+  background: var(--app-surface-strong, #fff);
+  box-shadow: 0 3px 16px rgba(17, 24, 39, 0.06);
+  transition:
+    border-color 0.18s,
+    box-shadow 0.18s;
+}
+.composer:focus-within,
+.composer.is-dragging {
+  border-color: #0d9488;
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.1);
+}
+.composer-textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 58px;
+  max-height: 160px;
+  resize: vertical;
+  padding: 4px 4px 8px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--app-text, #172b34);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.composer-textarea::placeholder {
+  color: var(--app-text-subtle, #94a3b8);
+}
+.composer-textarea:disabled {
+  opacity: 0.6;
+}
+.attachment-preview {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: max-content;
+  max-width: 100%;
+  margin-bottom: 9px;
+  padding: 5px 6px;
+  border: 1px solid var(--app-border, rgba(15, 23, 42, 0.12));
+  border-radius: 11px;
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--app-text, #172b34);
+  font-size: 11px;
+}
+.attachment-preview img {
+  width: 48px;
+  height: 48px;
+  border-radius: 7px;
+  object-fit: cover;
+}
+.attachment-name {
+  min-width: 0;
+  max-width: 170px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.attachment-preview button {
+  align-self: flex-start;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-text-subtle, #64748b);
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+}
+.attachment-preview button:hover {
+  background: rgba(15, 23, 42, 0.09);
+}
+.composer-footer {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.composer-hint {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--app-text-subtle, #64748b);
+  font-size: 10px;
+}
+.attach-button,
+.send-button {
+  display: grid;
+  flex: none;
+  width: 31px;
+  height: 31px;
+  place-items: center;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.attach-button {
+  border: 1px solid var(--app-border, rgba(15, 23, 42, 0.15));
+  background: transparent;
+  color: var(--app-text, #172b34);
+}
+.attach-button:hover {
+  background: rgba(20, 184, 166, 0.08);
+}
+.send-button {
+  border: 0;
+  background: #0f766e;
+  color: white;
+}
+.send-button:hover {
+  background: #115e59;
+}
+.send-button:disabled {
+  background: rgba(100, 116, 139, 0.3);
+  cursor: not-allowed;
+}
+.attach-button:disabled,
+.attachment-preview button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.stop-button {
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(220, 38, 38, 0.1);
+  color: #b91c1c;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
 }
 </style>

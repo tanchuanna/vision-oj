@@ -9,6 +9,7 @@ import { AUTH_STORAGE_KEY } from '@/config/auth-storage'
 import { resolveMediaUrl } from '@/utils/resolveMediaUrl'
 import { parseBanUntilMs } from '@/utils/formatBanCountdown'
 import { isJwtExpired } from '@/utils/jwtPayload'
+import { isAdminRole, isStudentRole, isTeacherRole } from '@/config/roles'
 
 export interface AuthPayload {
   /** 短期 access，请求头 Bearer 使用 */
@@ -19,6 +20,7 @@ export interface AuthPayload {
   id?: string
   username?: string
   userRole?: string
+  permissions?: string[]
   avatar?: string
   /** 0-禁用 1-正常 */
   accountStatus?: number
@@ -29,14 +31,6 @@ export interface AuthPayload {
   commentBanReason?: string
   aiBanUntil?: string
   aiBanReason?: string
-}
-
-/** 与后端约定：角色字段包含 ADMIN 或中文「管理员」即视为管理员 */
-export function isAdminRole(role: string | undefined | null): boolean {
-  if (!role) return false
-  const r = role.trim()
-  if (/管理员|admin|ADMIN/i.test(r)) return true
-  return false
 }
 
 function loadFromStorage(): AuthPayload | null {
@@ -64,6 +58,7 @@ export const useAuthStore = defineStore('auth', () => {
   const userId = ref<string | null>(null)
   const username = ref<string | null>(null)
   const userRole = ref<string | null>(null)
+  const permissions = ref<string[]>([])
   const avatar = ref<string | null>(null)
   /** 0-禁用 1-正常；null 表示未知（旧会话默认按正常处理直到拉取到状态） */
   const accountStatus = ref<number | null>(null)
@@ -89,6 +84,7 @@ export const useAuthStore = defineStore('auth', () => {
         id: userId.value ?? undefined,
         username: username.value ?? undefined,
         userRole: userRole.value ?? undefined,
+        permissions: permissions.value,
         avatar: avatar.value ?? undefined,
         accountStatus: accountStatus.value ?? undefined,
         banType: banType.value ?? undefined,
@@ -132,6 +128,7 @@ export const useAuthStore = defineStore('auth', () => {
     const fromForm = usernameHint?.trim()
     username.value = fromApi || fromForm || null
     userRole.value = data.userRole ?? null
+    permissions.value = Array.isArray(data.permissions) ? data.permissions : []
     avatar.value = data.avatar?.trim() || null
     accountStatus.value = typeof data.status === 'number' ? data.status : 1
     persistAuthPayload()
@@ -147,6 +144,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function applySessionStatus(payload: {
+    userRole?: string | null
+    permissions?: string[] | null
     status?: number
     banType?: string | null
     banReason?: string | null
@@ -158,6 +157,8 @@ export const useAuthStore = defineStore('auth', () => {
     aiBanUntil?: string | null
     aiBanReason?: string | null
   }) {
+    if (typeof payload.userRole === 'string') userRole.value = payload.userRole
+    if (Array.isArray(payload.permissions)) permissions.value = payload.permissions
     if (typeof payload.status === 'number') {
       accountStatus.value = payload.status
     }
@@ -201,6 +202,7 @@ export const useAuthStore = defineStore('auth', () => {
     userId.value = null
     username.value = null
     userRole.value = null
+    permissions.value = []
     avatar.value = null
     accountStatus.value = null
     banType.value = null
@@ -243,9 +245,9 @@ export const useAuthStore = defineStore('auth', () => {
     userId.value = saved.id ?? null
     username.value = saved.username ?? null
     userRole.value = saved.userRole ?? null
+    permissions.value = Array.isArray(saved.permissions) ? saved.permissions : []
     avatar.value = saved.avatar ?? null
-    accountStatus.value =
-      typeof saved.accountStatus === 'number' ? saved.accountStatus : null
+    accountStatus.value = typeof saved.accountStatus === 'number' ? saved.accountStatus : null
     banType.value = saved.banType?.trim() || null
     banReason.value = saved.banReason?.trim() || null
     banUntil.value = saved.banUntil?.trim() || null
@@ -282,6 +284,9 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isLoggedIn = computed(() => !!token.value)
   const isAdmin = computed(() => isAdminRole(userRole.value))
+  const isTeacher = computed(() => isTeacherRole(userRole.value))
+  const isStudent = computed(() => isStudentRole(userRole.value))
+  const can = (permission: string) => isAdmin.value || permissions.value.includes(permission)
   const isAccountDisabled = computed(() => accountStatus.value === 0)
   const isCommentBanned = computed(() => {
     const end = parseBanUntilMs(commentBanUntil.value)
@@ -343,6 +348,7 @@ export const useAuthStore = defineStore('auth', () => {
       if (typeof me.status === 'number') {
         setAccountStatus(me.status)
       }
+      if (typeof me.userRole === 'string') userRole.value = me.userRole
       const rawAvatar = me.avatar
       const avatarStr =
         rawAvatar == null || (typeof rawAvatar === 'string' && rawAvatar.trim() === '')
@@ -375,6 +381,7 @@ export const useAuthStore = defineStore('auth', () => {
     userId,
     username,
     userRole,
+    permissions,
     avatar,
     accountStatus,
     banType,
@@ -387,6 +394,9 @@ export const useAuthStore = defineStore('auth', () => {
     avatarUrl,
     isLoggedIn,
     isAdmin,
+    isTeacher,
+    isStudent,
+    can,
     isAccountDisabled,
     isCommentBanned,
     isAiAssistBanned,

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, reactive, ref, watch } from 'vue'
 import { Checkbox, InputNumber, Message, Modal } from '@arco-design/web-vue'
 import { useRouter } from 'vue-router'
 import { ApiError, OpenAPI, Service, type UserAdminListItemVO } from '@generated'
@@ -7,10 +7,14 @@ import { useAuthStore } from '@/stores/auth'
 import { isResultSuccess } from '@/api/result'
 import { getBackendErrorMessage, isAxiosUnauthorizedResponse } from '@/api/httpError'
 import { parseBanUntilMs } from '@/utils/formatBanCountdown'
+import { resolveMediaUrl } from '@/utils/resolveMediaUrl'
+import axios from 'axios'
 
 const props = defineProps<{
   isLight: boolean
+  roleFilter?: 'user' | 'teacher'
 }>()
+const emit = defineEmits<{ (event: 'directory-changed'): void }>()
 
 type AdminUserItem = UserAdminListItemVO & {
   lastLoginRegion?: string
@@ -20,7 +24,14 @@ type AdminUserItem = UserAdminListItemVO & {
   lastLoginDeviceDetails?: string
 }
 
-type FieldItem = { key: string; label: string; value: string; mono?: boolean; hot?: boolean; empty?: boolean }
+type FieldItem = {
+  key: string
+  label: string
+  value: string
+  mono?: boolean
+  hot?: boolean
+  empty?: boolean
+}
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -31,6 +42,12 @@ const total = ref(0)
 const current = ref(1)
 const pageSize = ref(10)
 const statusBusyUserId = ref<string | null>(null)
+const roleBusyUserId = ref<string | null>(null)
+const selectedUserId = ref<string | null>(null)
+const detailVisible = ref(false)
+const previewUser = ref<AdminUserItem | null>(null)
+const avatarPreviewVisible = ref(false)
+const failedAvatarIds = ref<string[]>([])
 /** 输入框中的关键词（未提交） */
 const searchInput = ref('')
 /** 已提交并参与查询的关键词 */
@@ -39,6 +56,40 @@ const searchKeyword = ref('')
 const hasActiveSearch = computed(() => searchKeyword.value.trim().length > 0)
 const pageAbnormalCount = computed(() => records.value.filter((r) => r.abnormal).length)
 const pageDisabledCount = computed(() => records.value.filter((r) => r.status === 0).length)
+const selectedUser = computed(
+  () => records.value.find((row) => String(row.id ?? '') === selectedUserId.value) ?? null,
+)
+const directoryRoleName = computed(() =>
+  props.roleFilter === 'teacher' ? '老师' : props.roleFilter === 'user' ? '学生' : '用户',
+)
+
+function userDisplayName(row: AdminUserItem): string {
+  return row.nickname?.trim() || row.username?.trim() || '未设置昵称'
+}
+
+function userInitial(row: AdminUserItem): string {
+  return userDisplayName(row).slice(0, 1).toUpperCase()
+}
+
+function avatarSrc(row: AdminUserItem): string {
+  const id = String(row.id ?? row.username ?? '')
+  return failedAvatarIds.value.includes(id) ? '' : resolveMediaUrl(row.avatar)
+}
+
+function markAvatarFailed(row: AdminUserItem) {
+  const id = String(row.id ?? row.username ?? '')
+  if (!failedAvatarIds.value.includes(id)) failedAvatarIds.value.push(id)
+}
+
+function openUserDetail(row: AdminUserItem) {
+  selectedUserId.value = String(row.id ?? '')
+  detailVisible.value = true
+}
+
+function openAvatarPreview(row: AdminUserItem) {
+  previewUser.value = row
+  avatarPreviewVisible.value = true
+}
 
 function rowKey(row: AdminUserItem, idx: number): string {
   const id = row.id
@@ -60,23 +111,31 @@ function formatAccountStatus(status: number | undefined): string {
 }
 
 function isCommentBanActive(row: AdminUserItem): boolean {
-  const end = parseBanUntilMs(row.commentBanUntil ?? (row.banType === 'profanity' ? row.banUntil : null) ?? null)
+  const end = parseBanUntilMs(
+    row.commentBanUntil ?? (row.banType === 'profanity' ? row.banUntil : null) ?? null,
+  )
   if (end == null) return row.banType === 'profanity'
   return end > Date.now()
 }
 
 function isAiAssistBanActive(row: AdminUserItem): boolean {
-  const end = parseBanUntilMs(row.aiBanUntil ?? (row.banType === 'profanity_ai' ? row.banUntil : null) ?? null)
+  const end = parseBanUntilMs(
+    row.aiBanUntil ?? (row.banType === 'profanity_ai' ? row.banUntil : null) ?? null,
+  )
   if (end == null) return row.banType === 'profanity_ai'
   return end > Date.now()
 }
 
 function rowCommentBanReason(row: AdminUserItem): string {
-  return row.commentBanReason?.trim() || (row.banType === 'profanity' ? row.banReason?.trim() : '') || ''
+  return (
+    row.commentBanReason?.trim() || (row.banType === 'profanity' ? row.banReason?.trim() : '') || ''
+  )
 }
 
 function rowAiBanReason(row: AdminUserItem): string {
-  return row.aiBanReason?.trim() || (row.banType === 'profanity_ai' ? row.banReason?.trim() : '') || ''
+  return (
+    row.aiBanReason?.trim() || (row.banType === 'profanity_ai' ? row.banReason?.trim() : '') || ''
+  )
 }
 
 function isAdminTimedDisable(row: AdminUserItem): boolean {
@@ -113,7 +172,12 @@ function promptDisable(row: AdminUserItem) {
           },
           { default: () => '永久禁用（直至手动启用）' },
         ),
-        h('div', { class: 'admin-disable-modal__hours', style: { display: disableForm.permanent ? 'none' : 'flex' } },
+        h(
+          'div',
+          {
+            class: 'admin-disable-modal__hours',
+            style: { display: disableForm.permanent ? 'none' : 'flex' },
+          },
           [
             h('span', { class: 'admin-disable-modal__label' }, '禁用时长：'),
             h(InputNumber, {
@@ -164,12 +228,35 @@ function roleLabel(role: string | undefined): string {
   const r = (role ?? '').trim()
   if (!r) return '—'
   if (/^(admin|管理员)$/i.test(r)) return '管理员'
-  if (/^(user|普通用户)$/i.test(r)) return '用户'
+  if (/^(user|普通用户|学生)$/i.test(r)) return '学生'
+  if (/^(teacher|教师|老师)$/i.test(r)) return '老师'
   return r
 }
 
 function isAdminRole(role: string | undefined): boolean {
   return /^(admin|管理员)$/i.test((role ?? '').trim())
+}
+
+async function changeRole(row: AdminUserItem) {
+  if (!row.id || isAdminRole(row.userRole) || isCurrentLoginRow(row)) return
+  const nextRole = row.userRole === 'teacher' ? 'user' : 'teacher'
+  roleBusyUserId.value = String(row.id)
+  try {
+    if (!(await ensureBearerToken())) return
+    const { data } = await axios.patch(
+      `${OpenAPI.BASE.replace(/\/+$/, '')}/user/admin/${row.id}/role`,
+      { role: nextRole },
+      { headers: await getAuthHeaders() },
+    )
+    if (!isResultSuccess(data?.code)) throw new Error(data?.message || '角色调整失败')
+    Message.success(nextRole === 'teacher' ? '已设为老师' : '已设为学生')
+    await fetchPage()
+    emit('directory-changed')
+  } catch (error) {
+    Message.error(getBackendErrorMessage(error, '角色调整失败'))
+  } finally {
+    roleBusyUserId.value = null
+  }
 }
 
 function buildFields(row: AdminUserItem): FieldItem[] {
@@ -193,8 +280,8 @@ function buildFields(row: AdminUserItem): FieldItem[] {
           : row.banType === 'profanity_ai'
             ? 'AI 助手违禁限制（仅禁学习助手）'
             : row.banType === 'admin'
-            ? '管理员全站禁用'
-            : displayText(row.banType),
+              ? '管理员全站禁用'
+              : displayText(row.banType),
       empty: !row.banType?.trim(),
     },
     {
@@ -202,8 +289,10 @@ function buildFields(row: AdminUserItem): FieldItem[] {
       label: '解禁时间',
       value: (() => {
         const parts: string[] = []
-        if (isCommentBanActive(row)) parts.push(`评论：${formatBanUntil(row.commentBanUntil ?? row.banUntil)}`)
-        if (isAiAssistBanActive(row)) parts.push(`AI：${formatBanUntil(row.aiBanUntil ?? row.banUntil)}`)
+        if (isCommentBanActive(row))
+          parts.push(`评论：${formatBanUntil(row.commentBanUntil ?? row.banUntil)}`)
+        if (isAiAssistBanActive(row))
+          parts.push(`AI：${formatBanUntil(row.aiBanUntil ?? row.banUntil)}`)
         return parts.length ? parts.join('；') : formatBanUntil(row.banUntil)
       })(),
       mono: true,
@@ -212,14 +301,56 @@ function buildFields(row: AdminUserItem): FieldItem[] {
   ]
   const common: FieldItem[] = [
     { key: 'email', label: '邮箱', value: displayText(row.email), empty: !row.email?.trim() },
-    { key: 'phone', label: '手机', value: displayText(row.phone), mono: !!row.phone?.trim(), empty: !row.phone?.trim() },
-    { key: 'lastLoginIp', label: '最近登录 IP', value: displayText(row.lastLoginIp), mono: !!row.lastLoginIp?.trim(), empty: !row.lastLoginIp?.trim() },
-    { key: 'lastLoginRegion', label: 'IP 归属地（估算）', value: displayText(row.lastLoginRegion), empty: !row.lastLoginRegion?.trim() },
-    { key: 'lastLoginDevice', label: '最近登录设备', value: displayText(row.lastLoginDevice), empty: !row.lastLoginDevice?.trim() },
-    { key: 'lastLoginOs', label: '操作系统', value: displayText(row.lastLoginOs), empty: !row.lastLoginOs?.trim() },
-    { key: 'lastLoginBrowser', label: '浏览器', value: displayText(row.lastLoginBrowser), empty: !row.lastLoginBrowser?.trim() },
-    { key: 'lastLoginDeviceDetails', label: '设备概况（浏览器提供）', value: displayText(row.lastLoginDeviceDetails), empty: !row.lastLoginDeviceDetails?.trim() },
-    { key: 'lastLoginTime', label: '最近登录时间', value: formatLoginTime(row.lastLoginTime ?? undefined), empty: !row.lastLoginTime },
+    {
+      key: 'phone',
+      label: '手机',
+      value: displayText(row.phone),
+      mono: !!row.phone?.trim(),
+      empty: !row.phone?.trim(),
+    },
+    {
+      key: 'lastLoginIp',
+      label: '最近登录 IP',
+      value: displayText(row.lastLoginIp),
+      mono: !!row.lastLoginIp?.trim(),
+      empty: !row.lastLoginIp?.trim(),
+    },
+    {
+      key: 'lastLoginRegion',
+      label: 'IP 归属地（估算）',
+      value: displayText(row.lastLoginRegion),
+      empty: !row.lastLoginRegion?.trim(),
+    },
+    {
+      key: 'lastLoginDevice',
+      label: '最近登录设备',
+      value: displayText(row.lastLoginDevice),
+      empty: !row.lastLoginDevice?.trim(),
+    },
+    {
+      key: 'lastLoginOs',
+      label: '操作系统',
+      value: displayText(row.lastLoginOs),
+      empty: !row.lastLoginOs?.trim(),
+    },
+    {
+      key: 'lastLoginBrowser',
+      label: '浏览器',
+      value: displayText(row.lastLoginBrowser),
+      empty: !row.lastLoginBrowser?.trim(),
+    },
+    {
+      key: 'lastLoginDeviceDetails',
+      label: '设备概况（浏览器提供）',
+      value: displayText(row.lastLoginDeviceDetails),
+      empty: !row.lastLoginDeviceDetails?.trim(),
+    },
+    {
+      key: 'lastLoginTime',
+      label: '最近登录时间',
+      value: formatLoginTime(row.lastLoginTime ?? undefined),
+      empty: !row.lastLoginTime,
+    },
     {
       key: 'loginFailCount',
       label: '连续登录失败',
@@ -267,7 +398,9 @@ function formatBanUntil(raw: string | null | undefined): string {
 }
 
 function looksLikeSessionMessage(msg: string): boolean {
-  return /(token|jwt|登录|令牌|鉴权|未授权).*(过期|失效|无效)|请先登录|未授权|已过期|无效或已过期/i.test(msg)
+  return /(token|jwt|登录|令牌|鉴权|未授权).*(过期|失效|无效)|请先登录|未授权|已过期|无效或已过期/i.test(
+    msg,
+  )
 }
 
 function sessionExpiredAndGoLogin() {
@@ -278,7 +411,8 @@ function sessionExpiredAndGoLogin() {
 
 async function getAuthHeaders() {
   const tokenResolver = OpenAPI.TOKEN
-  const token = typeof tokenResolver === 'function' ? await tokenResolver({} as never) : tokenResolver
+  const token =
+    typeof tokenResolver === 'function' ? await tokenResolver({} as never) : tokenResolver
   return token ? { Authorization: `Bearer ${token}` } : undefined
 }
 
@@ -298,7 +432,19 @@ async function fetchPage() {
   loading.value = true
   try {
     const kw = searchKeyword.value.trim()
-    const result = await Service.adminPageUsers(current.value, pageSize.value, kw || undefined)
+    const result = props.roleFilter
+      ? (
+          await axios.get(`${OpenAPI.BASE.replace(/\/+$/, '')}/user/admin/page`, {
+            params: {
+              current: current.value,
+              size: pageSize.value,
+              keyword: kw || undefined,
+              role: props.roleFilter,
+            },
+            headers: await getAuthHeaders(),
+          })
+        ).data
+      : await Service.adminPageUsers(current.value, pageSize.value, kw || undefined)
     if (result.code === 401) {
       sessionExpiredAndGoLogin()
       return
@@ -601,18 +747,37 @@ async function postStatus(row: AdminUserItem, status: 0 | 1, banHours?: number):
 onMounted(() => {
   void fetchPage()
 })
+
+// 父组件切换学生/老师标签时，roleFilter 变化需重新拉取对应目录
+watch(
+  () => props.roleFilter,
+  () => {
+    current.value = 1
+    selectedUserId.value = null
+    detailVisible.value = false
+    searchInput.value = ''
+    searchKeyword.value = ''
+    void fetchPage()
+  },
+)
 </script>
 
 <template>
   <div class="admin-users-panel" :class="{ 'is-light': props.isLight }">
     <div class="admin-users-toolbar">
       <div class="admin-users-heading">
-        <h3 class="admin-users-title">用户列表</h3>
+        <h3 class="admin-users-title">{{ directoryRoleName }}名单</h3>
         <p class="admin-users-hint">
-          异常判定：管理员禁用、违禁评论限制，或连续登录失败 ≥ 5 次。封禁原因与解禁时间见卡片字段。
+          点击头像可放大预览，点击姓名可查看完整资料；异常账号会以醒目状态标识。
         </p>
       </div>
-      <a-button type="outline" size="medium" :loading="loading" class="admin-refresh-btn" @click="fetchPage">
+      <a-button
+        type="outline"
+        size="medium"
+        :loading="loading"
+        class="admin-refresh-btn"
+        @click="fetchPage"
+      >
         刷新
       </a-button>
     </div>
@@ -621,7 +786,7 @@ onMounted(() => {
       <a-input-search
         v-model="searchInput"
         class="admin-users-search-input"
-        placeholder="按用户名搜索"
+        placeholder="搜索昵称、用户名或用户 ID"
         allow-clear
         search-button
         :loading="loading"
@@ -631,13 +796,17 @@ onMounted(() => {
       />
       <p v-if="hasActiveSearch" class="admin-users-search-meta">
         当前关键词：<strong>{{ searchKeyword }}</strong>
-        <button type="button" class="admin-users-search-reset" @click="clearSearch">清除筛选</button>
+        <button type="button" class="admin-users-search-reset" @click="clearSearch">
+          清除筛选
+        </button>
       </p>
     </div>
 
     <div class="admin-users-stats" aria-label="用户概览">
       <div class="stat-card">
-        <span class="stat-label">{{ hasActiveSearch ? '匹配用户' : '全站用户' }}</span>
+        <span class="stat-label">{{
+          hasActiveSearch ? `匹配${directoryRoleName}` : `${directoryRoleName}总数`
+        }}</span>
         <strong class="stat-value">{{ total }}</strong>
       </div>
       <div class="stat-card stat-card--warn">
@@ -669,8 +838,42 @@ onMounted(() => {
         >
           <header class="user-card-head">
             <div class="user-card-identity">
-              <span class="user-card-name">{{ displayText(row.username) }}</span>
-              <span v-if="row.nickname?.trim()" class="user-card-nick">{{ row.nickname }}</span>
+              <button
+                type="button"
+                class="user-avatar-button"
+                :aria-label="`放大查看 ${userDisplayName(row)} 的头像`"
+                @click="openAvatarPreview(row)"
+              >
+                <span class="user-avatar" aria-hidden="true">
+                  <img
+                    v-if="avatarSrc(row)"
+                    :src="avatarSrc(row)"
+                    alt=""
+                    loading="lazy"
+                    @error="markAvatarFailed(row)"
+                  />
+                  <span v-else>{{ userInitial(row) }}</span>
+                  <i
+                    class="user-online-dot"
+                    :class="{ 'is-offline': !row.online }"
+                    :title="row.online ? '在线' : '离线'"
+                    aria-hidden="true"
+                  />
+                </span>
+              </button>
+              <button
+                type="button"
+                class="user-card-profile"
+                :aria-label="`查看 ${userDisplayName(row)} 的资料`"
+                @click="openUserDetail(row)"
+              >
+                <span class="user-card-identity-text">
+                  <strong class="user-card-name">{{ userDisplayName(row) }}</strong>
+                  <span class="user-card-nick"
+                    >@{{ displayText(row.username) }} · ID {{ row.id }}</span
+                  >
+                </span>
+              </button>
             </div>
 
             <p
@@ -687,21 +890,55 @@ onMounted(() => {
             </p>
 
             <div class="user-card-badges">
-              <span v-if="row.userRole" class="au-badge" :class="isAdminRole(row.userRole) ? 'au-badge--role-admin' : 'au-badge--role-user'">
+              <span
+                v-if="row.userRole"
+                class="au-badge"
+                :class="
+                  isAdminRole(row.userRole)
+                    ? 'au-badge--role-admin'
+                    : row.userRole === 'teacher'
+                      ? 'au-badge--role-teacher'
+                      : 'au-badge--role-user'
+                "
+              >
                 {{ roleLabel(row.userRole) }}
               </span>
-              <span v-if="row.status === 1 && !isCommentBanActive(row) && !isAiAssistBanActive(row)" class="au-badge au-badge--ok">账号正常</span>
-              <span v-else-if="isCommentBanActive(row)" class="au-badge au-badge--warn">评论受限</span>
-              <span v-else-if="isAiAssistBanActive(row)" class="au-badge au-badge--warn">AI 助手受限</span>
-              <span v-else-if="isAdminTimedDisable(row)" class="au-badge au-badge--warn">限时禁用</span>
+              <span class="au-badge" :class="row.online ? 'au-badge--online' : 'au-badge--offline'">
+                {{ row.online ? '在线' : '离线' }}
+              </span>
+              <span
+                v-if="row.status === 1 && !isCommentBanActive(row) && !isAiAssistBanActive(row)"
+                class="au-badge au-badge--ok"
+                >账号正常</span
+              >
+              <span v-else-if="isCommentBanActive(row)" class="au-badge au-badge--warn"
+                >评论受限</span
+              >
+              <span v-else-if="isAiAssistBanActive(row)" class="au-badge au-badge--warn"
+                >AI 助手受限</span
+              >
+              <span v-else-if="isAdminTimedDisable(row)" class="au-badge au-badge--warn"
+                >限时禁用</span
+              >
               <span v-else-if="row.status === 0" class="au-badge au-badge--danger">已禁用</span>
-              <span v-else class="au-badge au-badge--muted">{{ formatAccountStatus(row.status) }}</span>
+              <span v-else class="au-badge au-badge--muted">{{
+                formatAccountStatus(row.status)
+              }}</span>
               <span class="au-badge" :class="row.abnormal ? 'au-badge--warn' : 'au-badge--health'">
                 {{ row.abnormal ? '健康异常' : '健康正常' }}
               </span>
             </div>
 
             <div class="user-card-actions">
+              <a-button
+                v-if="!isAdminRole(row.userRole) && !isCurrentLoginRow(row)"
+                size="small"
+                type="outline"
+                :loading="roleBusyUserId === String(row.id ?? '')"
+                @click="changeRole(row)"
+              >
+                {{ row.userRole === 'teacher' ? '转为学生' : '设为老师' }}
+              </a-button>
               <a-button
                 v-if="isCommentBanActive(row)"
                 size="small"
@@ -741,28 +978,22 @@ onMounted(() => {
             </div>
           </header>
 
-          <div class="user-card-fields">
-            <div
-              v-for="field in buildFields(row)"
-              :key="field.key"
-              class="field-item"
-              :class="{
-                'field-item--full':
-                  field.key === 'abnormalReason' || field.key === 'banReason',
-              }"
-            >
-              <p class="field-label">{{ field.label }}</p>
-              <p
-                class="field-value"
-                :class="{
-                  'field-value--empty': field.empty,
-                  'field-value--mono': field.mono,
-                  'field-value--hot': field.hot,
-                }"
-              >
-                {{ field.value }}
-              </p>
+          <div class="user-card-summary">
+            <div class="summary-item">
+              <span>最近登录</span><strong>{{ formatLoginTime(row.lastLoginTime) }}</strong>
             </div>
+            <div class="summary-item">
+              <span>账号健康</span><strong>{{ row.abnormal ? '需要关注' : '状态良好' }}</strong>
+            </div>
+            <div class="summary-item">
+              <span>累计签到</span><strong>{{ row.checkInCount ?? 0 }} 天</strong>
+            </div>
+            <div class="summary-item">
+              <span>积分</span><strong>{{ row.points ?? 0 }}</strong>
+            </div>
+            <button type="button" class="user-detail-link" @click="openUserDetail(row)">
+              查看资料 →
+            </button>
           </div>
         </li>
       </ul>
@@ -780,6 +1011,89 @@ onMounted(() => {
         @page-size-change="onPageSizeChange"
       />
     </div>
+
+    <a-drawer
+      v-model:visible="detailVisible"
+      width="min(600px, 100vw)"
+      :footer="false"
+      unmount-on-close
+      class="admin-user-drawer"
+    >
+      <template #title>用户资料</template>
+      <div v-if="selectedUser" class="user-detail" :class="{ 'is-light': props.isLight }">
+        <div class="user-detail-hero">
+          <button
+            type="button"
+            class="user-avatar-button"
+            :aria-label="`放大查看 ${userDisplayName(selectedUser)} 的头像`"
+            @click="openAvatarPreview(selectedUser)"
+          >
+            <span class="user-avatar user-avatar--large" aria-hidden="true">
+              <img
+                v-if="avatarSrc(selectedUser)"
+                :src="avatarSrc(selectedUser)"
+                alt=""
+                @error="markAvatarFailed(selectedUser)"
+              />
+              <span v-else>{{ userInitial(selectedUser) }}</span>
+            </span>
+          </button>
+          <div class="user-detail-hero-text">
+            <h3>{{ userDisplayName(selectedUser) }}</h3>
+            <p>@{{ displayText(selectedUser.username) }}</p>
+            <small>ID {{ selectedUser.id }}</small>
+          </div>
+          <span
+            class="au-badge"
+            :class="selectedUser.status === 0 ? 'au-badge--danger' : 'au-badge--ok'"
+          >
+            {{ formatAccountStatus(selectedUser.status) }}
+          </span>
+        </div>
+        <p class="user-detail-note">登录位置为 IP 归属地估算，设备信息来自浏览器上报。</p>
+        <div class="user-card-fields user-detail-fields">
+          <div
+            v-for="field in buildFields(selectedUser)"
+            :key="field.key"
+            class="field-item"
+            :class="{
+              'field-item--full': field.key === 'abnormalReason' || field.key === 'banReason',
+            }"
+          >
+            <p class="field-label">{{ field.label }}</p>
+            <p
+              class="field-value"
+              :class="{
+                'field-value--empty': field.empty,
+                'field-value--mono': field.mono,
+                'field-value--hot': field.hot,
+              }"
+            >
+              {{ field.value }}
+            </p>
+          </div>
+        </div>
+      </div>
+    </a-drawer>
+
+    <a-modal
+      v-model:visible="avatarPreviewVisible"
+      width="min(680px, 96vw)"
+      :footer="false"
+      title="查看头像"
+      unmount-on-close
+    >
+      <div v-if="previewUser" class="avatar-preview">
+        <img
+          v-if="avatarSrc(previewUser)"
+          :src="avatarSrc(previewUser)"
+          :alt="`${userDisplayName(previewUser)} 的头像`"
+          @error="markAvatarFailed(previewUser)"
+        />
+        <span v-else class="avatar-preview-fallback">{{ userInitial(previewUser) }}</span>
+        <p>{{ userDisplayName(previewUser) }}</p>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -809,7 +1123,7 @@ onMounted(() => {
   --au-surface: rgba(248, 250, 252, 0.9);
   --au-card: #ffffff;
   --au-card-head: rgba(248, 250, 252, 0.95);
-  --au-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+  --au-shadow: 0 5px 18px rgba(15, 23, 42, 0.045);
 }
 
 .admin-users-toolbar {
@@ -914,11 +1228,11 @@ onMounted(() => {
 
 .stat-card--warn {
   border-color: rgba(251, 146, 60, 0.45);
-  background: linear-gradient(145deg, rgba(251, 146, 60, 0.14), var(--au-card));
+  background: var(--au-card);
 }
 
 .is-light .stat-card--warn {
-  background: linear-gradient(145deg, rgba(255, 237, 213, 0.9), #fff);
+  background: #fffaf4;
 }
 
 .stat-label {
@@ -969,7 +1283,9 @@ onMounted(() => {
   background: var(--au-card);
   box-shadow: var(--au-shadow);
   overflow: hidden;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
 }
 
 .user-card--abnormal {
@@ -1000,10 +1316,95 @@ onMounted(() => {
 .user-card-identity {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   gap: 8px 12px;
   min-width: 0;
   flex: 1 1 160px;
+}
+
+.user-card-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 2px;
+  border: 0;
+  border-radius: 12px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.user-avatar-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 0;
+  border-radius: 17px;
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.user-avatar-button:hover .user-avatar {
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.28);
+}
+
+.user-card-profile:hover .user-card-name,
+.user-card-profile:focus-visible .user-card-name {
+  color: var(--au-teal);
+}
+
+.user-card-profile:focus-visible,
+.user-avatar-button:focus-visible,
+.user-detail-link:focus-visible {
+  outline: 2px solid var(--au-teal);
+  outline-offset: 3px;
+}
+
+.user-avatar {
+  width: 48px;
+  height: 48px;
+  flex: 0 0 48px;
+  display: grid;
+  place-items: center;
+  position: relative;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #15988a;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 750;
+  box-shadow: 0 5px 14px rgba(20, 184, 166, 0.2);
+}
+
+.user-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-online-dot {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #22c55e;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.5);
+}
+.user-online-dot.is-offline {
+  background: #9ca3af;
+  box-shadow: none;
+}
+
+.user-card-identity-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
 }
 
 .user-card-name {
@@ -1015,7 +1416,142 @@ onMounted(() => {
 
 .user-card-nick {
   font-size: 13px;
+  color: var(--au-muted);
+  overflow-wrap: anywhere;
+}
+
+.user-card-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 15px 18px;
+}
+
+.summary-item {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 5px;
+}
+
+.summary-item span {
+  font-size: 12px;
+  color: var(--au-muted);
+}
+
+.summary-item strong {
+  font-size: 13px;
+  font-weight: 650;
   color: var(--au-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.user-detail-link {
+  border: 0;
+  background: transparent;
+  color: var(--au-teal);
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.user-detail-link:hover {
+  text-decoration: underline;
+}
+
+.user-detail {
+  --au-text: #f8fafc;
+  --au-text-secondary: #e2e8f0;
+  --au-muted: #94a3b8;
+  --au-label: #94a3b8;
+  --au-border: rgba(148, 163, 184, 0.25);
+  color: var(--au-text);
+}
+
+.user-detail.is-light {
+  --au-text: #0f172a;
+  --au-text-secondary: #334155;
+  --au-muted: #64748b;
+  --au-label: #64748b;
+  --au-border: rgba(15, 23, 42, 0.12);
+}
+
+.user-detail-hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 0 20px;
+  border-bottom: 1px solid var(--au-border);
+}
+
+.user-avatar--large {
+  width: 76px;
+  height: 76px;
+  flex-basis: 76px;
+  border-radius: 22px;
+  font-size: 30px;
+}
+.user-detail-hero-text {
+  flex: 1;
+  min-width: 0;
+}
+.user-detail-hero-text h3 {
+  margin: 0 0 4px;
+  font-size: 21px;
+  overflow-wrap: anywhere;
+}
+.user-detail-hero-text p {
+  margin: 0 0 3px;
+  color: var(--au-text-secondary);
+}
+.user-detail-hero-text small {
+  color: var(--au-muted);
+}
+.user-detail-note {
+  margin: 18px 0 0;
+  font-size: 12px;
+  color: var(--au-muted);
+}
+.user-detail-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 20px 0;
+}
+
+.avatar-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0 2px;
+}
+
+.avatar-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 72vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 12px;
+}
+
+.avatar-preview-fallback {
+  display: grid;
+  place-items: center;
+  width: min(320px, 70vw);
+  aspect-ratio: 1;
+  border-radius: 22px;
+  background: linear-gradient(135deg, #14b8a6, #3b82f6);
+  color: #fff;
+  font-size: 112px;
+  font-weight: 750;
+}
+
+.avatar-preview p {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
 }
 
 .user-card-ban-reason {
@@ -1078,6 +1614,18 @@ onMounted(() => {
   border-color: rgba(148, 163, 184, 0.35);
 }
 
+.au-badge--role-teacher {
+  color: #fdba74;
+  background: rgba(249, 115, 22, 0.16);
+  border-color: rgba(251, 146, 60, 0.4);
+}
+
+.is-light .au-badge--role-teacher {
+  color: #a65312;
+  background: #fff3e4;
+  border-color: #f2c18c;
+}
+
 .au-badge--ok {
   color: #6ee7b7;
   background: rgba(16, 185, 129, 0.18);
@@ -1129,6 +1677,27 @@ onMounted(() => {
   color: var(--au-muted);
   background: rgba(100, 116, 139, 0.15);
   border-color: var(--au-border);
+}
+
+.au-badge--online {
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.18);
+  border-color: rgba(52, 211, 153, 0.45);
+}
+.is-light .au-badge--online {
+  color: #047857;
+  background: rgba(209, 250, 229, 0.95);
+  border-color: rgba(16, 185, 129, 0.35);
+}
+.au-badge--offline {
+  color: var(--au-muted);
+  background: rgba(100, 116, 139, 0.18);
+  border-color: var(--au-border);
+}
+.is-light .au-badge--offline {
+  color: #64748b;
+  background: rgba(241, 245, 249, 0.95);
+  border-color: rgba(148, 163, 184, 0.35);
 }
 
 .user-card-actions {
@@ -1236,12 +1805,24 @@ onMounted(() => {
 }
 
 @media (max-width: 1100px) {
+  .user-card-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .user-detail-link {
+    justify-self: start;
+  }
   .user-card-fields {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 720px) {
+  .user-card-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .user-detail-fields {
+    grid-template-columns: 1fr;
+  }
   .admin-users-stats {
     grid-template-columns: 1fr;
   }

@@ -6,6 +6,7 @@ export type UserAdminListItemVO = {
     id?: string;
     username?: string;
     nickname?: string;
+    avatar?: string;
     email?: string;
     phone?: string;
     userRole?: string;
@@ -25,5 +26,6 @@ export type UserAdminListItemVO = {
     lastCheckInDate?: string;
     abnormal?: boolean;
     abnormalReason?: string;
+    online?: boolean;
 };
 

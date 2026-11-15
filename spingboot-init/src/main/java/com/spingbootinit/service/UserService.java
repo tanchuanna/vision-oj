@@ -76,7 +76,11 @@ public interface UserService extends IService<User> {
      * @param keyword 可选，按用户名模糊搜索
      * @return 管理端用户分页结果，包含总数、分页参数、当前页记录
      */
-    UserAdminPageVO pageUsersForAdmin(long current, long size, String keyword);
+    default UserAdminPageVO pageUsersForAdmin(long current, long size, String keyword) {
+        return pageUsersForAdmin(current, size, keyword, null);
+    }
+
+    UserAdminPageVO pageUsersForAdmin(long current, long size, String keyword, String role);
 
     /**
      * 管理员设置用户启用/禁用状态。

@@ -11,13 +11,13 @@ import CheckInCalendarModal from '@/components/checkin/CheckInCalendarModal.vue'
 import AuthModal from '@/components/auth/AuthModal.vue'
 import { useAuthStore } from '@/stores/auth'
 import { isResultSuccess } from '@/api/result'
-import { getBackendErrorMessage } from '@/api/httpError'
-import { mapApiError } from '@/api/mapApiError'
 import { fetchNotificationSummary } from '@/api/inAppNotifications'
 import { LAYOUT_THEME_KEY } from '@/config/theme-injection'
 import { useBanCountdownTick } from '@/composables/useBanCountdownTick'
+import { useOnlineHeartbeat } from '@/composables/useOnlineHeartbeat'
 import { useSessionStatusPush } from '@/composables/useSessionStatusPush'
 import { formatBanCountdown, parseBanUntilMs } from '@/utils/formatBanCountdown'
+import { normalizeRole, PERMISSIONS } from '@/config/roles'
 
 const route = useRoute()
 const routerInstance = useRouter()
@@ -62,11 +62,8 @@ const showFooter = computed(() => route.meta.hideFooter !== true)
 
 /** 顶栏角色展示：英文/空值统一成可读中文 */
 const roleLabel = computed(() => {
-  const r = auth.userRole?.trim()
-  if (!r) return '普通用户'
-  if (/^(user|USER)$/i.test(r)) return '普通用户'
-  if (/^(admin|ADMIN|管理员)$/i.test(r)) return '管理员'
-  return r
+  const role = normalizeRole(auth.userRole)
+  return role === 'admin' ? '管理员' : role === 'teacher' ? '老师' : '学生'
 })
 
 function applyTheme(mode: ThemeMode) {
@@ -126,15 +123,41 @@ const mainNav: NavItem[] = [
   { to: '/problems', label: '题库' },
   { to: '/contests', label: '比赛' },
   { to: '/rankings', label: '排行榜' },
+  { to: '/teaching/teachers', label: '任课老师' },
   { to: '/submissions', label: '提交记录' },
   { to: '/notifications', label: '消息' },
 ]
 
-const adminMenus = [
-  { to: '/admin/problems', title: '题目管理', desc: '编辑题目、标签与判题配置', icon: '🧩' },
-  { to: '/admin/contests', title: '比赛管理', desc: '创建限时赛、绑定题目与办赛配置', icon: '🏁' },
-  { to: '/admin/announcements', title: '发布公告', desc: '全站公告与未读提醒', icon: '📢' },
-]
+const adminMenus = computed(
+  () =>
+    [
+      auth.can(PERMISSIONS.QUESTION_AUTHOR)
+        ? {
+            to: '/manage/problems',
+            title: '题目管理',
+            desc: '编辑题目、标签与判题配置',
+            icon: '🧩',
+          }
+        : null,
+      auth.can(PERMISSIONS.STUDENT_VIEW_ASSIGNED) || auth.can(PERMISSIONS.STUDENT_VIEW_ALL)
+        ? {
+            to: '/teaching/students',
+            title: '学生管理',
+            desc: '查看有权管理学生的学习数据',
+            icon: '🎓',
+          }
+        : null,
+      auth.can(PERMISSIONS.USER_ROLE_MANAGE)
+        ? { to: '/admin/users', title: '用户管理', desc: '角色、分配与账号状态', icon: '👥' }
+        : null,
+      auth.can(PERMISSIONS.CONTEST_MANAGE)
+        ? { to: '/admin/contests', title: '比赛管理', desc: '创建限时赛与办赛配置', icon: '🏁' }
+        : null,
+      auth.can(PERMISSIONS.ANNOUNCEMENT_MANAGE)
+        ? { to: '/admin/announcements', title: '发布公告', desc: '全站公告与未读提醒', icon: '📢' }
+        : null,
+    ].filter(Boolean) as Array<{ to: string; title: string; desc: string; icon: string }>,
+)
 
 function isNavActive(path: string, exact?: boolean) {
   if (exact) return route.path === '/' || route.path === ''
@@ -142,7 +165,11 @@ function isNavActive(path: string, exact?: boolean) {
 }
 
 function isAdminNavActive() {
-  return route.path.startsWith('/admin')
+  return (
+    route.path.startsWith('/admin') ||
+    route.path.startsWith('/manage') ||
+    route.path.startsWith('/teaching')
+  )
 }
 
 function toggleAdminMenu() {
@@ -177,7 +204,8 @@ function goAccountSettings() {
 
 async function getBearerHeaders(): Promise<Record<string, string>> {
   const tokenResolver = OpenAPI.TOKEN
-  const token = typeof tokenResolver === 'function' ? await tokenResolver({} as never) : tokenResolver
+  const token =
+    typeof tokenResolver === 'function' ? await tokenResolver({} as never) : tokenResolver
   return token?.trim() ? { Authorization: `Bearer ${token.trim()}` } : {}
 }
 
@@ -278,6 +306,7 @@ let notifPollTimer: number | null = null
 
 const { nowMs: banCountdownNow } = useBanCountdownTick()
 useSessionStatusPush()
+useOnlineHeartbeat()
 
 const adminBanCountdown = computed(() =>
   formatBanCountdown(parseBanUntilMs(auth.banUntil), banCountdownNow.value),
@@ -396,6 +425,16 @@ watch(
   },
 )
 
+watch(
+  () => auth.isAdmin,
+  (isAdmin, wasAdmin) => {
+    if (wasAdmin && !isAdmin) {
+      removeAdminRoutes(routerInstance)
+      adminOpen.value = false
+    }
+  },
+)
+
 onMounted(() => {
   document.addEventListener('pointerdown', onGlobalPointerDown)
   document.addEventListener('keydown', onGlobalKeydown)
@@ -467,7 +506,7 @@ onBeforeUnmount(() => {
     <header class="header">
       <div class="header-inner">
         <RouterLink to="/" class="brand">
-          <BrandLogo :size="32" />
+          <BrandLogo :size="36" />
           <span class="brand-text">码跃OJ</span>
         </RouterLink>
 
@@ -485,7 +524,7 @@ onBeforeUnmount(() => {
             </RouterLink>
           </template>
 
-          <div v-if="auth.isAdmin" ref="adminMenuRef" class="nav-item-wrap admin-wrap">
+          <div v-if="adminMenus.length" ref="adminMenuRef" class="nav-item-wrap admin-wrap">
             <button
               type="button"
               class="nav-link admin-nav"
@@ -494,7 +533,7 @@ onBeforeUnmount(() => {
               aria-haspopup="menu"
               @click="toggleAdminMenu"
             >
-              管理
+              工作台
               <span class="caret" aria-hidden="true">▾</span>
             </button>
             <div v-show="adminOpen" class="dropdown admin-dropdown" role="menu">
@@ -521,7 +560,13 @@ onBeforeUnmount(() => {
             <span class="icon-plane" aria-hidden="true">✈</span>
             博客
           </RouterLink>
-          <button type="button" class="icon-btn" aria-label="切换主题" :title="themeButtonTitle" @click="toggleTheme">
+          <button
+            type="button"
+            class="icon-btn"
+            aria-label="切换主题"
+            :title="themeButtonTitle"
+            @click="toggleTheme"
+          >
             {{ themeButtonIcon }}
           </button>
           <RouterLink to="/notifications" class="icon-btn notif-bell" aria-label="通知">
@@ -552,7 +597,9 @@ onBeforeUnmount(() => {
                 <span class="user-avatar-ring" aria-hidden="true">
                   <span class="user-avatar-inner">
                     <img v-if="userAvatarUrl" :src="userAvatarUrl" alt="" class="user-avatar-img" />
-                    <span v-else class="user-avatar-letter">{{ (auth.displayName || 'U').slice(0, 1).toUpperCase() }}</span>
+                    <span v-else class="user-avatar-letter">{{
+                      (auth.displayName || 'U').slice(0, 1).toUpperCase()
+                    }}</span>
                   </span>
                 </span>
               </button>
@@ -568,16 +615,27 @@ onBeforeUnmount(() => {
                     <div class="user-popover-head-bg" aria-hidden="true" />
                     <div class="user-popover-head-inner">
                       <div class="user-popover-avatar" aria-hidden="true">
-                        <img v-if="userAvatarUrl" :src="userAvatarUrl" alt="" class="user-popover-avatar-img" />
-                        <span v-else>{{ (auth.displayName || 'U').slice(0, 1).toUpperCase() }}</span>
+                        <img
+                          v-if="userAvatarUrl"
+                          :src="userAvatarUrl"
+                          alt=""
+                          class="user-popover-avatar-img"
+                        />
+                        <span v-else>{{
+                          (auth.displayName || 'U').slice(0, 1).toUpperCase()
+                        }}</span>
                       </div>
                       <div class="user-popover-meta">
                         <p class="user-popover-name">{{ auth.displayName }}</p>
                         <p class="user-popover-id">{{ roleLabel }}</p>
                         <p class="user-popover-stats" aria-live="polite">
-                          <span class="user-popover-stat">积分 {{ checkInLoading ? '…' : checkInPoints }}</span>
+                          <span class="user-popover-stat"
+                            >积分 {{ checkInLoading ? '…' : checkInPoints }}</span
+                          >
                           <span class="user-popover-stat-sep">·</span>
-                          <span class="user-popover-stat">累计签到 {{ checkInLoading ? '…' : checkInTotal }} 天</span>
+                          <span class="user-popover-stat"
+                            >累计签到 {{ checkInLoading ? '…' : checkInTotal }} 天</span
+                          >
                         </p>
                       </div>
                     </div>
@@ -600,7 +658,11 @@ onBeforeUnmount(() => {
                       <span class="user-popover-btn-ico" aria-hidden="true">⚙</span>
                       账户设置
                     </button>
-                    <button type="button" class="user-popover-btn user-popover-btn--ghost" @click="logout">
+                    <button
+                      type="button"
+                      class="user-popover-btn user-popover-btn--ghost"
+                      @click="logout"
+                    >
                       <span class="user-popover-btn-ico" aria-hidden="true">↪</span>
                       退出登录
                     </button>
@@ -644,44 +706,64 @@ onBeforeUnmount(() => {
   position: sticky;
   top: 0;
   z-index: 100;
-  background: var(--app-surface);
+  background: color-mix(in srgb, var(--app-bg) 86%, transparent);
   border-bottom: 1px solid var(--app-border);
-  box-shadow: var(--app-header-shadow);
+  box-shadow: 0 8px 26px rgba(70, 41, 14, 0.055);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   transition:
     background-color 0.2s ease,
     border-color 0.2s ease,
     box-shadow 0.2s ease;
 }
 
+html[data-theme='light'] .header {
+  background: #fffdf9;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: 0 1px 2px rgba(32, 25, 20, 0.06);
+}
+
 .header-inner {
-  max-width: 1280px;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 0 20px;
-  height: 56px;
+  padding: 0 28px;
+  height: var(--app-header-height);
   display: flex;
   align-items: center;
-  gap: 28px;
+  gap: 32px;
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 11px;
+  min-height: 46px;
+  border-radius: 13px;
+  padding: 5px 10px 5px 6px;
   text-decoration: none;
   color: inherit;
   flex-shrink: 0;
+  transition:
+    background-color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.brand:hover {
+  background: color-mix(in srgb, var(--app-accent) 7%, transparent);
+  transform: translateY(-1px);
 }
 
 .brand-text {
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  font-size: 19px;
+  font-weight: 850;
+  letter-spacing: -0.025em;
 }
 
 .nav {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   flex: 1;
   min-width: 0;
 }
@@ -695,22 +777,40 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 8px 12px;
-  font-size: 14px;
+  min-height: 42px;
+  padding: 0 13px;
+  font-size: 13px;
+  font-weight: 650;
   color: var(--app-text-muted);
   text-decoration: none;
-  border-radius: 6px;
-  transition: color 0.15s, background 0.15s;
+  border-radius: 11px;
+  transition:
+    color 0.15s,
+    background 0.15s,
+    transform 0.15s ease;
 }
 
 .nav-link:hover {
-  color: #0d9488;
-  background: rgba(13, 148, 136, 0.06);
+  color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 7%, transparent);
+  transform: translateY(-1px);
 }
 
 .nav-link.active {
-  color: #0d9488;
-  font-weight: 500;
+  color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 10%, var(--app-surface-strong));
+  font-weight: 800;
+}
+
+.nav-link.active::after {
+  content: '';
+  position: absolute;
+  right: 13px;
+  bottom: 4px;
+  left: 13px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--app-accent);
 }
 
 .nav-link.accent {
@@ -802,7 +902,7 @@ onBeforeUnmount(() => {
 .actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   flex-shrink: 0;
 }
 
@@ -810,17 +910,25 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 14px;
-  font-size: 14px;
+  min-height: 40px;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 800;
   color: #fff;
-  background: #0d9488;
-  border-radius: 6px;
+  background: var(--app-accent);
+  border-radius: 11px;
   text-decoration: none;
-  transition: filter 0.15s;
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--app-accent) 20%, transparent);
+  transition:
+    filter 0.15s,
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .btn-publish:hover {
   filter: brightness(1.05);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px color-mix(in srgb, var(--app-accent) 25%, transparent);
 }
 
 .icon-plane {
@@ -830,23 +938,29 @@ onBeforeUnmount(() => {
 }
 
 .icon-btn {
-  width: 36px;
-  height: 36px;
+  width: 40px;
+  height: 40px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: none;
+  border: 1px solid transparent;
   background: transparent;
-  border-radius: 6px;
+  border-radius: 11px;
   font-size: 16px;
   cursor: pointer;
   text-decoration: none;
   color: inherit;
-  transition: background-color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.15s ease;
 }
 
 .icon-btn:hover:not(:disabled) {
-  background: var(--app-hover);
+  border-color: var(--app-border);
+  background: var(--app-surface-strong);
+  transform: translateY(-1px);
 }
 
 .icon-btn:disabled {
@@ -876,11 +990,14 @@ onBeforeUnmount(() => {
 }
 
 .btn-auth {
-  padding: 6px 14px;
-  font-size: 14px;
+  min-height: 40px;
+  border: 0;
+  padding: 0 16px;
+  font-size: 13px;
+  font-weight: 800;
   color: #fff;
-  background: #0d9488;
-  border-radius: 6px;
+  background: var(--app-accent);
+  border-radius: 11px;
   text-decoration: none;
   margin-left: 4px;
 }
@@ -1015,7 +1132,12 @@ onBeforeUnmount(() => {
 .user-popover-head-bg {
   position: absolute;
   inset: 0;
-  background: linear-gradient(135deg, rgba(20, 184, 166, 0.12) 0%, rgba(15, 118, 110, 0.06) 50%, transparent 100%);
+  background: linear-gradient(
+    135deg,
+    rgba(20, 184, 166, 0.12) 0%,
+    rgba(15, 118, 110, 0.06) 50%,
+    transparent 100%
+  );
   pointer-events: none;
 }
 
@@ -1206,8 +1328,8 @@ onBeforeUnmount(() => {
 }
 
 :global(html[data-theme='dark']) .nav-link:hover {
-  color: #2dd4bf;
-  background: rgba(45, 212, 191, 0.12);
+  color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 12%, transparent);
 }
 :global(html[data-theme='dark']) .dropdown-item:hover {
   background: #334155;
@@ -1249,5 +1371,62 @@ onBeforeUnmount(() => {
   border-color: #fbbf24;
   color: #fffbeb;
   background: linear-gradient(180deg, rgba(146, 64, 14, 0.55) 0%, rgba(120, 53, 15, 0.4) 100%);
+}
+
+.brand:focus-visible,
+.nav-link:focus-visible,
+.btn-publish:focus-visible,
+.icon-btn:focus-visible,
+.btn-auth:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1180px) {
+  .header-inner {
+    gap: 16px;
+    padding: 0 18px;
+  }
+
+  .nav {
+    gap: 2px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .nav-link {
+    flex: 0 0 auto;
+    padding: 0 10px;
+  }
+}
+
+@media (max-width: 860px) {
+  .header-inner {
+    height: var(--app-header-height);
+    padding: 0 12px;
+  }
+
+  .brand {
+    padding-right: 6px;
+  }
+
+  .brand-text {
+    display: none;
+  }
+
+  .btn-publish {
+    width: 40px;
+    padding: 0;
+    justify-content: center;
+    font-size: 0;
+  }
+
+  .btn-publish .icon-plane {
+    font-size: 13px;
+  }
 }
 </style>

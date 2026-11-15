@@ -5,8 +5,8 @@
 export type QuestionRunCaseVO = {
     index?: number;
     input?: string;
-    expectedOutput?: string;
+    expectedOutput?: string | null;
     actualOutput?: string;
-    passed?: boolean;
+    passed?: boolean | null;
 };
 

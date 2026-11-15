@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import axios from 'axios'
-import { Message, Modal } from '@arco-design/web-vue'
+import { Message } from '@arco-design/web-vue'
 import { ApiError, OpenAPI, Service } from '@generated'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
@@ -9,7 +9,6 @@ import { isResultSuccess, isResultUnauthorized } from '@/api/result'
 import { getBackendErrorMessage, isAxiosUnauthorizedResponse } from '@/api/httpError'
 import { resolveMediaUrl } from '@/utils/resolveMediaUrl'
 import chinaDivisionOptions from '@pansy/china-division'
-import AdminUsersPanel from './AdminUsersPanel.vue'
 import AiModelSettingsPanel from './AiModelSettingsPanel.vue'
 
 type ProfileForm = {
@@ -33,6 +32,8 @@ const router = useRouter()
 const route = useRoute()
 const saving = ref(false)
 const uploading = ref(false)
+const avatarZoomVisible = ref(false)
+const avatarDragging = ref(false)
 const profileLoadErrorNotified = ref(false)
 const profileLoading = ref(false)
 const profileReady = ref(false)
@@ -97,14 +98,16 @@ const tabs = computed(() => {
     { key: 'security', label: '账户安全' },
     { key: 'ai', label: 'AI 模型' },
   ]
-  if (auth.isAdmin) {
-    list.push({ key: 'users', label: '用户管理' })
-  }
   return list
 })
 
 const activeTab = ref<TabKey>(route.query.tab === 'ai' ? 'ai' : readInitialAccountTab())
-watch(() => route.query.tab, (tab) => { if (tab === 'ai') activeTab.value = 'ai' })
+watch(
+  () => route.query.tab,
+  (tab) => {
+    if (tab === 'ai') activeTab.value = 'ai'
+  },
+)
 
 watch(
   () => auth.isAdmin,
@@ -116,22 +119,72 @@ watch(
   },
 )
 const locationPath = ref<string[]>([])
-const locationOptions = chinaDivisionOptions as Array<{ label: string; value: string; children?: unknown[] }>
+const locationOptions = chinaDivisionOptions as Array<{
+  label: string
+  value: string
+  children?: unknown[]
+}>
 const countryText = ref('')
 
 const avatarPreview = computed(() => resolveMediaUrl(form.value.avatar))
 // 个人网站：后端为数组（可新增/删除）
 const websiteList = ref<string[]>([''])
 const websiteErrors = ref<string[]>([''])
+const profileBaseline = ref('')
+
+function profileSignature() {
+  return JSON.stringify({
+    nickname: form.value.username.trim(),
+    phone: form.value.phone.trim(),
+    gender: form.value.gender,
+    birthday: form.value.birthday,
+    location: locationPath.value,
+    profile: form.value.profile.trim(),
+    avatar: form.value.avatar,
+    websites: normalizeWebsiteList(websiteList.value),
+  })
+}
+
+const hasUnsavedChanges = computed(
+  () =>
+    profileReady.value &&
+    profileBaseline.value !== '' &&
+    profileSignature() !== profileBaseline.value,
+)
+const profileCompletion = computed(() => {
+  const checks = [
+    Boolean(form.value.avatar),
+    Boolean(form.value.username.trim()),
+    Boolean(boundEmail.value),
+    Boolean(form.value.phone.trim()),
+    locationPath.value.length > 0 || Boolean(form.value.location.trim()),
+    Boolean(form.value.birthday),
+    Boolean(form.value.profile.trim()),
+    normalizeWebsiteList(websiteList.value).length > 0,
+  ]
+  return Math.round((checks.filter(Boolean).length / checks.length) * 100)
+})
+const maskedEmail = computed(() => {
+  const email = boundEmail.value.trim()
+  if (!email.includes('@')) return ''
+  const [name = '', domain = ''] = email.split('@')
+  return `${name.slice(0, Math.min(2, name.length))}${name.length > 2 ? '••••' : ''}@${domain}`
+})
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!hasUnsavedChanges.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
 
 // 主题：避免 scoped 下 :global 选择器失效，直接用 class 控制
-const themeMode = ref<'light' | 'dark'>((document.documentElement.getAttribute('data-theme') as 'light' | 'dark') || 'light')
+const themeMode = ref<'light' | 'dark'>(
+  (document.documentElement.getAttribute('data-theme') as 'light' | 'dark') || 'light',
+)
 const isLight = computed(() => themeMode.value === 'light')
 /** 与页面明暗主题一致的遮罩 */
 const passwordMaskStyle = computed(() =>
-  isLight.value
-    ? { background: 'rgba(15, 23, 42, 0.42)' }
-    : { background: 'rgba(2, 6, 23, 0.62)' },
+  isLight.value ? { background: 'rgba(15, 23, 42, 0.42)' } : { background: 'rgba(2, 6, 23, 0.62)' },
 )
 let themeObserver: MutationObserver | null = null
 
@@ -316,7 +369,11 @@ function validateWebsite(urlText: string): string {
   return ''
 }
 
-function validateWebsiteList(websites: string[]): { ok: boolean; firstInvalidIndex: number; message: string } {
+function validateWebsiteList(websites: string[]): {
+  ok: boolean
+  firstInvalidIndex: number
+  message: string
+} {
   websiteErrors.value = websites.map((item) => validateWebsite(item))
   const firstInvalidIndex = websiteErrors.value.findIndex(Boolean)
   if (firstInvalidIndex >= 0) {
@@ -415,13 +472,16 @@ watch(
 
 async function getAuthHeaders() {
   const tokenResolver = OpenAPI.TOKEN
-  const token = typeof tokenResolver === 'function' ? await tokenResolver({} as never) : tokenResolver
+  const token =
+    typeof tokenResolver === 'function' ? await tokenResolver({} as never) : tokenResolver
   return token ? { Authorization: `Bearer ${token}` } : undefined
 }
 
 /** 后端文案里像「未登录 / token 失效」的情况，统一引导重新登录 */
 function looksLikeSessionMessage(msg: string): boolean {
-  return /(token|jwt|登录|令牌|鉴权|未授权).*(过期|失效|无效)|请先登录|未授权|已过期|无效或已过期/i.test(msg)
+  return /(token|jwt|登录|令牌|鉴权|未授权).*(过期|失效|无效)|请先登录|未授权|已过期|无效或已过期/i.test(
+    msg,
+  )
 }
 
 function sessionExpiredAndGoLogin() {
@@ -440,10 +500,8 @@ async function ensureBearerToken(): Promise<boolean> {
   return true
 }
 
-async function onUploadAvatar(ev: Event) {
-  const input = ev.target as HTMLInputElement
-  const file = input.files?.[0]
-  if (!file) return
+/** 校验并上传头像图片，供文件选择与拖放共用 */
+async function handleImageFile(file: File) {
   if (!file.type.startsWith('image/')) {
     Message.warning('请上传图片文件')
     return
@@ -458,11 +516,14 @@ async function onUploadAvatar(ev: Event) {
     const base = OpenAPI.BASE.replace(/\/+$/, '')
     const fd = new FormData()
     fd.append('image', file)
-    // 后端 data 可能是字符串 URL，也可能是 { avatar } / { url } 结构
-    const { data } = await axios.post<ApiResult<string | { avatar?: string; url?: string }>>(`${base}/file/upload`, fd, {
-      withCredentials: OpenAPI.WITH_CREDENTIALS,
-      headers: await getAuthHeaders(),
-    })
+    const { data } = await axios.post<ApiResult<string | { avatar?: string; url?: string }>>(
+      `${base}/file/upload`,
+      fd,
+      {
+        withCredentials: OpenAPI.WITH_CREDENTIALS,
+        headers: await getAuthHeaders(),
+      },
+    )
     if (isResultUnauthorized(data?.code)) {
       sessionExpiredAndGoLogin()
       return
@@ -479,7 +540,11 @@ async function onUploadAvatar(ev: Event) {
     const avatarUrl =
       typeof raw === 'string'
         ? raw
-        : String((raw as { avatar?: string; url?: string }).avatar || (raw as { avatar?: string; url?: string }).url || '')
+        : String(
+            (raw as { avatar?: string; url?: string }).avatar ||
+              (raw as { avatar?: string; url?: string }).url ||
+              '',
+          )
     if (!avatarUrl) throw new Error('后端未返回头像地址')
     form.value.avatar = avatarUrl
     Message.success('头像上传成功，请点击“保存更改”使其生效')
@@ -491,8 +556,31 @@ async function onUploadAvatar(ev: Event) {
     Message.error(getBackendErrorMessage(e, '头像上传失败'))
   } finally {
     uploading.value = false
-    input.value = ''
   }
+}
+
+async function onUploadAvatar(ev: Event) {
+  const input = ev.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (file) await handleImageFile(file)
+  input.value = ''
+}
+
+function onAvatarDragOver(ev: DragEvent) {
+  ev.preventDefault()
+  if (uploading.value) return
+  avatarDragging.value = true
+}
+function onAvatarDragLeave(ev: DragEvent) {
+  ev.preventDefault()
+  avatarDragging.value = false
+}
+async function onAvatarDrop(ev: DragEvent) {
+  ev.preventDefault()
+  avatarDragging.value = false
+  if (uploading.value) return
+  const file = ev.dataTransfer?.files?.[0]
+  if (file) await handleImageFile(file)
 }
 
 async function onSave() {
@@ -566,6 +654,12 @@ async function onSave() {
   }
 }
 
+async function discardProfileChanges() {
+  if (!hasUnsavedChanges.value || profileLoading.value || saving.value) return
+  await fetchProfileByLoginId()
+  if (profileReady.value) Message.success('已恢复为上次保存的资料')
+}
+
 function openPasswordModal() {
   passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
   passwordModalVisible.value = true
@@ -611,7 +705,11 @@ async function onSendEmailCode() {
 
 async function onBeforeBindEmail(): Promise<boolean> {
   const { email, password, code } = emailForm.value
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) || !password || !/^\d{6}$/.test(code.trim())) {
+  if (
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ||
+    !password ||
+    !/^\d{6}$/.test(code.trim())
+  ) {
     Message.warning('请填写新邮箱、当前密码和6位邮件验证码')
     return false
   }
@@ -799,10 +897,13 @@ async function fetchProfileByLoginId() {
   try {
     const base = OpenAPI.BASE.replace(/\/+$/, '')
     // 路径必须使用字符串 userId：Service.get(number) 会破坏超过 JS 安全整数的雪花 id，导致 403 被误判成「过期」
-    const { data } = await axios.get<ApiResult<Record<string, unknown>>>(`${base}/user/get/${auth.userId}`, {
-      withCredentials: OpenAPI.WITH_CREDENTIALS,
-      headers: await getAuthHeaders(),
-    })
+    const { data } = await axios.get<ApiResult<Record<string, unknown>>>(
+      `${base}/user/get/${auth.userId}`,
+      {
+        withCredentials: OpenAPI.WITH_CREDENTIALS,
+        headers: await getAuthHeaders(),
+      },
+    )
     if (data?.code === 401) {
       sessionExpiredAndGoLogin()
       return
@@ -832,7 +933,9 @@ async function fetchProfileByLoginId() {
     // 头像：接口字段与侧栏表单一致；并写回 auth，顶栏 AppLayout 使用 auth.avatarUrl 才能同步
     const rawAvatar = me.avatar
     const avatarFromApi =
-      rawAvatar == null || (typeof rawAvatar === 'string' && rawAvatar.trim() === '') ? '' : String(rawAvatar).trim()
+      rawAvatar == null || (typeof rawAvatar === 'string' && rawAvatar.trim() === '')
+        ? ''
+        : String(rawAvatar).trim()
     form.value.avatar = avatarFromApi
     auth.setAvatar(form.value.avatar || null)
     const intro = me.introduction != null ? String(me.introduction) : ''
@@ -867,6 +970,7 @@ async function fetchProfileByLoginId() {
     else if (sexRaw === '2') form.value.gender = 'female'
     else form.value.gender = 'unknown'
     profileReady.value = true
+    profileBaseline.value = profileSignature()
     profileLoadErrorNotified.value = false
   } catch (e) {
     if (!profileLoadErrorNotified.value) {
@@ -891,13 +995,18 @@ onMounted(() => {
     const v = document.documentElement.getAttribute('data-theme')
     themeMode.value = (v === 'dark' ? 'dark' : 'light') as 'light' | 'dark'
   })
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+  themeObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme'],
+  })
+  window.addEventListener('beforeunload', handleBeforeUnload)
 })
 
 onBeforeUnmount(() => {
   stopEmailTimer()
   themeObserver?.disconnect()
   themeObserver = null
+  window.removeEventListener('beforeunload', handleBeforeUnload)
 })
 </script>
 
@@ -907,17 +1016,71 @@ onBeforeUnmount(() => {
     <div class="account-page-inner" :class="{ 'account-page-inner--users': activeTab === 'users' }">
       <aside class="profile-side">
         <div class="profile-card">
-          <div class="profile-avatar-wrap">
-            <div class="profile-avatar-ring">
-              <img v-if="avatarPreview" :src="avatarPreview" alt="头像" class="profile-avatar-img" />
+          <div
+            class="profile-avatar-wrap"
+            :class="{ 'is-dragging': avatarDragging }"
+            @dragover="onAvatarDragOver"
+            @dragleave="onAvatarDragLeave"
+            @drop="onAvatarDrop"
+          >
+            <button
+              type="button"
+              class="profile-avatar-ring"
+              aria-label="放大查看我的头像"
+              @click="avatarZoomVisible = true"
+            >
+              <img
+                v-if="avatarPreview"
+                :src="avatarPreview"
+                alt="头像"
+                class="profile-avatar-img"
+              />
               <div v-else class="profile-avatar-fallback">
                 {{ (auth.displayName || 'U').slice(0, 1).toUpperCase() }}
               </div>
-            </div>
-            <label class="upload-btn" :class="{ disabled: uploading }">
-              {{ uploading ? '上传中...' : '更换头像' }}
+              <span class="profile-avatar-overlay" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  width="22"
+                  height="22"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"
+                  />
+                  <circle cx="12" cy="13" r="4" />
+                </svg>
+                <em>{{ uploading ? '上传中...' : '更换头像' }}</em>
+              </span>
+            </button>
+            <label
+              class="upload-btn"
+              :class="{ disabled: uploading }"
+              :title="uploading ? '上传中' : '点击或拖拽上传头像'"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path
+                  d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"
+                />
+                <circle cx="12" cy="13" r="4" />
+              </svg>
               <input type="file" accept="image/*" @change="onUploadAvatar" />
             </label>
+            <p v-if="avatarDragging" class="avatar-drop-hint">松开鼠标即可上传</p>
           </div>
           <p class="profile-name">{{ form.username || auth.displayName }}</p>
           <p class="profile-role">{{ userRoleText }}</p>
@@ -952,128 +1115,230 @@ onBeforeUnmount(() => {
                 v-if="activeTab === 'base'"
                 type="button"
                 class="save-btn save-btn--header"
-                :disabled="!profileReady || saving || uploading"
+                :disabled="!profileReady || !hasUnsavedChanges || saving || uploading"
                 @click="onSave"
               >
-                {{ saving ? '保存中...' : profileLoading ? '资料加载中...' : '保存更改' }}
+                {{ saving ? '保存中...' : profileLoading ? '资料加载中...' : '保存资料' }}
               </button>
             </div>
-            <p v-if="activeTab === 'base' && profileLoadErrorNotified && !profileLoading" class="profile-load-error">
+            <p
+              v-if="activeTab === 'base' && profileLoadErrorNotified && !profileLoading"
+              class="profile-load-error"
+            >
               资料加载失败，暂时无法保存。
               <button type="button" @click="fetchProfileByLoginId">重新加载</button>
             </p>
           </header>
 
           <template v-if="activeTab === 'base'">
-          <div class="section">
-            <h3 class="section-title">基本信息</h3>
-            <div class="panel-grid two">
-              <label class="field">
-                <span>昵称</span>
-                <input v-model="form.username" type="text" maxlength="32" placeholder="给自己起个好记的名字" />
-              </label>
-              <label class="field">
-                <span>手机号</span>
-                <input
-                  v-model="form.phone"
-                  type="tel"
-                  inputmode="numeric"
-                  maxlength="11"
-                  autocomplete="tel"
-                  placeholder="11 位中国大陆手机号，可留空"
-                />
-              </label>
-              <label class="field field--full">
-                <span>所在地</span>
-                <a-cascader
-                  v-model="locationPath"
-                  :options="locationOptions"
-                  path-mode
-                  allow-search
-                  :check-strictly="false"
-                  placeholder="选择省 / 市 / 区"
-                  class="location-cascader"
-                  @change="onLocationChange"
-                />
-                <div v-if="countryText" class="location-meta">
-                  <small class="field-tip">国家/地区</small>
-                  <span class="location-badge">{{ countryText }}</span>
+            <div class="profile-overview" aria-label="资料完成情况">
+              <div class="profile-overview__copy">
+                <div class="profile-overview__title-row">
+                  <strong>资料完成度</strong>
+                  <span>{{ profileCompletion }}%</span>
                 </div>
-              </label>
+                <div
+                  class="profile-progress"
+                  role="progressbar"
+                  aria-label="资料完成度"
+                  :aria-valuenow="profileCompletion"
+                  aria-valuemin="0"
+                  aria-valuemax="100"
+                >
+                  <span :style="{ width: `${profileCompletion}%` }" />
+                </div>
+                <p>完善公开资料，其他用户在题解、排行榜和个人主页中能更快认识你。</p>
+              </div>
+              <span class="profile-state-pill" :class="{ 'is-dirty': hasUnsavedChanges }">
+                {{ hasUnsavedChanges ? '有未保存修改' : '资料已保存' }}
+              </span>
             </div>
 
-            <div class="panel-grid two">
-              <label class="field">
-                <span>生日</span>
-                <input v-model="form.birthday" type="date" />
-              </label>
-              <div class="field">
-                <span>性别</span>
-                <div class="radio-row">
-                  <button type="button" class="radio-btn" :class="{ active: form.gender === 'unknown' }" @click="form.gender = 'unknown'">未设置</button>
-                  <button
-                    type="button"
-                    class="radio-btn"
-                    :class="{ active: form.gender === 'male' }"
-                    @click="form.gender = 'male'"
-                  >
-                    男
-                  </button>
-                  <button
-                    type="button"
-                    class="radio-btn"
-                    :class="{ active: form.gender === 'female' }"
-                    @click="form.gender = 'female'"
-                  >
-                    女
-                  </button>
+            <div class="section section--profile-card">
+              <div class="section-heading">
+                <div>
+                  <h3 class="section-title">公开资料</h3>
+                  <p class="section-desc">昵称、头像和个人介绍会展示在站内公开页面。</p>
                 </div>
               </div>
-            </div>
 
-            <label class="field">
-              <span>个人介绍</span>
-              <textarea v-model="form.profile" maxlength="200" placeholder="一句话介绍你自己（最多 200 字）" />
-            </label>
-          </div>
+              <div class="email-profile-card">
+                <div class="email-profile-card__icon" aria-hidden="true">@</div>
+                <div class="email-profile-card__body">
+                  <div class="email-profile-card__heading">
+                    <strong>邮箱与登录</strong>
+                    <span :class="{ 'is-unbound': !boundEmail }">{{
+                      boundEmail ? '已验证' : '未绑定'
+                    }}</span>
+                  </div>
+                  <p class="email-profile-card__value">{{ maskedEmail || '尚未绑定邮箱' }}</p>
+                  <p class="email-profile-card__hint">
+                    用于邮箱登录、找回密码和接收账户安全验证码。
+                  </p>
+                </div>
+                <button type="button" class="email-profile-card__action" @click="openEmailModal">
+                  {{ boundEmail ? '更换邮箱' : '绑定邮箱' }}
+                </button>
+              </div>
 
-          <div class="section">
-            <h3 class="section-title">链接</h3>
-            <label class="field">
-              <span>个人网站</span>
-              <div class="website-list">
-                <div v-for="(w, idx) in websiteList" :key="idx" class="website-row">
+              <div class="panel-grid two">
+                <label class="field">
+                  <span>昵称 <small>公开展示</small></span>
                   <input
-                    v-model="websiteList[idx]"
-                    type="url"
-                    placeholder="https://example.com"
-                    class="website-input"
-                    :class="{ 'is-invalid': !!websiteErrors[idx] }"
-                    @blur="normalizeWebsiteInputAt(idx)"
+                    v-model="form.username"
+                    type="text"
+                    maxlength="32"
+                    placeholder="给自己起个好记的名字"
                   />
-                  <small v-if="websiteErrors[idx]" class="website-error">{{ websiteErrors[idx] }}</small>
-                  <button
-                    type="button"
-                    class="website-del-btn"
-                    :disabled="websiteList.length === 1"
-                    aria-label="删除网站"
-                    title="删除"
-                    @click="removeWebsiteAt(idx)"
-                  >
-                    删除
+                </label>
+                <label class="field">
+                  <span>手机号 <small>仅用于账户安全</small></span>
+                  <input
+                    v-model="form.phone"
+                    type="tel"
+                    inputmode="numeric"
+                    maxlength="11"
+                    autocomplete="tel"
+                    placeholder="11 位中国大陆手机号，可留空"
+                  />
+                </label>
+                <label class="field field--full">
+                  <span>所在地</span>
+                  <a-cascader
+                    v-model="locationPath"
+                    :options="locationOptions"
+                    path-mode
+                    allow-search
+                    :check-strictly="false"
+                    placeholder="选择省 / 市 / 区"
+                    class="location-cascader"
+                    @change="onLocationChange"
+                  />
+                  <div v-if="countryText" class="location-meta">
+                    <small class="field-tip">国家/地区</small>
+                    <span class="location-badge">{{ countryText }}</span>
+                  </div>
+                </label>
+              </div>
+
+              <div class="panel-grid two">
+                <label class="field">
+                  <span>生日</span>
+                  <input v-model="form.birthday" type="date" />
+                </label>
+                <div class="field">
+                  <span>性别</span>
+                  <div class="radio-row">
+                    <button
+                      type="button"
+                      class="radio-btn"
+                      :class="{ active: form.gender === 'unknown' }"
+                      @click="form.gender = 'unknown'"
+                    >
+                      未设置
+                    </button>
+                    <button
+                      type="button"
+                      class="radio-btn"
+                      :class="{ active: form.gender === 'male' }"
+                      @click="form.gender = 'male'"
+                    >
+                      男
+                    </button>
+                    <button
+                      type="button"
+                      class="radio-btn"
+                      :class="{ active: form.gender === 'female' }"
+                      @click="form.gender = 'female'"
+                    >
+                      女
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <label class="field">
+                <span class="field-label-row">
+                  <span>个人介绍</span>
+                  <small class="profile-char-count">{{ form.profile.length }} / 200</small>
+                </span>
+                <textarea
+                  v-model="form.profile"
+                  maxlength="200"
+                  placeholder="一句话介绍你自己（最多 200 字）"
+                />
+              </label>
+            </div>
+
+            <div class="section section--profile-card">
+              <div class="section-heading">
+                <div>
+                  <h3 class="section-title">个人主页</h3>
+                  <p class="section-desc">
+                    可添加 GitHub、个人博客或作品集链接，最多展示你的有效链接。
+                  </p>
+                </div>
+              </div>
+              <label class="field">
+                <span>网站链接</span>
+                <div class="website-list">
+                  <div v-for="(w, idx) in websiteList" :key="idx" class="website-row">
+                    <input
+                      v-model="websiteList[idx]"
+                      type="url"
+                      placeholder="https://example.com"
+                      class="website-input"
+                      :class="{ 'is-invalid': !!websiteErrors[idx] }"
+                      @blur="normalizeWebsiteInputAt(idx)"
+                    />
+                    <small v-if="websiteErrors[idx]" class="website-error">{{
+                      websiteErrors[idx]
+                    }}</small>
+                    <button
+                      type="button"
+                      class="website-del-btn"
+                      :disabled="websiteList.length === 1"
+                      aria-label="删除网站"
+                      title="删除"
+                      @click="removeWebsiteAt(idx)"
+                    >
+                      删除
+                    </button>
+                  </div>
+                  <button type="button" class="website-add-btn" @click="addWebsite">
+                    + 添加一个链接
                   </button>
                 </div>
-                <button type="button" class="website-add-btn" @click="addWebsite">+ 添加一个链接</button>
-              </div>
-            </label>
-          </div>
-
-          <div class="form-actions">
-            <div class="form-actions-hint">修改会在保存后生效。</div>
-            <div class="form-actions-right">
-              <span class="form-actions-status">{{ saving ? '正在保存…' : '' }}</span>
+              </label>
             </div>
-          </div>
+
+            <div class="form-actions form-actions--sticky">
+              <div class="form-actions-hint">
+                <strong>{{ hasUnsavedChanges ? '修改尚未保存' : '所有修改已保存' }}</strong>
+                <span>{{
+                  hasUnsavedChanges ? '保存后才会同步到个人主页。' : '你的资料已与服务器同步。'
+                }}</span>
+              </div>
+              <div class="form-actions-right">
+                <button
+                  v-if="hasUnsavedChanges"
+                  type="button"
+                  class="discard-btn"
+                  :disabled="saving"
+                  @click="discardProfileChanges"
+                >
+                  撤销修改
+                </button>
+                <button
+                  type="button"
+                  class="save-btn"
+                  :disabled="!profileReady || !hasUnsavedChanges || saving || uploading"
+                  @click="onSave"
+                >
+                  {{ saving ? '正在保存…' : '保存资料' }}
+                </button>
+              </div>
+            </div>
           </template>
 
           <template v-else-if="activeTab === 'security'">
@@ -1083,7 +1348,10 @@ onBeforeUnmount(() => {
                 <div class="security-card security-card--danger-zone">
                   <div class="security-card-title">账号注销</div>
                   <div class="security-card-desc">
-                    当你确定不再使用本账号时，可执行注销：账号将不可用且<strong class="security-desc-strong">不可恢复</strong>，相关唯一信息会释放，之后可用相同邮箱或手机号重新注册。操作前请自行备份需要保留的数据。
+                    当你确定不再使用本账号时，可执行注销：账号将不可用且<strong
+                      class="security-desc-strong"
+                      >不可恢复</strong
+                    >，相关唯一信息会释放，之后可用相同邮箱或手机号重新注册。操作前请自行备份需要保留的数据。
                   </div>
                   <div class="security-destructive-action">
                     <button
@@ -1101,31 +1369,75 @@ onBeforeUnmount(() => {
                     当前为管理员账号，系统不允许在此自助注销；需由其他管理员处理或先降级为普通用户。
                   </p>
                 </div>
-                <div class="security-card security-card--clickable" role="button" tabindex="0" @click="openPasswordModal" @keydown.enter="openPasswordModal" @keydown.space.prevent="openPasswordModal">
+                <div
+                  class="security-card security-card--clickable"
+                  role="button"
+                  tabindex="0"
+                  @click="openPasswordModal"
+                  @keydown.enter="openPasswordModal"
+                  @keydown.space.prevent="openPasswordModal"
+                >
                   <div class="security-card-title">登录密码</div>
                   <div class="security-card-desc">验证旧密码后修改；成功后需用新密码重新登录。</div>
                   <div class="security-muted">点击进入修改密码</div>
                 </div>
-                <div class="security-card security-card--clickable" role="button" tabindex="0" @click="openEmailModal" @keydown.enter="openEmailModal" @keydown.space.prevent="openEmailModal">
+                <div
+                  class="security-card security-card--clickable"
+                  role="button"
+                  tabindex="0"
+                  @click="openEmailModal"
+                  @keydown.enter="openEmailModal"
+                  @keydown.space.prevent="openEmailModal"
+                >
                   <div class="security-card-title">绑定邮箱</div>
-                  <div class="security-card-desc">{{ boundEmail ? `当前邮箱：${boundEmail}` : '尚未绑定邮箱，建议绑定后使用邮箱登录与找回密码。' }}</div>
-                  <div class="security-muted">{{ boundEmail ? '点击更换邮箱' : '点击绑定邮箱' }} · 需验证当前密码和新邮箱</div>
+                  <div class="security-card-desc">
+                    {{
+                      boundEmail
+                        ? `当前邮箱：${boundEmail}`
+                        : '尚未绑定邮箱，建议绑定后使用邮箱登录与找回密码。'
+                    }}
+                  </div>
+                  <div class="security-muted">
+                    {{ boundEmail ? '点击更换邮箱' : '点击绑定邮箱' }} · 需验证当前密码和新邮箱
+                  </div>
                 </div>
               </div>
             </div>
           </template>
 
-          <AiModelSettingsPanel v-else-if="activeTab === 'ai'" />
-          <AdminUsersPanel v-else-if="activeTab === 'users'" :is-light="isLight" />
+          <AiModelSettingsPanel v-else-if="activeTab === 'ai'" :is-light="isLight" />
         </div>
       </section>
     </div>
   </div>
 
   <a-modal
+    v-model:visible="avatarZoomVisible"
+    title="查看头像"
+    width="min(680px, 96vw)"
+    :footer="false"
+    :modal-class="[
+      'password-modal-shell',
+      isLight ? 'password-modal-shell--light' : 'password-modal-shell--dark',
+    ]"
+    :mask-style="passwordMaskStyle"
+  >
+    <div class="profile-avatar-preview">
+      <img v-if="avatarPreview" :src="avatarPreview" alt="我的头像大图" />
+      <span v-else class="profile-avatar-preview-fallback">{{
+        (auth.displayName || 'U').slice(0, 1).toUpperCase()
+      }}</span>
+      <p>{{ form.username || auth.displayName }}</p>
+    </div>
+  </a-modal>
+
+  <a-modal
     v-model:visible="emailModalVisible"
     :title="boundEmail ? '更换绑定邮箱' : '绑定邮箱'"
-    :modal-class="['password-modal-shell', isLight ? 'password-modal-shell--light' : 'password-modal-shell--dark']"
+    :modal-class="[
+      'password-modal-shell',
+      isLight ? 'password-modal-shell--light' : 'password-modal-shell--dark',
+    ]"
     :mask-closable="false"
     :mask-style="passwordMaskStyle"
     :ok-loading="emailSaving"
@@ -1135,12 +1447,29 @@ onBeforeUnmount(() => {
     @before-ok="onBeforeBindEmail"
   >
     <div class="password-modal" :class="{ 'password-modal--light': isLight }">
-      <p class="password-modal-tip">验证码会发送至新邮箱，10 分钟内有效。绑定后可用邮箱登录和找回密码。</p>
-      <a-input v-model="emailForm.email" placeholder="新邮箱（QQ 邮箱也可以）" autocomplete="email" />
-      <a-input-password v-model="emailForm.password" placeholder="当前登录密码" autocomplete="current-password" />
+      <p class="password-modal-tip">
+        验证码会发送至新邮箱，10 分钟内有效。绑定后可用邮箱登录和找回密码。
+      </p>
+      <a-input
+        v-model="emailForm.email"
+        placeholder="新邮箱（QQ 邮箱也可以）"
+        autocomplete="email"
+      />
+      <a-input-password
+        v-model="emailForm.password"
+        placeholder="当前登录密码"
+        autocomplete="current-password"
+      />
       <div class="email-code-row">
-        <a-input v-model="emailForm.code" :max-length="6" placeholder="6 位邮件验证码" inputmode="numeric" />
-        <a-button :loading="emailSending" :disabled="emailCountdown > 0" @click="onSendEmailCode">{{ emailCountdown ? `${emailCountdown}s 后重发` : '获取验证码' }}</a-button>
+        <a-input
+          v-model="emailForm.code"
+          :max-length="6"
+          placeholder="6 位邮件验证码"
+          inputmode="numeric"
+        />
+        <a-button :loading="emailSending" :disabled="emailCountdown > 0" @click="onSendEmailCode">{{
+          emailCountdown ? `${emailCountdown}s 后重发` : '获取验证码'
+        }}</a-button>
       </div>
     </div>
   </a-modal>
@@ -1148,7 +1477,10 @@ onBeforeUnmount(() => {
   <a-modal
     v-model:visible="passwordModalVisible"
     title="修改密码"
-    :modal-class="['password-modal-shell', isLight ? 'password-modal-shell--light' : 'password-modal-shell--dark']"
+    :modal-class="[
+      'password-modal-shell',
+      isLight ? 'password-modal-shell--light' : 'password-modal-shell--dark',
+    ]"
     :mask-closable="false"
     :mask-style="passwordMaskStyle"
     :ok-loading="passwordSaving"
@@ -1159,11 +1491,7 @@ onBeforeUnmount(() => {
   >
     <div class="password-modal" :class="{ 'password-modal--light': isLight }">
       <p class="password-modal-tip">为了账号安全，建议使用 6 位以上且包含字母数字的强密码。</p>
-      <a-input-password
-        v-model="passwordForm.oldPassword"
-        placeholder="请输入旧密码"
-        allow-clear
-      />
+      <a-input-password v-model="passwordForm.oldPassword" placeholder="请输入旧密码" allow-clear />
       <a-input-password
         v-model="passwordForm.newPassword"
         placeholder="请输入新密码（至少 6 位）"
@@ -1180,7 +1508,10 @@ onBeforeUnmount(() => {
   <a-modal
     v-model:visible="closeAccountModalVisible"
     title="注销账号"
-    :modal-class="['password-modal-shell', isLight ? 'password-modal-shell--light' : 'password-modal-shell--dark']"
+    :modal-class="[
+      'password-modal-shell',
+      isLight ? 'password-modal-shell--light' : 'password-modal-shell--dark',
+    ]"
     :mask-closable="false"
     :mask-style="passwordMaskStyle"
     :ok-loading="closeAccountSaving"
@@ -1194,11 +1525,7 @@ onBeforeUnmount(() => {
       <p class="close-account-warn">
         注销后账号将不可用，资料会被标记删除且无法恢复；相同邮箱或手机号可再次注册（若未绑定则不受影响）。请再次输入<strong>当前登录密码</strong>确认。
       </p>
-      <a-input-password
-        v-model="closeAccountPassword"
-        placeholder="请输入登录密码"
-        allow-clear
-      />
+      <a-input-password v-model="closeAccountPassword" placeholder="请输入登录密码" allow-clear />
     </div>
   </a-modal>
 </template>
@@ -1224,7 +1551,7 @@ onBeforeUnmount(() => {
 
 .account-page.is-light {
   --acc-surface: rgba(255, 255, 255, 0.78);
-  --acc-border: rgba(15, 23, 42, 0.10);
+  --acc-border: rgba(15, 23, 42, 0.1);
   --acc-text: #0f172a;
   --acc-muted: rgba(15, 23, 42, 0.62);
   --acc-input: rgba(255, 255, 255, 0.9);
@@ -1234,13 +1561,15 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   z-index: 0;
-  background: radial-gradient(1200px 800px at 15% 0%, rgba(0, 194, 160, 0.12), transparent 55%),
+  background:
+    radial-gradient(1200px 800px at 15% 0%, rgba(0, 194, 160, 0.12), transparent 55%),
     radial-gradient(1000px 700px at 90% 100%, rgba(56, 189, 248, 0.08), transparent 55%),
     linear-gradient(180deg, #070a12 0%, #0a1020 45%, #070a12 100%);
 }
 
 .account-page.is-light .account-page-bg {
-  background: radial-gradient(1000px 700px at 10% 0%, rgba(0, 194, 160, 0.18), transparent 60%),
+  background:
+    radial-gradient(1000px 700px at 10% 0%, rgba(0, 194, 160, 0.18), transparent 60%),
     radial-gradient(900px 650px at 95% 100%, rgba(56, 189, 248, 0.12), transparent 60%),
     linear-gradient(180deg, #f8fafc 0%, #eef2f7 55%, #f8fafc 100%);
 }
@@ -1316,19 +1645,104 @@ onBeforeUnmount(() => {
 
 .profile-avatar-wrap {
   position: relative;
-  width: 112px;
+  width: 124px;
   margin: 0 auto;
+  transition: transform 0.2s ease;
+}
+
+.profile-avatar-wrap.is-dragging {
+  transform: scale(1.04);
 }
 
 .profile-avatar-ring {
-  width: 112px;
-  height: 112px;
+  position: relative;
+  width: 124px;
+  height: 124px;
   border-radius: 50%;
-  padding: 3px;
-  background: linear-gradient(145deg, var(--acc-teal) 0%, #00a896 55%, #0d9488 100%);
+  padding: 4px;
+  background: linear-gradient(145deg, var(--acc-teal) 0%, #2dd4bf 50%, #0d9488 100%);
   box-shadow:
-    0 0 0 1px rgba(0, 194, 160, 0.35),
-    0 0 32px rgba(0, 194, 160, 0.28);
+    0 0 0 1px rgba(0, 194, 160, 0.4),
+    0 0 36px rgba(0, 194, 160, 0.32);
+  border: 0;
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.profile-avatar-ring:focus-visible {
+  outline: 2px solid var(--acc-teal);
+  outline-offset: 4px;
+}
+
+/* 悬停遮罩：相机图标 + 更换头像 */
+.profile-avatar-overlay {
+  position: absolute;
+  inset: 4px;
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: rgba(2, 6, 23, 0.58);
+  color: #fff;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+  backdrop-filter: blur(2px);
+}
+.profile-avatar-overlay em {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.profile-avatar-ring:hover .profile-avatar-overlay,
+.profile-avatar-wrap.is-dragging .profile-avatar-overlay {
+  opacity: 1;
+}
+
+/* 拖拽时头像环高亮 */
+.profile-avatar-wrap.is-dragging .profile-avatar-ring {
+  box-shadow:
+    0 0 0 2px rgba(0, 194, 160, 0.65),
+    0 0 48px rgba(0, 194, 160, 0.45);
+}
+
+.profile-avatar-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 0;
+}
+
+.profile-avatar-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 72vh;
+  width: auto;
+  height: auto;
+  object-fit: contain;
+  border-radius: 12px;
+}
+
+.profile-avatar-preview-fallback {
+  display: grid;
+  place-items: center;
+  width: min(320px, 70vw);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: linear-gradient(160deg, #134e4a, #0f766e);
+  color: #fff;
+  font-size: 112px;
+  font-weight: 800;
+}
+
+.profile-avatar-preview p {
+  margin: 0;
+  color: var(--acc-muted, #64748b);
+  font-size: 13px;
 }
 
 .profile-avatar-img,
@@ -1351,30 +1765,35 @@ onBeforeUnmount(() => {
   letter-spacing: -0.02em;
 }
 
+/* 右下角圆形相机按钮 */
 .upload-btn {
   position: absolute;
-  left: 50%;
-  bottom: -8px;
-  transform: translateX(-50%);
-  padding: 5px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(0, 194, 160, 0.28);
-  background: rgba(2, 6, 23, 0.78);
-  color: var(--acc-teal);
-  font-size: 12px;
-  font-weight: 600;
+  right: -2px;
+  bottom: 2px;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 3px solid rgba(2, 6, 23, 0.85);
+  background: linear-gradient(145deg, var(--acc-teal), #0d9488);
+  color: #fff;
   cursor: pointer;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
   transition:
-    border-color 0.2s ease,
+    transform 0.16s ease,
     box-shadow 0.2s ease,
-    transform 0.15s ease;
+    filter 0.2s ease;
 }
 
 .upload-btn:hover:not(.disabled) {
-  border-color: rgba(0, 194, 160, 0.55);
-  box-shadow: 0 0 18px rgba(0, 194, 160, 0.25);
-  transform: translateX(-50%) translateY(-1px);
+  transform: scale(1.1);
+  box-shadow: 0 8px 22px rgba(0, 194, 160, 0.45);
+  filter: brightness(1.08);
+}
+
+.upload-btn:active:not(.disabled) {
+  transform: scale(0.96);
 }
 
 .upload-btn.disabled {
@@ -1387,9 +1806,28 @@ onBeforeUnmount(() => {
 }
 
 .account-page.is-light .upload-btn {
-  background: rgba(255, 255, 255, 0.92);
-  border-color: rgba(0, 194, 160, 0.32);
-  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.10);
+  border-color: #ffffff;
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
+}
+
+/* 拖拽提示文字 */
+.avatar-drop-hint {
+  margin: 10px 0 0;
+  color: var(--acc-teal);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: center;
+  animation: avatar-drop-pulse 1.1s ease-in-out infinite;
+}
+@keyframes avatar-drop-pulse {
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .profile-name {
@@ -1480,7 +1918,7 @@ onBeforeUnmount(() => {
 .account-page.is-light .profile-main .panel {
   box-shadow:
     0 0 0 1px rgba(255, 255, 255, 0.95) inset,
-    0 18px 46px rgba(15, 23, 42, 0.10);
+    0 18px 46px rgba(15, 23, 42, 0.1);
 }
 
 .panel-header {
@@ -1556,7 +1994,7 @@ onBeforeUnmount(() => {
 }
 
 .account-page.is-light .section + .section {
-  border-top-color: rgba(15, 23, 42, 0.10);
+  border-top-color: rgba(15, 23, 42, 0.1);
 }
 
 .panel-grid.two {
@@ -1874,7 +2312,7 @@ onBeforeUnmount(() => {
 
 .account-page.is-light .form-actions-hint,
 .account-page.is-light .form-actions-status {
-  color: rgba(15, 23, 42, 0.60);
+  color: rgba(15, 23, 42, 0.6);
 }
 
 .form-actions-right {
@@ -2045,7 +2483,7 @@ onBeforeUnmount(() => {
 
 .account-page.is-light .security-card {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.76) 100%);
-  border-color: rgba(15, 23, 42, 0.10);
+  border-color: rgba(15, 23, 42, 0.1);
   box-shadow: 0 10px 22px rgba(15, 23, 42, 0.07);
 }
 
@@ -2293,6 +2731,306 @@ onBeforeUnmount(() => {
   color: #0f172a;
 }
 
+.profile-overview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  margin-bottom: 18px;
+  padding: 17px 18px;
+  border: 1px solid rgba(45, 212, 191, 0.18);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.account-page.is-light .profile-overview {
+  border-color: rgba(13, 148, 136, 0.16);
+  background: #f5fbfa;
+}
+
+.profile-overview__copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.profile-overview__title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--acc-text);
+  font-size: 14px;
+}
+
+.profile-overview__title-row span {
+  color: #5eead4;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.account-page.is-light .profile-overview__title-row span {
+  color: #0f766e;
+}
+
+.profile-progress {
+  height: 7px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.17);
+}
+
+.profile-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #14b8a6;
+  transition: width 0.28s ease;
+}
+
+.profile-overview__copy p {
+  margin: 9px 0 0;
+  color: var(--acc-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.profile-state-pill {
+  flex: none;
+  padding: 7px 11px;
+  border: 1px solid rgba(45, 212, 191, 0.22);
+  border-radius: 999px;
+  background: rgba(45, 212, 191, 0.1);
+  color: #99f6e4;
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.profile-state-pill.is-dirty {
+  border-color: rgba(251, 146, 60, 0.28);
+  background: rgba(251, 146, 60, 0.1);
+  color: #fdba74;
+}
+
+.account-page.is-light .profile-state-pill {
+  color: #0f766e;
+  border-color: rgba(13, 148, 136, 0.22);
+  background: rgba(20, 184, 166, 0.08);
+}
+
+.account-page.is-light .profile-state-pill.is-dirty {
+  color: #9a3412;
+  border-color: rgba(234, 88, 12, 0.22);
+  background: #fff7ed;
+}
+
+.section--profile-card {
+  margin-bottom: 16px;
+  padding: 19px 20px 4px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.26);
+}
+
+.section--profile-card + .section--profile-card {
+  margin-top: 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.account-page.is-light .section--profile-card,
+.account-page.is-light .section--profile-card + .section--profile-card {
+  border-color: rgba(15, 23, 42, 0.09);
+  background: #ffffff;
+  box-shadow: 0 7px 24px rgba(15, 23, 42, 0.045);
+}
+
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 15px;
+}
+
+.section-heading .section-title {
+  margin-bottom: 5px;
+}
+
+.section-desc {
+  margin: 0 0 0 10px;
+  color: var(--acc-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.email-profile-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 15px;
+  border: 1px solid rgba(45, 212, 191, 0.17);
+  border-radius: 14px;
+  background: rgba(20, 184, 166, 0.07);
+}
+
+.account-page.is-light .email-profile-card {
+  border-color: rgba(13, 148, 136, 0.15);
+  background: #f0fdfa;
+}
+
+.email-profile-card__icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 12px;
+  background: #0f766e;
+  color: #ffffff;
+  font-size: 20px;
+  font-weight: 800;
+}
+
+.email-profile-card__body {
+  min-width: 0;
+}
+
+.email-profile-card__heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--acc-text);
+  font-size: 13px;
+}
+
+.email-profile-card__heading span {
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(45, 212, 191, 0.13);
+  color: #99f6e4;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.email-profile-card__heading span.is-unbound {
+  background: rgba(251, 146, 60, 0.12);
+  color: #fdba74;
+}
+
+.account-page.is-light .email-profile-card__heading span {
+  background: rgba(13, 148, 136, 0.1);
+  color: #0f766e;
+}
+
+.account-page.is-light .email-profile-card__heading span.is-unbound {
+  background: #ffedd5;
+  color: #9a3412;
+}
+
+.email-profile-card__value {
+  margin: 5px 0 0;
+  overflow: hidden;
+  color: var(--acc-text);
+  font-size: 14px;
+  font-weight: 750;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.email-profile-card__hint {
+  margin: 4px 0 0;
+  color: var(--acc-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.email-profile-card__action,
+.discard-btn {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(45, 212, 191, 0.3);
+  border-radius: 10px;
+  background: transparent;
+  color: #5eead4;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.email-profile-card__action:hover,
+.discard-btn:hover:not(:disabled) {
+  border-color: rgba(45, 212, 191, 0.55);
+  background: rgba(45, 212, 191, 0.08);
+}
+
+.account-page.is-light .email-profile-card__action,
+.account-page.is-light .discard-btn {
+  border-color: rgba(13, 148, 136, 0.25);
+  color: #0f766e;
+  background: #ffffff;
+}
+
+.field > span > small {
+  margin-left: 6px;
+  color: var(--acc-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.field > .field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.field > .field-label-row .profile-char-count {
+  margin-left: auto;
+  color: var(--acc-muted);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.form-actions--sticky {
+  position: sticky;
+  z-index: 5;
+  bottom: 10px;
+  margin: 18px -8px -8px;
+  padding: 13px 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
+}
+
+.account-page.is-light .form-actions--sticky {
+  border-color: rgba(15, 23, 42, 0.1);
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.1);
+}
+
+.form-actions--sticky .form-actions-hint {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.form-actions--sticky .form-actions-hint strong {
+  color: var(--acc-text);
+  font-size: 13px;
+}
+
+.form-actions--sticky .form-actions-hint span {
+  font-size: 11px;
+}
+
+.discard-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 @media (max-width: 980px) {
   .account-page-inner {
     grid-template-columns: 1fr;
@@ -2312,6 +3050,47 @@ onBeforeUnmount(() => {
   .security-outline-danger-btn--main {
     width: 100%;
     max-width: none;
+  }
+  .profile-overview {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .panel-header-main {
+    align-items: center;
+  }
+  .save-btn--header {
+    display: none;
+  }
+  .profile-overview {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .email-profile-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .email-profile-card__action {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+  .section--profile-card {
+    padding-inline: 14px;
+  }
+  .form-actions--sticky {
+    align-items: stretch;
+  }
+  .form-actions-right {
+    width: 100%;
+  }
+  .form-actions-right > button {
+    flex: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .profile-progress span {
+    transition: none;
   }
 }
 </style>

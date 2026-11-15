@@ -1,10 +1,15 @@
-import { OpenAPI } from '@generated'
 import type { BailianAssistChatRequest, BailianAssistTurnDTO } from '@generated'
+import { OpenAPI } from '@generated'
 import { AI_ASSIST_PROFANITY_BANNED_CODE, isResultSuccess } from '@/api/result'
 import { useAuthStore } from '@/stores/auth'
 
 /** 与 OpenAPI 契约一致；历史轮次 role 为 string（常见为 user / assistant） */
 export type BailianTurn = BailianAssistTurnDTO
+export type AssistChatRequest = BailianAssistChatRequest & {
+  providerCode?: string
+  modelId?: string
+  imageDataUrl?: string
+}
 
 export type BailianStreamHandlers = {
   onDelta: (text: string) => void
@@ -14,7 +19,8 @@ export type BailianStreamHandlers = {
 
 async function streamAuthHeaders(): Promise<Record<string, string>> {
   const tokenResolver = OpenAPI.TOKEN
-  const token = typeof tokenResolver === 'function' ? await tokenResolver({} as never) : tokenResolver
+  const token =
+    typeof tokenResolver === 'function' ? await tokenResolver({} as never) : tokenResolver
   const h: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'text/event-stream',
@@ -28,7 +34,7 @@ async function streamAuthHeaders(): Promise<Record<string, string>> {
  * 使用 `fetch` + ReadableStream：codegen 的 `BailianAssistService.chat` 走 Axios，不适配流式响应体。
  */
 export async function bailianAssistChat(
-  body: BailianAssistChatRequest,
+  body: AssistChatRequest,
   handlers: BailianStreamHandlers,
   options?: { signal?: AbortSignal },
 ): Promise<void> {

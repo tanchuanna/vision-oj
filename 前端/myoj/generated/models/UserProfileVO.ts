@@ -2,9 +2,11 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { Location } from './Location';
+import type { Location } from './Location'
+
 export type UserProfileVO = {
     id?: string;
+    userRole?: string;
     nickname?: string;
     avatar?: string;
     introduction?: string;

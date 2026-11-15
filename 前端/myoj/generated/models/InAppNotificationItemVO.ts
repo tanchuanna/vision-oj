@@ -11,5 +11,6 @@ export type InAppNotificationItemVO = {
     linkRef?: string;
     read?: boolean;
     createTime?: string;
+    source?: string;
 };
 

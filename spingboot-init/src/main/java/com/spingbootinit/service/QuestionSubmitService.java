@@ -4,8 +4,14 @@ import com.baomidou.mybatisplus.extension.service.IService;
 import com.spingbootinit.model.dto.questionsubmit.QuestionSubmitAddRequest;
 import com.spingbootinit.model.entity.QuestionSubmit;
 import com.spingbootinit.model.vo.questionsubmitvo.MySubmitItemVO;
+import com.spingbootinit.model.vo.questionsubmitvo.QuestionStatisticsVO;
 
 public interface QuestionSubmitService extends IService<QuestionSubmit> {
+
+    /**
+     * 查询当前题目的公开统计；currentUserId 为空时不计算个人击败比例。
+     */
+    QuestionStatisticsVO getQuestionStatistics(long questionId, Long currentUserId);
 
     /**
      * 计算提交序号：perQuestion=true 表示「该用户对该题目的第几次」；false 表示「该用户账号下全局第几次」（按创建时间、id 排序）。

@@ -1,10 +1,9 @@
-import { nextTick, onBeforeUnmount, ref } from 'vue'
+import { nextTick, onBeforeUnmount } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { storeToRefs } from 'pinia'
-import { bailianAssistChat, type BailianTurn } from '@/api/bailianAssist'
-import type { BailianAssistChatRequest } from '@generated'
+import { type AssistChatRequest, bailianAssistChat, type BailianTurn } from '@/api/bailianAssist'
 import { renderMarkdownToHtml } from '@/utils/renderMarkdown'
-import { useStudyAiCopilotStore, type StudyAiMessage } from '@/stores/studyAiCopilot'
+import { type StudyAiMessage, useStudyAiCopilotStore } from '@/stores/studyAiCopilot'
 
 function shiftFirstCodePoint(s: string): [string, string] {
   if (!s) return ['', '']
@@ -14,7 +13,12 @@ function shiftFirstCodePoint(s: string): [string, string] {
 }
 
 export function useStudyAiCopilotStream(
-  buildBody: (userText: string, history: BailianTurn[]) => BailianAssistChatRequest,
+  buildBody: (
+    userText: string,
+    history: BailianTurn[],
+    imageDataUrl?: string,
+    imageRoute?: { providerCode: string; modelId: string },
+  ) => AssistChatRequest,
 ) {
   const store = useStudyAiCopilotStore()
   const { messages, draft, sending, streamingAssistantId, streamingPlainText } = storeToRefs(store)
@@ -41,13 +45,14 @@ export function useStudyAiCopilotStream(
     }
   }
 
-  function pushUser(text: string) {
+  function pushUser(text: string, imageDataUrl?: string) {
     const t = text.trim()
     if (!t) return
     messages.value.push({
       id: `u-${Date.now()}`,
       role: 'user',
       content: t,
+      imagePreview: imageDataUrl,
     })
   }
 
@@ -72,13 +77,19 @@ export function useStudyAiCopilotStream(
     })
   }
 
-  async function sendUserMessage(text: string, listEl: HTMLElement | null) {
+  async function sendUserMessage(
+    text: string,
+    listEl: HTMLElement | null,
+    imageDataUrl?: string,
+    imageRoute?: { providerCode: string; modelId: string },
+  ) {
     const raw = text.trim()
     if (!raw || sending.value) return
-    pushUser(raw)
+    const requestBody = buildBody(raw, toHistory(), imageDataUrl, imageRoute)
+    pushUser(raw, imageDataUrl)
     draft.value = ''
-    await scrollToEnd(listEl)
     sending.value = true
+    await scrollToEnd(listEl)
 
     streamAbort?.abort()
     streamAbort = new AbortController()
@@ -88,13 +99,13 @@ export function useStudyAiCopilotStream(
     const pumpSession = { alive: true }
     activeTwPumpSession = pumpSession
 
-    const hist = toHistory().slice(0, -1)
-
     const assistantMsg: StudyAiMessage = {
       id: `a-${Date.now()}`,
       role: 'assistant',
       content: '',
       html: '',
+      providerCode: requestBody.providerCode,
+      modelId: requestBody.modelId,
     }
     messages.value.push(assistantMsg)
     streamingAssistantId.value = assistantMsg.id
@@ -180,44 +191,48 @@ export function useStudyAiCopilotStream(
     }
 
     try {
-      await bailianAssistChat(buildBody(raw, hist), {
-        onDelta: (piece) => {
-          twBuf += piece
-          if (!twDeltaFlushQueued) {
-            twDeltaFlushQueued = true
-            queueMicrotask(() => {
-              twDeltaFlushQueued = false
-              kickTwPump()
-            })
-          }
-        },
-        onError: (notice) => {
-          stopTwPump()
-          flushTwBufToMessage()
-          twUpstreamClosed = true
-          Message.error(notice || '请求失败')
-          if (!assistantMsg.content.trim()) {
-            assistantMsg.content = notice || '请求失败'
-          } else {
-            assistantMsg.content += `\n\n（${notice}）`
-          }
-          streamingPlainText.value = assistantMsg.content
-          bumpAssistantHtml(assistantMsg)
-          scheduleScrollToEnd(listEl)
-          notifyTwFinished()
-        },
-        onDone: () => {
-          twUpstreamClosed = true
-          if (twBuf.length === 0) {
+      await bailianAssistChat(
+        requestBody,
+        {
+          onDelta: (piece) => {
+            twBuf += piece
+            if (!twDeltaFlushQueued) {
+              twDeltaFlushQueued = true
+              queueMicrotask(() => {
+                twDeltaFlushQueued = false
+                kickTwPump()
+              })
+            }
+          },
+          onError: (notice) => {
             stopTwPump()
+            flushTwBufToMessage()
+            twUpstreamClosed = true
+            Message.error(notice || '请求失败')
+            if (!assistantMsg.content.trim()) {
+              assistantMsg.content = notice || '请求失败'
+            } else {
+              assistantMsg.content += `\n\n（${notice}）`
+            }
+            streamingPlainText.value = assistantMsg.content
             bumpAssistantHtml(assistantMsg)
             scheduleScrollToEnd(listEl)
             notifyTwFinished()
-          } else {
-            kickTwPump()
-          }
+          },
+          onDone: () => {
+            twUpstreamClosed = true
+            if (twBuf.length === 0) {
+              stopTwPump()
+              bumpAssistantHtml(assistantMsg)
+              scheduleScrollToEnd(listEl)
+              notifyTwFinished()
+            } else {
+              kickTwPump()
+            }
+          },
         },
-      }, { signal })
+        { signal },
+      )
       await twFinished
     } catch (e) {
       stopTwPump()

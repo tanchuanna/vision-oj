@@ -23,6 +23,7 @@ public class UserAdminListItemVO {
 
     private String username;
     private String nickname;
+    private String avatar;
     private String email;
     private String phone;
     private String userRole;
@@ -56,4 +57,6 @@ public class UserAdminListItemVO {
     private Boolean abnormal;
     /** 异常说明或「正常」 */
     private String abnormalReason;
+    /** 是否在线（基于心跳 TTL） */
+    private Boolean online;
 }

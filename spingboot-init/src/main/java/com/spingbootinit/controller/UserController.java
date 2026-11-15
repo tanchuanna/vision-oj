@@ -11,15 +11,11 @@ import com.spingbootinit.context.UserContext.IsAdminRoleString;
 import com.spingbootinit.context.UserContext.UserContext;
 import com.spingbootinit.model.dto.user.*;
 import com.spingbootinit.model.entity.User;
-import com.spingbootinit.model.vo.uservo.LoginVO;
-import com.spingbootinit.model.vo.uservo.TokenRefreshVO;
-import com.spingbootinit.model.vo.uservo.UserAdminPageVO;
-import com.spingbootinit.model.vo.uservo.UserCheckInCalendarVO;
-import com.spingbootinit.model.vo.uservo.UserCheckInStatusVO;
-import com.spingbootinit.model.vo.uservo.UserLeaderboardRowVO;
-import com.spingbootinit.model.vo.uservo.UserProfileVO;
-import com.spingbootinit.model.vo.uservo.UserSessionStatusVO;
+import com.spingbootinit.model.vo.uservo.*;
 import com.spingbootinit.service.UserService;
+import com.spingbootinit.service.UserStatusNotifyService;
+import com.spingbootinit.service.impl.UserOnlineService;
+import com.spingbootinit.service.impl.UserRoleManagementService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -30,8 +26,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-
-import com.spingbootinit.service.UserStatusNotifyService;
 
 import java.util.Collections;
 
@@ -66,6 +60,9 @@ public class UserController {
     @Resource
     private com.spingbootinit.service.AiModelSettingsService aiModelSettingsService;
 
+    @Resource
+    private com.spingbootinit.service.ImageModelSettingsService imageModelSettingsService;
+
     /**
      * 判断是否是管理员
      */
@@ -74,6 +71,12 @@ public class UserController {
 
     @Resource
     private UserStatusNotifyService userStatusNotifyService;
+
+    @Resource
+    private UserRoleManagementService userRoleManagementService;
+
+    @Resource
+    private UserOnlineService userOnlineService;
 
     /**
      * 用户注册。
@@ -207,6 +210,37 @@ public class UserController {
     }
 
     /**
+     * 查看他人公开资料（不含邮箱、手机等敏感信息）。
+     * 已登录用户可查看任意正常状态用户的公开主页。
+     */
+    @GetMapping("/public/{id}")
+    @Operation(summary = "查看用户公开资料", description = "返回公开信息，不含邮箱手机号")
+    public Result<UserPublicProfileVO> publicProfile(@PathVariable Long id) {
+        Long currentUserId = UserContext.getCurrentUserId();
+        if (currentUserId == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED.getCode(), "请先登录");
+        }
+        User user = userService.getById(id);
+        if (user == null) {
+            throw new BusinessException(ResultCode.NOT_FOUND.getCode(), "用户不存在");
+        }
+        UserPublicProfileVO vo = new UserPublicProfileVO();
+        BeanUtil.copyProperties(user, vo, "locationCodes", "website", "email", "phone");
+
+        String rawLocation = user.getLocationCodes();
+        if (StrUtil.isNotBlank(rawLocation) && JSONUtil.isTypeJSON(rawLocation)) {
+            vo.setLocationCodes(JSONUtil.toBean(rawLocation, Location.class));
+        }
+        String rawWebsite = user.getWebsite();
+        if (StrUtil.isNotBlank(rawWebsite) && JSONUtil.isTypeJSONArray(rawWebsite)) {
+            vo.setWebsite(JSONUtil.toList(JSONUtil.parseArray(rawWebsite), String.class));
+        } else {
+            vo.setWebsite(Collections.emptyList());
+        }
+        return Result.success(vo);
+    }
+
+    /**
      * 当前登录用户的账号状态（供前端轮询：管理员禁用/解禁后及时生效）。
      */
     @GetMapping("/session/status")
@@ -232,6 +266,20 @@ public class UserController {
             throw new BusinessException(ResultCode.UNAUTHORIZED.getCode(), "请先登录");
         }
         return userStatusNotifyService.subscribe(currentUserId);
+    }
+
+    /**
+     * 在线心跳：前端页面活跃期间定时调用，刷新在线状态 TTL。
+     */
+    @PostMapping("/session/heartbeat")
+    @Operation(summary = "在线心跳", description = "需登录；刷新在线状态，超过 TTL 未调用即视为离线")
+    public Result<Void> heartbeat() {
+        Long currentUserId = UserContext.getCurrentUserId();
+        if (currentUserId == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED.getCode(), "请先登录");
+        }
+        userOnlineService.markOnline(currentUserId);
+        return Result.success("ok", null);
     }
 
     /**
@@ -349,6 +397,7 @@ public class UserController {
         }
         userService.deleteMyAccount(userId, body);
         aiModelSettingsService.deleteAllForClosedAccount(userId);
+        imageModelSettingsService.deleteAllForClosedAccount(userId);
         return Result.success("账号已注销", null);
     }
 
@@ -370,14 +419,27 @@ public class UserController {
     public Result<UserAdminPageVO> adminPageUsers(
             @RequestParam(defaultValue = "1") long current,
             @RequestParam(defaultValue = "10") long size,
-            @RequestParam(required = false) String keyword) {
+            @RequestParam(required = false) String keyword,
+            @RequestParam(required = false) String role) {
         if (UserContext.getCurrentUserId() == null) {
             throw new BusinessException(ResultCode.UNAUTHORIZED.getCode(), "请先登录");
         }
         if (!isAdminRole.isAdminRoleString(UserContext.getCurrentRole())) {
             throw new BusinessException(ResultCode.FORBIDDEN.getCode(), "无权限");
         }
-        return Result.success("查询成功", userService.pageUsersForAdmin(current, size, keyword));
+        return Result.success("查询成功", userService.pageUsersForAdmin(current, size, keyword, role));
+    }
+
+    @PatchMapping("/admin/{userId}/role")
+    @Operation(summary = "管理员设置学生或老师角色", description = "仅管理员；不能修改管理员账号")
+    public Result<Void> adminSetUserRole(@PathVariable Long userId,
+                                         @Valid @RequestBody UserAdminSetRoleRequest body) {
+        Long operatorId = UserContext.getCurrentUserId();
+        if (operatorId == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED.getCode(), "请先登录");
+        }
+        userRoleManagementService.changeRole(operatorId, userId, body.getRole());
+        return Result.success("角色已更新", null);
     }
 
     /**

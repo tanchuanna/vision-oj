@@ -23,5 +23,5 @@ public class QuestionRunCaseVO {
     private String actualOutput;
 
     /** 与预期在规范化后是否一致 */
-    private boolean passed;
+    private Boolean passed;
 }

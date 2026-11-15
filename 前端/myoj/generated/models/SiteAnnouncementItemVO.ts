@@ -7,5 +7,7 @@ export type SiteAnnouncementItemVO = {
     title?: string;
     content?: string;
     publishedAt?: string;
+    publisherName?: string;
+    publisherRole?: string;
 };
 

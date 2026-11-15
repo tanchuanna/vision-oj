@@ -34,9 +34,21 @@ import java.util.regex.Pattern;
 public class AiModelSettingsService {
     private static final Pattern MODEL_ID = Pattern.compile("[A-Za-z0-9_./:-]{1,100}");
     private static final SecureRandom RANDOM = new SecureRandom();
-    private static final Map<String, Provider> PROVIDERS = Map.of(
-            "DASHSCOPE", new Provider("DASHSCOPE", "阿里云百炼", "https://dashscope.aliyuncs.com/compatible-mode/v1", List.of("qwen-plus", "qwen-turbo")),
-            "DEEPSEEK", new Provider("DEEPSEEK", "DeepSeek", "https://api.deepseek.com", List.of("deepseek-flash", "deepseek-v4-pro")));
+    private static final Map<String, Provider> PROVIDERS = Map.ofEntries(
+            Map.entry("DASHSCOPE", new Provider("DASHSCOPE", "阿里云百炼", "https://dashscope.aliyuncs.com/compatible-mode/v1", List.of("qwen-plus", "qwen-turbo", "qwen3-vl-plus"))),
+            Map.entry("DEEPSEEK", new Provider("DEEPSEEK", "DeepSeek", "https://api.deepseek.com", List.of("deepseek-flash", "deepseek-v4-pro"))),
+            Map.entry("SILICONFLOW", new Provider("SILICONFLOW", "硅基流动", "https://api.siliconflow.cn/v1", List.of("deepseek-ai/DeepSeek-V4-Flash", "Qwen/Qwen3-32B", "Pro/moonshotai/Kimi-K2.6"))),
+            Map.entry("VOLCENGINE", new Provider("VOLCENGINE", "火山方舟", "https://ark.cn-beijing.volces.com/api/v3", List.of("doubao-seed-2-1-pro-260915"))),
+            Map.entry("BAIDU_QIANFAN", new Provider("BAIDU_QIANFAN", "百度千帆", "https://qianfan.baidubce.com/v2", List.of("ernie-4.5-turbo-32k"))),
+            Map.entry("ZHIPU", new Provider("ZHIPU", "智谱开放平台", "https://open.bigmodel.cn/api/paas/v4", List.of("glm-4.5"))),
+            Map.entry("STEPFUN", new Provider("STEPFUN", "阶跃星辰", "https://api.stepfun.com/v1", List.of("step-3.7-flash"))),
+            Map.entry("MOONSHOT", new Provider("MOONSHOT", "Kimi 开放平台", "https://api.moonshot.cn/v1", List.of("kimi-k2.5"))),
+            Map.entry("TENCENT_TOKENHUB", new Provider("TENCENT_TOKENHUB", "腾讯云 TokenHub", "https://tokenhub.tencentmaas.com/v1",
+                    List.of("hy4", "hy3", "deepseek-v4.1-flash", "glm-5.3-flash", "kimi-k2.6", "minimax-m3", "mimo-v2.6-flash"))));
+    private static final Map<String, List<String>> VISION_MODELS = Map.of(
+            "DASHSCOPE", List.of("qwen3-vl-plus", "qwen3-vl-flash"),
+            "DEEPSEEK", List.of("deepseek-flash"),
+            "SILICONFLOW", List.of("Pro/moonshotai/Kimi-K2.6"));
 
     private final JdbcTemplate jdbcTemplate;
     private final BailianAssistProperties siteProperties;
@@ -50,13 +62,23 @@ public class AiModelSettingsService {
 
     public Map<String, Object> catalog() {
         List<Map<String, Object>> providers = new ArrayList<>();
-        for (String code : List.of("DASHSCOPE", "DEEPSEEK")) {
+        for (String code : List.of("DASHSCOPE", "DEEPSEEK", "MOONSHOT", "VOLCENGINE", "BAIDU_QIANFAN", "ZHIPU", "STEPFUN", "SILICONFLOW", "TENCENT_TOKENHUB")) {
             Provider p = PROVIDERS.get(code);
-            providers.add(Map.of("code", p.code(), "name", p.name(), "models", p.models()));
+            providers.add(Map.of("code", p.code(), "name", p.name(), "models", p.models(),
+                    "visionModels", visionModelsFor(code)));
         }
         return Map.of("siteDefaultAvailable", siteProperties.isEnabled() && StringUtils.hasText(siteProperties.getApiKey()),
                 "siteDefaultModel", siteProperties.getModel(),
                 "providers", providers);
+    }
+
+    public static List<String> visionModelsFor(String providerCode) {
+        return VISION_MODELS.getOrDefault(providerCode, List.of());
+    }
+
+    public static boolean supportsVision(ModelRoute route) {
+        String code = "SITE_DEFAULT".equals(route.providerCode()) ? "DASHSCOPE" : route.providerCode();
+        return visionModelsFor(code).contains(route.modelId());
     }
 
     public List<SavedConfig> list(long userId) {
@@ -139,13 +161,14 @@ public class AiModelSettingsService {
 
     static String connectionFailure(String providerCode, int status) {
         boolean deepSeek = "DEEPSEEK".equals(providerCode);
+        String providerName = PROVIDERS.containsKey(providerCode) ? PROVIDERS.get(providerCode).name() : "模型平台";
         return switch (status) {
             case 401 -> deepSeek
                     ? "DeepSeek 密钥认证失败（401）：请在 DeepSeek 平台创建新 API Key，保存新密钥后重试"
-                    : "百炼密钥认证失败（401）：请核对 API Key 与接口地域、密钥类型是否匹配";
+                    : providerName + "密钥认证失败（401）：请核对 API Key、接口地域和密钥类型";
             case 403 -> deepSeek
                     ? "DeepSeek 拒绝访问（403）：请检查账号状态与模型访问权限"
-                    : "百炼拒绝访问（403）：请检查服务开通状态和 API Key 的模型权限";
+                    : providerName + "拒绝访问（403）：请检查服务开通状态和 API Key 的模型权限";
             case 402 -> deepSeek ? "DeepSeek 账号余额不足（402）" : "模型平台额度不足（402）";
             case 429 -> "模型平台请求过于频繁（429），请稍后重试";
             case 400, 404, 422 -> "模型名称无效或当前账号不支持该模型（HTTP " + status + "）";
@@ -199,6 +222,14 @@ public class AiModelSettingsService {
         } catch (Exception e) {
             throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "加密 API Key 失败");
         }
+    }
+
+    String encryptImageCredential(long userId, String provider, String raw) {
+        return encrypt(userId, "IMAGE:" + provider, raw);
+    }
+
+    String decryptImageCredential(long userId, String provider, String encoded) {
+        return decrypt(userId, "IMAGE:" + provider, encoded);
     }
 
     private String decrypt(long userId, String provider, String encoded) {

@@ -17,4 +17,10 @@ public class SiteAnnouncementItemVO {
     private String content;
 
     private Date publishedAt;
+
+    /** 发布者昵称 */
+    private String publisherName;
+
+    /** 发布者角色：user / teacher / admin */
+    private String publisherRole;
 }

@@ -11,6 +11,8 @@ import com.spingbootinit.model.entity.Question;
 import com.spingbootinit.model.entity.QuestionSubmit;
 import com.spingbootinit.model.enums.QuestionSubmitStatusEnum;
 import com.spingbootinit.model.vo.questionsubmitvo.MySubmitItemVO;
+import com.spingbootinit.model.vo.questionsubmitvo.QuestionPerformanceVO;
+import com.spingbootinit.model.vo.questionsubmitvo.QuestionStatisticsVO;
 import com.spingbootinit.service.ContestService;
 import com.spingbootinit.service.QuestionService;
 import com.spingbootinit.service.QuestionSubmitService;
@@ -20,10 +22,13 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.util.Date;
+import java.util.List;
 import java.util.Objects;
 
 @Service
 public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper, QuestionSubmit> implements QuestionSubmitService {
+
+    private static final int STATISTICS_RANKING_LIMIT = 20;
 
     @Resource
     private QuestionService questionService;
@@ -34,6 +39,58 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
     @Resource
     @Lazy
     private JudgeTaskTriggerFactory judgeTaskTriggerFactory;
+
+    @Override
+    public QuestionStatisticsVO getQuestionStatistics(long questionId, Long currentUserId) {
+        QuestionStatisticsVO statistics = baseMapper.selectQuestionStatistics(questionId);
+        if (statistics == null) {
+            statistics = new QuestionStatisticsVO();
+        }
+        long total = valueOrZero(statistics.getTotalSubmissions());
+        long accepted = valueOrZero(statistics.getAcceptedSubmissions());
+        long acceptedUsers = valueOrZero(statistics.getAcceptedUsers());
+        statistics.setTotalSubmissions(total);
+        statistics.setAcceptedSubmissions(accepted);
+        statistics.setFailedSubmissions(Math.max(0L, total - accepted));
+        statistics.setAcceptedUsers(acceptedUsers);
+        statistics.setPassRate(total == 0 ? 0D : roundPercent(accepted, total));
+        statistics.setFastestRankings(nullToEmpty(baseMapper.selectFastestRanking(questionId, STATISTICS_RANKING_LIMIT)));
+        statistics.setMemoryRankings(nullToEmpty(baseMapper.selectMemoryRanking(questionId, STATISTICS_RANKING_LIMIT)));
+        statistics.setAcceptedByCurrentUser(false);
+
+        if (currentUserId == null || currentUserId <= 0 || acceptedUsers == 0) {
+            return statistics;
+        }
+        QuestionPerformanceVO mine = baseMapper.selectUserBestPerformance(questionId, currentUserId);
+        if (mine == null || (mine.getRuntimeMs() == null && mine.getMemoryKb() == null)) {
+            return statistics;
+        }
+        statistics.setAcceptedByCurrentUser(true);
+        if (mine.getRuntimeMs() != null) {
+            statistics.setBeatRuntimePercent(roundPercent(
+                    baseMapper.countUsersSlowerThanRuntime(questionId, mine.getRuntimeMs()), acceptedUsers));
+        }
+        if (mine.getMemoryKb() != null) {
+            statistics.setBeatMemoryPercent(roundPercent(
+                    baseMapper.countUsersUsingMoreMemory(questionId, mine.getMemoryKb()), acceptedUsers));
+        }
+        return statistics;
+    }
+
+    private long valueOrZero(Long value) {
+        return value == null ? 0L : value;
+    }
+
+    private double roundPercent(long numerator, long denominator) {
+        if (denominator <= 0) {
+            return 0D;
+        }
+        return Math.round(numerator * 10000D / denominator) / 100D;
+    }
+
+    private <T> List<T> nullToEmpty(List<T> values) {
+        return values == null ? List.of() : values;
+    }
 
     /**
      * 提交题目

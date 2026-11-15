@@ -127,6 +127,12 @@ public class GlobalExceptionHandler {
         return Result.error(ResultCode.INTERNAL_ERROR.getCode(), "系统繁忙，请稍后再试");
     }
 
+    /** SSE 连接到期时响应可能已提交，不能再写普通 JSON 错误体。 */
+    @ExceptionHandler(org.springframework.web.context.request.async.AsyncRequestTimeoutException.class)
+    public void handleAsyncRequestTimeout(HttpServletRequest request) {
+        log.debug("异步连接到期 uri={}", request.getRequestURI());
+    }
+
     @ExceptionHandler(org.springframework.web.servlet.resource.NoResourceFoundException.class)
     public Result<?> handleNoResourceFound(
             org.springframework.web.servlet.resource.NoResourceFoundException e,

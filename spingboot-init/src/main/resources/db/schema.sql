@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS `user` (
     `country` VARCHAR(64) DEFAULT NULL COMMENT '国家',
     `introduction` VARCHAR(1024) DEFAULT NULL COMMENT '个人介绍',
     `website` VARCHAR(255) DEFAULT NULL COMMENT '个人网站',
-    `user_role` VARCHAR(32) NOT NULL DEFAULT 'user' COMMENT 'user / admin',
+    `user_role` VARCHAR(32) NOT NULL DEFAULT 'user' COMMENT 'user(student) / teacher / admin',
     `status` TINYINT NOT NULL DEFAULT 1 COMMENT '0禁用 1正常',
     `ban_until` DATETIME DEFAULT NULL COMMENT '管理员禁用自动解禁时间',
     `ban_reason` VARCHAR(255) DEFAULT NULL COMMENT '封禁原因',
@@ -69,6 +69,23 @@ CREATE TABLE IF NOT EXISTS `user` (
 -- ---------------------------------------------------------------------------
 -- 签到历史（日历热力图）
 -- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `teacher_student_relation` (
+    `id` BIGINT NOT NULL COMMENT '主键',
+    `teacher_id` BIGINT NOT NULL COMMENT '教师用户 ID',
+    `student_id` BIGINT NOT NULL COMMENT '学生用户 ID',
+    `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1-有效 0-已解除',
+    `assigned_by` BIGINT NOT NULL COMMENT '分配操作的管理员 ID',
+    `assigned_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `unassigned_at` DATETIME NULL,
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `is_delete` TINYINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_teacher_student` (`teacher_id`, `student_id`),
+    KEY `idx_relation_teacher_active` (`teacher_id`, `status`, `is_delete`),
+    KEY `idx_relation_student_active` (`student_id`, `status`, `is_delete`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='教师学生分配关系';
+
 CREATE TABLE IF NOT EXISTS `user_check_in_log` (
     `id` BIGINT NOT NULL COMMENT '主键',
     `user_id` BIGINT NOT NULL COMMENT '用户 id',
@@ -116,6 +133,10 @@ CREATE TABLE IF NOT EXISTS `question_submit` (
     `language` VARCHAR(32) NOT NULL COMMENT '编程语言',
     `code` MEDIUMTEXT NOT NULL COMMENT '提交代码',
     `judge_info` JSON DEFAULT NULL COMMENT '判题详情',
+    `verdict` VARCHAR(32) GENERATED ALWAYS AS (IF(JSON_VALID(`judge_info`), JSON_UNQUOTE(JSON_EXTRACT(`judge_info`, '$.message')), NULL)) STORED COMMENT '判题结果生成列',
+    `runtime_ms` BIGINT GENERATED ALWAYS AS (IF(JSON_VALID(`judge_info`), CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(`judge_info`, '$.time')), 'null') AS UNSIGNED), NULL)) STORED COMMENT '运行耗时毫秒',
+    `memory_kb` BIGINT GENERATED ALWAYS AS (IF(JSON_VALID(`judge_info`), CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(`judge_info`, '$.memory')), 'null') AS UNSIGNED), NULL)) STORED COMMENT '内存消耗 KB',
+    `code_length` INT GENERATED ALWAYS AS (OCTET_LENGTH(`code`)) STORED COMMENT '代码字节数',
     `status` TINYINT NOT NULL DEFAULT 0 COMMENT '0待判 1判题中 2成功 3失败',
     `question_id` BIGINT NOT NULL,
     `user_id` BIGINT NOT NULL,
@@ -126,10 +147,67 @@ CREATE TABLE IF NOT EXISTS `question_submit` (
     PRIMARY KEY (`id`),
     KEY `idx_qs_question` (`question_id`, `is_delete`),
     KEY `idx_qs_user_time` (`user_id`, `create_time` DESC),
+    KEY `idx_qs_deleted_time` (`is_delete`, `create_time` DESC, `id` DESC),
     KEY `idx_qs_user_question` (`user_id`, `question_id`, `id`),
     KEY `idx_qs_status` (`status`),
-    KEY `idx_qs_contest` (`contest_id`, `user_id`)
+    KEY `idx_qs_contest` (`contest_id`, `user_id`),
+    KEY `idx_qs_fastest` (`question_id`, `is_delete`, `status`, `verdict`, `runtime_ms`, `user_id`),
+    KEY `idx_qs_memory` (`question_id`, `is_delete`, `status`, `verdict`, `memory_kb`, `user_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代码提交';
+
+-- ---------------------------------------------------------------------------
+-- 题解（完整内容仅对当题已 AC 用户开放）
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `question_solution` (
+    `id` BIGINT NOT NULL COMMENT '题解 id',
+    `question_id` BIGINT NOT NULL COMMENT '题目 id',
+    `user_id` BIGINT NOT NULL COMMENT '作者 id',
+    `title` VARCHAR(160) NOT NULL COMMENT '标题',
+    `summary` VARCHAR(500) NOT NULL COMMENT '列表摘要',
+    `hint_content` MEDIUMTEXT NOT NULL COMMENT '未通过用户可见的安全提示',
+    `content` MEDIUMTEXT NOT NULL COMMENT '完整 Markdown 题解',
+    `review_status` TINYINT NOT NULL DEFAULT 0 COMMENT '0草稿 1待审核 2已发布 3已驳回',
+    `review_reason` VARCHAR(500) DEFAULT NULL COMMENT '驳回原因',
+    `reviewed_by` BIGINT DEFAULT NULL COMMENT '审核管理员',
+    `reviewed_at` DATETIME DEFAULT NULL COMMENT '审核时间',
+    `is_official` TINYINT NOT NULL DEFAULT 0 COMMENT '0普通 1官方',
+    `view_count` INT NOT NULL DEFAULT 0,
+    `like_count` INT NOT NULL DEFAULT 0,
+    `comment_count` INT NOT NULL DEFAULT 0,
+    `published_at` DATETIME DEFAULT NULL,
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `is_delete` TINYINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_qs_question_author` (`question_id`, `user_id`),
+    KEY `idx_qs_public_list` (`question_id`, `review_status`, `is_official`, `create_time`),
+    KEY `idx_qs_review_queue` (`review_status`, `create_time`),
+    KEY `idx_qs_author` (`user_id`, `is_delete`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='题解';
+
+CREATE TABLE IF NOT EXISTS `question_solution_like` (
+    `id` BIGINT NOT NULL,
+    `solution_id` BIGINT NOT NULL,
+    `user_id` BIGINT NOT NULL,
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_qsl_solution_user` (`solution_id`, `user_id`),
+    KEY `idx_qsl_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='题解点赞';
+
+CREATE TABLE IF NOT EXISTS `question_solution_comment` (
+    `id` BIGINT NOT NULL,
+    `solution_id` BIGINT NOT NULL,
+    `user_id` BIGINT NOT NULL,
+    `parent_id` BIGINT DEFAULT NULL,
+    `content` VARCHAR(2000) NOT NULL,
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `is_delete` TINYINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`id`),
+    KEY `idx_qsc_thread` (`solution_id`, `parent_id`, `create_time`),
+    KEY `idx_qsc_user` (`user_id`, `is_delete`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='题解评论';
 
 -- ---------------------------------------------------------------------------
 -- 竞赛
@@ -283,6 +361,17 @@ CREATE TABLE IF NOT EXISTS `user_ai_provider_config` (
     PRIMARY KEY (`user_id`, `provider_code`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户个人大模型凭据（AES-GCM密文）';
 
+CREATE TABLE IF NOT EXISTS `user_ai_image_config` (
+    `user_id` BIGINT NOT NULL,
+    `provider_code` VARCHAR(20) NOT NULL,
+    `model_id` VARCHAR(100) NOT NULL,
+    `key_cipher` TEXT DEFAULT NULL COMMENT '独立图片 Key；NULL 时百炼可复用文字模型 Key',
+    `key_last4` VARCHAR(4) DEFAULT NULL,
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`user_id`, `provider_code`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户图片生成厂商配置（AES-GCM密文）';
+
 CREATE TABLE IF NOT EXISTS `ai_usage_log` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,
     `user_id` BIGINT NOT NULL,
@@ -379,8 +468,47 @@ CALL `mayue_add_column_if_missing`('question', 'generation_model',
     '`generation_model` VARCHAR(128) DEFAULT NULL COMMENT ''生图模型标识'' AFTER `generation_source`');
 CALL `mayue_add_column_if_missing`('question', 'count_tolerance',
     '`count_tolerance` INT NOT NULL DEFAULT 0 COMMENT ''目标计数单类允许误差'' AFTER `vision_model_key`');
+CALL `mayue_add_column_if_missing`('question_submit', 'verdict',
+    '`verdict` VARCHAR(32) GENERATED ALWAYS AS (IF(JSON_VALID(`judge_info`), JSON_UNQUOTE(JSON_EXTRACT(`judge_info`, ''$.message'')), NULL)) STORED COMMENT ''判题结果生成列'' AFTER `judge_info`');
+CALL `mayue_add_column_if_missing`('question_submit', 'runtime_ms',
+    '`runtime_ms` BIGINT GENERATED ALWAYS AS (IF(JSON_VALID(`judge_info`), CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(`judge_info`, ''$.time'')), ''null'') AS UNSIGNED), NULL)) STORED COMMENT ''运行耗时毫秒'' AFTER `verdict`');
+CALL `mayue_add_column_if_missing`('question_submit', 'memory_kb',
+    '`memory_kb` BIGINT GENERATED ALWAYS AS (IF(JSON_VALID(`judge_info`), CAST(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(`judge_info`, ''$.memory'')), ''null'') AS UNSIGNED), NULL)) STORED COMMENT ''内存消耗 KB'' AFTER `runtime_ms`');
+CALL `mayue_add_column_if_missing`('question_submit', 'code_length',
+    '`code_length` INT GENERATED ALWAYS AS (OCTET_LENGTH(`code`)) STORED COMMENT ''代码字节数'' AFTER `memory_kb`');
 
 DROP PROCEDURE IF EXISTS `mayue_add_column_if_missing`;
+
+DROP PROCEDURE IF EXISTS `mayue_add_index_if_missing`;
+DELIMITER $$
+CREATE PROCEDURE `mayue_add_index_if_missing`(
+    IN p_table VARCHAR(64),
+    IN p_index VARCHAR(64),
+    IN p_definition TEXT
+)
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = p_table
+          AND INDEX_NAME = p_index
+    ) THEN
+        SET @ddl = CONCAT('ALTER TABLE `', p_table, '` ADD INDEX `', p_index, '` ', p_definition);
+        PREPARE stmt FROM @ddl;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
+END$$
+DELIMITER ;
+
+CALL `mayue_add_index_if_missing`('question_submit', 'idx_qs_fastest',
+    '(`question_id`, `is_delete`, `status`, `verdict`, `runtime_ms`, `user_id`)');
+CALL `mayue_add_index_if_missing`('question_submit', 'idx_qs_memory',
+    '(`question_id`, `is_delete`, `status`, `verdict`, `memory_kb`, `user_id`)');
+CALL `mayue_add_index_if_missing`('question_submit', 'idx_qs_deleted_time',
+    '(`is_delete`, `create_time` DESC, `id` DESC)');
+
+DROP PROCEDURE IF EXISTS `mayue_add_index_if_missing`;
 
 -- ---------------------------------------------------------------------------
 -- 初始数据：管理员 admin / 123456

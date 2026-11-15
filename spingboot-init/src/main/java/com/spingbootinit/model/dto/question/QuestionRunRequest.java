@@ -25,5 +25,13 @@ public class QuestionRunRequest implements Serializable {
     @Size(max = 200_000, message = "代码过长")
     private String code;
 
+    /** SAMPLE（默认）运行公开样例；CUSTOM 仅运行一组用户输入。 */
+    @Pattern(regexp = "(?i)SAMPLE|CUSTOM", message = "运行模式仅支持 SAMPLE 或 CUSTOM")
+    private String mode;
+
+    /** 自定义标准输入允许为空，并严格保留空格与换行。 */
+    @Size(max = 50_000, message = "自定义输入不能超过50000个字符")
+    private String customInput;
+
     private static final long serialVersionUID = 1L;
 }

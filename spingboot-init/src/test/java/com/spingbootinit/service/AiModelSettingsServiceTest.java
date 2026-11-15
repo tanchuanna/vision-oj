@@ -46,6 +46,15 @@ class AiModelSettingsServiceTest {
     }
 
     @Test
+    void imageCredentialCannotBeReadByAnotherUserOrProvider() {
+        String cipher = settings.encryptImageCredential(7L, "VOLCENGINE", "image-secret-1234");
+        assertFalse(cipher.contains("image-secret-1234"));
+        assertEquals("image-secret-1234", settings.decryptImageCredential(7L, "VOLCENGINE", cipher));
+        assertThrows(BusinessException.class, () -> settings.decryptImageCredential(8L, "VOLCENGINE", cipher));
+        assertThrows(BusinessException.class, () -> settings.decryptImageCredential(7L, "BAIDU_QIANFAN", cipher));
+    }
+
+    @Test
     void providerUrlCannotComeFromUserInput() {
         assertThrows(BusinessException.class, () -> settings.resolve(7L, "http://127.0.0.1:8080", "qwen-plus"));
         verifyNoInteractions(jdbc);
@@ -66,5 +75,18 @@ class AiModelSettingsServiceTest {
         assertTrue(AiModelSettingsService.connectionFailure("DEEPSEEK", 403).contains("拒绝访问"));
         assertTrue(AiModelSettingsService.connectionFailure("DEEPSEEK", 402).contains("余额不足"));
         assertTrue(AiModelSettingsService.connectionFailure("DASHSCOPE", 403).contains("模型权限"));
+    }
+
+    @Test
+    void domesticAggregatorUsesFixedServerEndpointAndEncryptedPersonalKey() {
+        settings.save(7L, "SILICONFLOW", "deepseek-ai/DeepSeek-V4-Flash", "personal-secret-1234");
+        ArgumentCaptor<String> cipher = ArgumentCaptor.forClass(String.class);
+        verify(jdbc).update(startsWith("INSERT INTO user_ai_provider_config"), eq(7L), eq("SILICONFLOW"),
+                eq("deepseek-ai/DeepSeek-V4-Flash"), cipher.capture(), eq("1234"));
+        when(jdbc.query(startsWith("SELECT model_id"), any(RowMapper.class), eq(7L), eq("SILICONFLOW")))
+                .thenReturn(Collections.singletonList(new String[]{"deepseek-ai/DeepSeek-V4-Flash", cipher.getValue()}));
+        var route = settings.resolve(7L, "SILICONFLOW", null);
+        assertEquals("https://api.siliconflow.cn/v1", route.baseUrl());
+        assertEquals("personal-secret-1234", route.apiKey());
     }
 }

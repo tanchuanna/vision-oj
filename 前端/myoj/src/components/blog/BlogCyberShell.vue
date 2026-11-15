@@ -47,7 +47,9 @@ function bindMagnetic() {
 function unbindMagnetic() {
   const el = root.value
   if (!el) return
-  el.querySelectorAll<HTMLElement & { __magH?: (e: MouseEvent) => void; __magL?: () => void }>('.blog-magnetic').forEach((btn) => {
+  el.querySelectorAll<HTMLElement & { __magH?: (e: MouseEvent) => void; __magL?: () => void }>(
+    '.blog-magnetic',
+  ).forEach((btn) => {
     if (btn.__magH) btn.removeEventListener('mousemove', btn.__magH)
     if (btn.__magL) btn.removeEventListener('mouseleave', btn.__magL)
     delete btn.__magH
@@ -111,7 +113,16 @@ onBeforeUnmount(() => {
       <span class="blog-cyber__orb blog-cyber__orb--v" />
     </div>
     <div class="blog-cyber__particles" aria-hidden="true">
-      <span v-for="n in 56" :key="n" class="blog-cyber__dot" :style="{ '--d': `${(n * 7) % 23}s`, '--x': `${(n * 13) % 100}%`, '--y': `${(n * 17) % 100}%` }" />
+      <span
+        v-for="n in 56"
+        :key="n"
+        class="blog-cyber__dot"
+        :style="{
+          '--d': `${(n * 7) % 23}s`,
+          '--x': `${(n * 13) % 100}%`,
+          '--y': `${(n * 17) % 100}%`,
+        }"
+      />
     </div>
     <div class="blog-cyber__meteors" aria-hidden="true">
       <span class="blog-cyber__meteor blog-cyber__meteor--a" />
@@ -150,26 +161,35 @@ onBeforeUnmount(() => {
   overflow-x: clip;
   color: var(--cb-text);
   background:
-    radial-gradient(ellipse 130% 85% at 50% -28%, color-mix(in srgb, var(--cb-neon-a) 22%, transparent), transparent 56%),
-    radial-gradient(ellipse 85% 60% at 100% 18%, color-mix(in srgb, var(--cb-neon-c) 14%, transparent), transparent 52%),
+    radial-gradient(
+      ellipse 130% 85% at 50% -28%,
+      color-mix(in srgb, var(--cb-neon-a) 22%, transparent),
+      transparent 56%
+    ),
+    radial-gradient(
+      ellipse 85% 60% at 100% 18%,
+      color-mix(in srgb, var(--cb-neon-c) 14%, transparent),
+      transparent 52%
+    ),
     radial-gradient(ellipse 70% 55% at 0% 85%, rgba(79, 70, 229, 0.1), transparent 55%),
     radial-gradient(ellipse 50% 40% at 70% 100%, rgba(236, 72, 153, 0.06), transparent 50%),
     linear-gradient(180deg, #0a0e27 0%, var(--cb-ink-mid) 44%, #060818 100%);
 }
 
 html[data-theme='light'] .blog-cyber {
+  --cb-light-page:
+    radial-gradient(ellipse 75% 48% at 82% 0%, rgba(255, 130, 70, 0.22) 0%, transparent 58%),
+    radial-gradient(ellipse 55% 42% at 8% 100%, rgba(15, 118, 110, 0.14) 0%, transparent 52%),
+    radial-gradient(ellipse 50% 35% at 50% 120%, rgba(180, 140, 95, 0.08) 0%, transparent 45%),
+    linear-gradient(168deg, #ebe0d2 0%, #e3d5c4 38%, #d8c9b6 100%);
   --cb-text: #0f172a;
   --cb-muted: #334155;
   --cb-subtle: #526477;
-  --cb-glass: #f2fbf9;
+  --cb-glass: #ffffff;
   --cb-glass-edge: rgba(15, 118, 110, 0.22);
-  --cb-glow: rgba(14, 165, 233, 0.04);
+  --cb-glow: transparent;
   color: var(--cb-text);
-  background:
-    radial-gradient(ellipse 62% 44% at 0% 3%, rgba(20, 184, 166, 0.3), transparent 72%),
-    radial-gradient(ellipse 54% 43% at 100% 22%, rgba(99, 102, 241, 0.21), transparent 72%),
-    radial-gradient(ellipse 65% 48% at 48% 100%, rgba(14, 165, 233, 0.17), transparent 72%),
-    linear-gradient(150deg, #d8f1ed 0%, #e1eef9 50%, #dcece9 100%);
+  background: var(--cb-light-page);
 }
 
 .blog-cyber__noise {
@@ -492,20 +512,15 @@ html[data-theme='light'] .blog-cyber__stage {
 html[data-theme='light'] .blog-cyber__stage :deep(.panel) {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
-  background: linear-gradient(155deg, #f8fffd 0%, #edf8f5 100%) !important;
-  border: 1px solid rgba(15, 118, 110, 0.24) !important;
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.88) inset,
-    0 6px 18px rgba(15, 118, 110, 0.08),
-    0 18px 38px rgba(30, 64, 99, 0.1) !important;
+  background: #ffffff !important;
+  border: 1px solid rgba(15, 23, 42, 0.11) !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08) !important;
 }
 
 html[data-theme='light'] .blog-cyber__stage :deep(.blog-hero.panel) {
-  background:
-    radial-gradient(circle at 92% 12%, rgba(165, 180, 252, 0.3), transparent 39%),
-    linear-gradient(115deg, #0d766f 0%, #175f81 52%, #344997 100%) !important;
-  border-color: rgba(13, 89, 105, 0.5) !important;
-  box-shadow: 0 18px 38px rgba(18, 75, 102, 0.22) !important;
+  background: #176b6d !important;
+  border-color: #155e60 !important;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.14) !important;
 }
 
 html[data-theme='light'] .blog-cyber__stage :deep(.blog-hero.panel .blog-hero__title--cosmic) {
@@ -534,7 +549,7 @@ html[data-theme='light'] .blog-cyber__stage :deep(.blog-hero.panel .blog-hero__a
 }
 
 html[data-theme='light'] .blog-cyber__stage :deep(.blog-toolbar.panel) {
-  background: linear-gradient(120deg, #edf9f4 0%, #e7f3f7 100%) !important;
+  background: #ffffff !important;
 }
 
 /* —— 暗黑：正文区对比与继承色（压过子组件 scoped 的 --app-text） —— */
@@ -555,7 +570,9 @@ html[data-theme='dark'] .blog-cyber__stage :deep(.tbl__title) {
   color: var(--cb-text) !important;
 }
 
-html[data-theme='dark'] .blog-cyber__stage :deep(.blog-cards .blog-card.panel:hover .blog-card__title) {
+html[data-theme='dark']
+  .blog-cyber__stage
+  :deep(.blog-cards .blog-card.panel:hover .blog-card__title) {
   color: transparent !important;
   background: linear-gradient(
     100deg,
@@ -578,14 +595,20 @@ html[data-theme='dark'] .blog-cyber__stage :deep(.blog-cards .blog-card.panel:ho
 }
 
 @media (prefers-reduced-motion: reduce) {
-  html[data-theme='dark'] .blog-cyber__stage :deep(.blog-cards .blog-card.panel:hover .blog-card__title),
-  html[data-theme='light'] .blog-cyber__stage :deep(.blog-cards .blog-card.panel:hover .blog-card__title) {
+  html[data-theme='dark']
+    .blog-cyber__stage
+    :deep(.blog-cards .blog-card.panel:hover .blog-card__title),
+  html[data-theme='light']
+    .blog-cyber__stage
+    :deep(.blog-cards .blog-card.panel:hover .blog-card__title) {
     animation: none !important;
     background-position: 0 0 !important;
   }
 }
 
-html[data-theme='light'] .blog-cyber__stage :deep(.blog-cards .blog-card.panel:hover .blog-card__title) {
+html[data-theme='light']
+  .blog-cyber__stage
+  :deep(.blog-cards .blog-card.panel:hover .blog-card__title) {
   color: transparent !important;
   background: linear-gradient(
     100deg,
@@ -670,13 +693,7 @@ html[data-theme='light'] .blog-cyber__stage :deep(.blog-card.panel:hover) {
 
 .blog-cyber__stage :deep(.blog-hero__title--cosmic) {
   font-family:
-    'Syne',
-    'Plus Jakarta Sans',
-    'Noto Sans SC',
-    'DM Sans',
-    ui-sans-serif,
-    system-ui,
-    sans-serif !important;
+    'Syne', 'Plus Jakarta Sans', 'Noto Sans SC', 'DM Sans', ui-sans-serif, system-ui, sans-serif !important;
   font-weight: 800 !important;
   letter-spacing: -0.03em !important;
   line-height: 1.12 !important;
@@ -701,13 +718,7 @@ html[data-theme='light'] .blog-cyber__stage :deep(.blog-card.panel:hover) {
 .blog-cyber__stage :deep(.blog-read__title),
 .blog-cyber__stage :deep(.blog-compose__title),
 .blog-cyber__stage :deep(.blog-mine__title) {
-  font-family:
-    'Plus Jakarta Sans',
-    'Noto Sans SC',
-    'DM Sans',
-    ui-sans-serif,
-    system-ui,
-    sans-serif;
+  font-family: 'Plus Jakarta Sans', 'Noto Sans SC', 'DM Sans', ui-sans-serif, system-ui, sans-serif;
   font-weight: 800;
   letter-spacing: -0.028em;
   text-wrap: balance;
@@ -756,7 +767,9 @@ html[data-theme='dark'] .blog-cyber__stage :deep(.blog-mine__title) {
 
 @media (prefers-reduced-motion: reduce) {
   html[data-theme='dark'] .blog-cyber__stage :deep(.blog-hero__title--cosmic),
-  html[data-theme='dark'] .blog-cyber__stage :deep(.blog-hero__title:not(.blog-hero__title--cosmic)),
+  html[data-theme='dark']
+    .blog-cyber__stage
+    :deep(.blog-hero__title:not(.blog-hero__title--cosmic)),
   html[data-theme='dark'] .blog-cyber__stage :deep(.blog-read__title),
   html[data-theme='dark'] .blog-cyber__stage :deep(.blog-compose__title),
   html[data-theme='dark'] .blog-cyber__stage :deep(.blog-mine__title) {
@@ -948,10 +961,9 @@ html[data-theme='light'] .blog-cyber__stage :deep(.blog-toolbar-host .arco-input
 
 html[data-theme='light'] .blog-cyber__stage :deep(.chip-btn--primary),
 html[data-theme='light'] .blog-cyber__stage :deep(.pill--primary) {
-  box-shadow:
-    0 1px 2px rgba(15, 23, 42, 0.06),
-    0 4px 14px rgba(79, 70, 229, 0.2) !important;
-  border: 1px solid rgba(67, 56, 202, 0.32) !important;
+  background: #0f766e !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.12) !important;
+  border: 1px solid #0f766e !important;
 }
 
 .blog-cyber__stage :deep(.chip-btn--primary:hover),
@@ -965,9 +977,8 @@ html[data-theme='light'] .blog-cyber__stage :deep(.pill--primary) {
 html[data-theme='light'] .blog-cyber__stage :deep(.chip-btn--primary:hover),
 html[data-theme='light'] .blog-cyber__stage :deep(.pill--primary:hover) {
   filter: none;
-  box-shadow:
-    0 1px 3px rgba(15, 23, 42, 0.08),
-    0 6px 18px rgba(79, 70, 229, 0.22) !important;
+  background: #115e59 !important;
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.14) !important;
 }
 
 .blog-cyber__stage :deep(.chip-btn--neon) {
@@ -991,7 +1002,9 @@ html[data-theme='light'] .blog-cyber__stage :deep(.pill--primary:hover) {
   z-index: -1;
   pointer-events: none;
   transform: scale(0.6);
-  transition: opacity 0.35s ease, transform 0.35s ease;
+  transition:
+    opacity 0.35s ease,
+    transform 0.35s ease;
 }
 
 .blog-cyber__stage :deep(.chip-btn--neon:hover::after) {
@@ -1105,8 +1118,12 @@ html[data-theme='light'] .blog-cyber__stage :deep(.arco-textarea-wrapper) {
     border-color 0.22s ease;
 }
 
-html[data-theme='dark'] .blog-cyber__stage :deep(.blog-toolbar-host .arco-input-wrapper:focus-within),
-html[data-theme='dark'] .blog-cyber__stage :deep(.blog-toolbar-host .arco-input-wrapper.arco-input-focus) {
+html[data-theme='dark']
+  .blog-cyber__stage
+  :deep(.blog-toolbar-host .arco-input-wrapper:focus-within),
+html[data-theme='dark']
+  .blog-cyber__stage
+  :deep(.blog-toolbar-host .arco-input-wrapper.arco-input-focus) {
   transform: scale(1.02);
   border-color: color-mix(in srgb, #ec4899 40%, rgba(129, 140, 248, 0.65)) !important;
   box-shadow:
@@ -1114,8 +1131,12 @@ html[data-theme='dark'] .blog-cyber__stage :deep(.blog-toolbar-host .arco-input-
     0 0 40px rgba(79, 70, 229, 0.32) !important;
 }
 
-html[data-theme='light'] .blog-cyber__stage :deep(.blog-toolbar-host .arco-input-wrapper:focus-within),
-html[data-theme='light'] .blog-cyber__stage :deep(.blog-toolbar-host .arco-input-wrapper.arco-input-focus) {
+html[data-theme='light']
+  .blog-cyber__stage
+  :deep(.blog-toolbar-host .arco-input-wrapper:focus-within),
+html[data-theme='light']
+  .blog-cyber__stage
+  :deep(.blog-toolbar-host .arco-input-wrapper.arco-input-focus) {
   transform: scale(1.012);
   border-color: rgba(14, 116, 144, 0.38) !important;
   box-shadow:
@@ -1141,9 +1162,13 @@ html[data-theme='dark'] .blog-cyber__stage :deep(.blog-compose .arco-textarea-wr
 }
 
 html[data-theme='dark'] .blog-cyber__stage :deep(.blog-compose .arco-input-wrapper:focus-within),
-html[data-theme='dark'] .blog-cyber__stage :deep(.blog-compose .arco-input-wrapper.arco-input-focus),
+html[data-theme='dark']
+  .blog-cyber__stage
+  :deep(.blog-compose .arco-input-wrapper.arco-input-focus),
 html[data-theme='dark'] .blog-cyber__stage :deep(.blog-compose .arco-textarea-wrapper:focus-within),
-html[data-theme='dark'] .blog-cyber__stage :deep(.blog-compose .arco-textarea-wrapper.arco-textarea-focus) {
+html[data-theme='dark']
+  .blog-cyber__stage
+  :deep(.blog-compose .arco-textarea-wrapper.arco-textarea-focus) {
   border-color: rgba(94, 231, 255, 0.48) !important;
   box-shadow:
     0 0 0 1px rgba(94, 231, 255, 0.1),

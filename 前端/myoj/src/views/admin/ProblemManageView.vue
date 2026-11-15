@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
-import { OpenAPI, Service } from '@generated'
 import type { QuestionQueryRequest } from '@generated'
 import { useRouter } from 'vue-router'
 import { getBackendErrorMessage } from '@/api/httpError'
@@ -9,13 +8,14 @@ import { isResultSuccess } from '@/api/result'
 import { mapApiError } from '@/api/mapApiError'
 import { AUTH_STORAGE_KEY } from '@/config/auth-storage'
 import {
+  difficultyFromTags,
+  knowledgeFromTags,
   PROBLEM_DIFFICULTIES,
   PROBLEM_KNOWLEDGE_TAGS,
   PROBLEM_TYPE_OPTIONS,
-  difficultyFromTags,
-  knowledgeFromTags,
   problemTypeLabel,
 } from '@/config/problemTaxonomy'
+import { deleteManagedQuestions, pageManagedQuestions } from '@/api/questionManage'
 
 type QuestionRow = {
   id: string
@@ -57,7 +57,9 @@ const activeFilterCount = computed(() => {
   if (queryKnowledge.value) count += 1
   return count
 })
-const allSelected = computed(() => rows.value.length > 0 && selectedIds.value.length === rows.value.length)
+const allSelected = computed(
+  () => rows.value.length > 0 && selectedIds.value.length === rows.value.length,
+)
 const hasSelection = computed(() => selectedIds.value.length > 0)
 
 function safeJsonParse<T>(raw: string | null, fallback: T): T {
@@ -83,9 +85,9 @@ function buildQueryPayload(): QuestionQueryRequest {
   if (queryUserNickname.value.trim()) payload.userNickname = queryUserNickname.value.trim()
   if (queryType.value) payload.questionType = queryType.value
   const selectedTags = queryTags.value
-      .split(',')
-      .map((t) => t.trim())
-      .filter(Boolean)
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean)
   if (queryDifficulty.value) selectedTags.push(queryDifficulty.value)
   if (queryKnowledge.value) selectedTags.push(queryKnowledge.value)
   if (selectedTags.length) payload.tags = [...new Set(selectedTags)]
@@ -95,14 +97,14 @@ function buildQueryPayload(): QuestionQueryRequest {
 async function fetchList() {
   loading.value = true
   try {
-    const data = await Service.adminPageQuestions(buildQueryPayload())
+    const data = await pageManagedQuestions(buildQueryPayload())
     if (!isResultSuccess(data.code)) {
       Message.error(data.message || '查询题目失败')
       return
     }
     const page = data.data
     rows.value =
-      page?.records?.map((r) => ({
+      page?.records?.map((r: Partial<QuestionRow>) => ({
         id: String(r.id ?? ''),
         title: r.title ?? '',
         questionType: r.questionType,
@@ -138,13 +140,13 @@ function toggleRowSelection(id: string, checked: boolean) {
 }
 
 function goEdit(item: QuestionRow) {
-  router.push({ name: 'admin-problem-edit', params: { id: item.id } })
+  router.push({ name: 'manage-problem-edit', params: { id: item.id } })
 }
 
 async function requestDelete(ids: string[], tip: string) {
   deleting.value = true
   try {
-    const data = await Service.adminBatchDeleteQuestions({
+    const data = await deleteManagedQuestions({
       ids,
     })
     if (!isResultSuccess(data.code)) {
@@ -246,7 +248,7 @@ onMounted(fetchList)
           type="primary"
           size="large"
           class="hero-btn hero-btn--primary"
-          @click="router.push({ name: 'admin-problem-new' })"
+          @click="router.push({ name: 'manage-problem-new' })"
         >
           新增题目
         </a-button>
@@ -280,19 +282,28 @@ onMounted(fetchList)
           <label>
             <span>题型</span>
             <a-select v-model="queryType" placeholder="全部题型" allow-clear>
-              <a-option v-for="option in PROBLEM_TYPE_OPTIONS.slice(1)" :key="option.value" :value="option.value">{{ option.label }}</a-option>
+              <a-option
+                v-for="option in PROBLEM_TYPE_OPTIONS.slice(1)"
+                :key="option.value"
+                :value="option.value"
+                >{{ option.label }}</a-option
+              >
             </a-select>
           </label>
           <label>
             <span>难度</span>
             <a-select v-model="queryDifficulty" placeholder="全部难度" allow-clear>
-              <a-option v-for="option in PROBLEM_DIFFICULTIES" :key="option" :value="option">{{ option }}</a-option>
+              <a-option v-for="option in PROBLEM_DIFFICULTIES" :key="option" :value="option">{{
+                option
+              }}</a-option>
             </a-select>
           </label>
           <label>
             <span>知识点</span>
             <a-select v-model="queryKnowledge" placeholder="全部知识点" allow-clear allow-search>
-              <a-option v-for="option in PROBLEM_KNOWLEDGE_TAGS" :key="option" :value="option">{{ option }}</a-option>
+              <a-option v-for="option in PROBLEM_KNOWLEDGE_TAGS" :key="option" :value="option">{{
+                option
+              }}</a-option>
             </a-select>
           </label>
         </div>
@@ -300,7 +311,13 @@ onMounted(fetchList)
           <a-input v-model="queryTitle" allow-clear placeholder="按标题搜索" />
           <a-input v-model="queryTags" allow-clear placeholder="标签，逗号分隔，如：数组,图论" />
           <a-input v-model="queryUserNickname" allow-clear placeholder="出题人昵称" />
-          <a-button type="primary" class="query-btn query-btn--primary" :loading="loading" @click="onSearch">查询</a-button>
+          <a-button
+            type="primary"
+            class="query-btn query-btn--primary"
+            :loading="loading"
+            @click="onSearch"
+            >查询</a-button
+          >
           <a-button class="query-btn query-btn--ghost" @click="onReset">重置</a-button>
         </div>
         <div class="filter-sub">
@@ -310,7 +327,12 @@ onMounted(fetchList)
             <span class="meta-pill">总计 {{ total }} 条</span>
           </div>
           <div class="filter-actions">
-            <a-button class="query-btn query-btn--ghost" :disabled="!hasSelection" @click="selectedIds = []">清空选择</a-button>
+            <a-button
+              class="query-btn query-btn--ghost"
+              :disabled="!hasSelection"
+              @click="selectedIds = []"
+              >清空选择</a-button
+            >
             <a-button
               status="danger"
               class="query-btn hero-btn--danger"
@@ -331,7 +353,11 @@ onMounted(fetchList)
               <th>序号</th>
               <th>
                 <label class="check-wrap">
-                  <input type="checkbox" :checked="allSelected" @change="onToggleSelectAll(($event.target as HTMLInputElement).checked)" />
+                  <input
+                    type="checkbox"
+                    :checked="allSelected"
+                    @change="onToggleSelectAll(($event.target as HTMLInputElement).checked)"
+                  />
                   <span>全选</span>
                 </label>
               </th>
@@ -363,12 +389,38 @@ onMounted(fetchList)
                 />
               </td>
               <td>{{ item.title }}</td>
-              <td><span class="type-badge" :class="{ 'type-badge--vision': item.questionType?.startsWith('IMAGE_') }">{{ problemTypeLabel(item.questionType) }}</span></td>
-              <td><span class="difficulty-badge" :class="`difficulty-badge--${difficultyFromTags(item.tags)}`">{{ difficultyFromTags(item.tags) }}</span></td>
+              <td>
+                <span
+                  class="type-badge"
+                  :class="{ 'type-badge--vision': item.questionType?.startsWith('IMAGE_') }"
+                  >{{ problemTypeLabel(item.questionType) }}</span
+                >
+              </td>
+              <td>
+                <span
+                  class="difficulty-badge"
+                  :class="`difficulty-badge--${difficultyFromTags(item.tags)}`"
+                  >{{ difficultyFromTags(item.tags) }}</span
+                >
+              </td>
               <td class="cell-muted">
                 <div class="tag-cloud">
-                  <span v-for="tag in knowledgeFromTags(item.tags)" :key="tag" class="knowledge-tag">{{ tag }}</span>
-                  <span v-for="tag in (item.tags || []).filter((value) => !PROBLEM_DIFFICULTIES.includes(value as never) && !PROBLEM_KNOWLEDGE_TAGS.includes(value as never))" :key="`custom-${tag}`" class="custom-tag">{{ tag }}</span>
+                  <span
+                    v-for="tag in knowledgeFromTags(item.tags)"
+                    :key="tag"
+                    class="knowledge-tag"
+                    >{{ tag }}</span
+                  >
+                  <span
+                    v-for="tag in (item.tags || []).filter(
+                      (value) =>
+                        !PROBLEM_DIFFICULTIES.includes(value as never) &&
+                        !PROBLEM_KNOWLEDGE_TAGS.includes(value as never),
+                    )"
+                    :key="`custom-${tag}`"
+                    class="custom-tag"
+                    >{{ tag }}</span
+                  >
                   <span v-if="!(item.tags || []).length">-</span>
                 </div>
               </td>
@@ -378,8 +430,16 @@ onMounted(fetchList)
               <td class="cell-muted">{{ formatDateTime(item.updateTime) }}</td>
               <td class="op-cell">
                 <a-space>
-                  <a-button size="mini" class="row-btn row-btn--edit" @click="goEdit(item)">编辑</a-button>
-                  <a-button size="mini" status="danger" class="row-btn row-btn--delete" @click="onDeleteOne(item)">删除</a-button>
+                  <a-button size="mini" class="row-btn row-btn--edit" @click="goEdit(item)"
+                    >编辑</a-button
+                  >
+                  <a-button
+                    size="mini"
+                    status="danger"
+                    class="row-btn row-btn--delete"
+                    @click="onDeleteOne(item)"
+                    >删除</a-button
+                  >
                 </a-space>
               </td>
             </tr>
@@ -388,9 +448,13 @@ onMounted(fetchList)
       </div>
 
       <div class="pager-row">
-        <a-button class="pager-btn" :disabled="current <= 1 || loading" @click="onPrevPage">上一页</a-button>
+        <a-button class="pager-btn" :disabled="current <= 1 || loading" @click="onPrevPage"
+          >上一页</a-button
+        >
         <span>第 {{ current }} / {{ totalPages }} 页</span>
-        <a-button class="pager-btn" :disabled="current >= totalPages || loading" @click="onNextPage">下一页</a-button>
+        <a-button class="pager-btn" :disabled="current >= totalPages || loading" @click="onNextPage"
+          >下一页</a-button
+        >
       </div>
     </section>
   </div>
@@ -423,7 +487,11 @@ onMounted(fetchList)
   height: 280px;
   top: 6px;
   left: -64px;
-  background: radial-gradient(circle, color-mix(in srgb, var(--app-accent) 70%, transparent), transparent 72%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--app-accent) 70%, transparent),
+    transparent 72%
+  );
 }
 
 .admin-page::after {
@@ -431,14 +499,21 @@ onMounted(fetchList)
   height: 320px;
   right: -70px;
   top: 180px;
-  background: radial-gradient(circle, color-mix(in srgb, var(--app-success) 62%, transparent), transparent 74%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--app-success) 62%, transparent),
+    transparent 74%
+  );
   animation-delay: -2.4s;
 }
 
 .panel {
   border: 1px solid var(--app-border);
-  background:
-    linear-gradient(145deg, color-mix(in srgb, var(--app-surface) 94%, #ffffff 6%), var(--app-surface));
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--app-surface) 94%, #ffffff 6%),
+    var(--app-surface)
+  );
   box-shadow: var(--app-card-shadow);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
@@ -611,15 +686,56 @@ onMounted(fetchList)
   white-space: nowrap;
 }
 
-.type-badge { padding: 6px 10px; color: #2563eb; background: rgba(59, 130, 246, .1); border: 1px solid rgba(59, 130, 246, .22); font-size: 12px; font-weight: 700; }
-.type-badge--vision { color: #7c3aed; background: rgba(139, 92, 246, .11); border-color: rgba(139, 92, 246, .24); }
-.difficulty-badge { padding: 5px 9px; font-size: 12px; font-weight: 700; color: var(--app-text-muted); background: var(--app-hover); }
-.difficulty-badge--入门, .difficulty-badge--简单 { color: #047857; background: rgba(16, 185, 129, .1); }
-.difficulty-badge--中等 { color: #b45309; background: rgba(245, 158, 11, .12); }
-.difficulty-badge--困难 { color: #be123c; background: rgba(244, 63, 94, .11); }
-.tag-cloud { display: flex; flex-wrap: wrap; gap: 6px; min-width: 180px; }
-.knowledge-tag, .custom-tag { padding: 4px 8px; font-size: 11px; border: 1px solid var(--app-border); background: color-mix(in srgb, var(--app-accent) 7%, var(--app-surface)); }
-.custom-tag { border-style: dashed; color: var(--app-text-subtle); }
+.type-badge {
+  padding: 6px 10px;
+  color: #2563eb;
+  background: rgba(59, 130, 246, 0.1);
+  border: 1px solid rgba(59, 130, 246, 0.22);
+  font-size: 12px;
+  font-weight: 700;
+}
+.type-badge--vision {
+  color: #7c3aed;
+  background: rgba(139, 92, 246, 0.11);
+  border-color: rgba(139, 92, 246, 0.24);
+}
+.difficulty-badge {
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--app-text-muted);
+  background: var(--app-hover);
+}
+.difficulty-badge--入门,
+.difficulty-badge--简单 {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.1);
+}
+.difficulty-badge--中等 {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.12);
+}
+.difficulty-badge--困难 {
+  color: #be123c;
+  background: rgba(244, 63, 94, 0.11);
+}
+.tag-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 180px;
+}
+.knowledge-tag,
+.custom-tag {
+  padding: 4px 8px;
+  font-size: 11px;
+  border: 1px solid var(--app-border);
+  background: color-mix(in srgb, var(--app-accent) 7%, var(--app-surface));
+}
+.custom-tag {
+  border-style: dashed;
+  color: var(--app-text-subtle);
+}
 
 .filter-main {
   display: grid;
@@ -677,7 +793,9 @@ onMounted(fetchList)
 }
 
 .user-table tbody tr {
-  transition: background 0.22s ease, transform 0.22s ease;
+  transition:
+    background 0.22s ease,
+    transform 0.22s ease;
 }
 
 .user-table tbody tr:hover {
@@ -752,7 +870,10 @@ onMounted(fetchList)
 :deep(.arco-input-wrapper) {
   background: color-mix(in srgb, var(--app-surface) 86%, #ffffff 14%);
   border-color: var(--app-border);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    transform 0.2s ease;
 }
 
 :deep(.arco-input-wrapper:hover) {
@@ -768,7 +889,11 @@ onMounted(fetchList)
 :deep(.arco-btn) {
   position: relative;
   overflow: hidden;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease,
+    background 0.2s ease;
 }
 
 :deep(.arco-btn:hover) {
@@ -902,7 +1027,9 @@ onMounted(fetchList)
     grid-template-columns: 1fr 1fr;
   }
 
-  .classification-filter { grid-template-columns: 1fr; }
+  .classification-filter {
+    grid-template-columns: 1fr;
+  }
 
   .filter-sub {
     flex-direction: column;

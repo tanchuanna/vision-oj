@@ -107,6 +107,7 @@ public class ExampleCodeSandbox implements CodeSandbox {
         JsonNode judgeInfoNode = root.get("judgeInfo");
         if (judgeInfoNode != null && !judgeInfoNode.isNull()) {
             judgeInfo.setMessage(normalizeJudgeMessage(readText(judgeInfoNode, "message"), readText(root, "resultType")));
+            judgeInfo.setDetail(readText(judgeInfoNode, "detail"));
             judgeInfo.setTime(readLong(judgeInfoNode, "time"));
             judgeInfo.setMemory(readLong(judgeInfoNode, "memory"));
             return judgeInfo;

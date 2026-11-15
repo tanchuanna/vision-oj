@@ -4,6 +4,8 @@
 /* eslint-disable */
 export type UserSessionStatusVO = {
     userId?: string;
+    userRole?: string;
+    permissions?: Array<string>;
     status?: number;
     banType?: string;
     banReason?: string;

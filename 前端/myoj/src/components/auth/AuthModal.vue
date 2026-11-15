@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { ref, watch, onBeforeUnmount, computed, nextTick, inject } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import axios from 'axios'
 import { ApiError, OpenAPI, Service } from '@generated'
 import { isResultSuccess } from '@/api/result'
 import { getBackendErrorMessage } from '@/api/httpError'
 import {
+  validateOptionalEmail,
   validateRegisterPassword,
   validateRegisterUsername,
-  validateOptionalEmail,
 } from '@/utils/authValidation'
 import { useAuthStore } from '@/stores/auth'
 import router from '@/router'
@@ -41,6 +41,9 @@ const recoveryForm = ref({ email: '', code: '', newPassword: '', confirmPassword
 const sendingRecoveryCode = ref(false)
 const resettingPassword = ref(false)
 const recoveryCountdown = ref(0)
+const recoveryRequestNotice = ref('')
+const RECOVERY_REQUEST_NOTICE =
+  '请求已受理。只有已绑定账号的邮箱才会收到验证码；若几分钟内未收到，请确认邮箱填写正确并检查垃圾邮件。'
 let recoveryTimer: ReturnType<typeof setInterval> | null = null
 
 function stopRecoveryTimer() {
@@ -50,7 +53,13 @@ function stopRecoveryTimer() {
 }
 
 function openRecovery() {
-  recoveryForm.value = { email: registerForm.value.email, code: '', newPassword: '', confirmPassword: '' }
+  recoveryForm.value = {
+    email: registerForm.value.email,
+    code: '',
+    newPassword: '',
+    confirmPassword: '',
+  }
+  recoveryRequestNotice.value = ''
   tab.value = 'recover'
 }
 
@@ -68,13 +77,15 @@ async function sendRecoveryCode() {
       { email },
     )
     if (!isResultSuccess(data.code)) throw new Error(data.message || '发送失败')
-    Message.success(data.message || '如果邮箱已绑定账号，验证码将发送到该邮箱')
+    recoveryRequestNotice.value = RECOVERY_REQUEST_NOTICE
+    Message.info('请求已受理，请留意邮箱并查看页面说明')
     recoveryCountdown.value = 60
     recoveryTimer = setInterval(() => {
       recoveryCountdown.value--
       if (recoveryCountdown.value <= 0) stopRecoveryTimer()
     }, 1000)
   } catch (e) {
+    recoveryRequestNotice.value = ''
     Message.error(mapError(e, '发送失败，请稍后再试'))
   } finally {
     sendingRecoveryCode.value = false
@@ -83,7 +94,8 @@ async function sendRecoveryCode() {
 
 async function resetForgottenPassword() {
   const { email, code, newPassword, confirmPassword } = recoveryForm.value
-  if (!email.trim() || validateOptionalEmail(email)) return void Message.warning('请填写正确的注册邮箱')
+  if (!email.trim() || validateOptionalEmail(email))
+    return void Message.warning('请填写正确的注册邮箱')
   if (!/^\d{6}$/.test(code.trim())) return void Message.warning('请输入邮件中的6位验证码')
   const passwordError = validateRegisterPassword(newPassword)
   if (passwordError) return void Message.warning(passwordError)
@@ -133,12 +145,20 @@ const slideTrackRef = ref<HTMLElement | null>(null)
 const slideDragging = ref(false)
 
 const tabHint = computed(() =>
-  tab.value === 'login' ? '欢迎回到码跃 OJ，继续你的刷题之旅' : tab.value === 'recover' ? '找回密码，重新进入码跃' : '几分钟即可加入社区与比赛',
+  tab.value === 'login'
+    ? '欢迎回到码跃 OJ，继续你的刷题之旅'
+    : tab.value === 'recover'
+      ? '找回密码，重新进入码跃'
+      : '几分钟即可加入社区与比赛',
 )
 
 /** 登录 / 注册面板下方一句引导，减少误操作 */
 const panelLead = computed(() =>
-  tab.value === 'login' ? '先滑块验证，再填写账号与图形码' : tab.value === 'recover' ? '使用注册时绑定的邮箱接收验证码，设置新密码' : '仅用于创建账号，注册后请用同一用户名登录',
+  tab.value === 'login'
+    ? '先滑块验证，再填写账号与图形码'
+    : tab.value === 'recover'
+      ? '使用注册时绑定的邮箱接收验证码，设置新密码'
+      : '仅用于创建账号，注册后请用同一用户名登录',
 )
 
 function revokeCaptcha() {
@@ -271,7 +291,8 @@ watch(
       void nextTick(() => {
         resetSlideCaptcha()
         const reduce =
-          typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+          typeof window !== 'undefined' &&
+          window.matchMedia('(prefers-reduced-motion: reduce)').matches
         if (reduce) {
           contentReveal.value = true
           return
@@ -477,338 +498,430 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="auth-body-block auth-body-block--panel">
-        <Transition name="auth-panel" mode="out-in">
-          <div v-if="tab === 'login'" key="login" class="auth-panel">
-            <a-form layout="vertical" class="auth-form">
-              <a-form-item label="用户名 / QQ 邮箱" hide-asterisk class="auth-field">
-                <a-input
-                  v-model="loginForm.username"
-                  allow-clear
-                  size="large"
-                  class="auth-input"
-                  placeholder="用户名或注册时绑定的邮箱"
-                  autocomplete="username"
-                >
-                  <template #prefix>
-                    <span class="input-ico" aria-hidden="true">
-                      <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
-                        <circle cx="12" cy="8.5" r="3.25" fill="none" stroke="currentColor" stroke-width="1.75" />
-                        <path
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="1.75"
-                          stroke-linecap="round"
-                          d="M6.5 19.25v-.75a4.5 4.5 0 0 1 4.5-4.5h2a4.5 4.5 0 0 1 4.5 4.5v.75"
-                        />
-                      </svg>
-                    </span>
-                  </template>
-                </a-input>
-              </a-form-item>
-              <a-form-item label="密码" hide-asterisk class="auth-field">
-                <a-input-password v-model="loginForm.password" size="large" class="auth-input" placeholder="密码">
-                  <template #prefix>
-                    <span class="input-ico" aria-hidden="true">
-                      <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="1.75"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          d="M8 11V8a4 4 0 0 1 8 0v3"
-                        />
-                        <rect
-                          x="5"
-                          y="11"
-                          width="14"
-                          height="10"
-                          rx="2.25"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="1.75"
-                        />
-                      </svg>
-                    </span>
-                  </template>
-                </a-input-password>
-              </a-form-item>
-              <div class="auth-recovery-link-row">
-                <button type="button" class="auth-recovery-link" @click="openRecovery">忘记密码？</button>
-              </div>
-              <a-form-item label="验证码" hide-asterisk class="auth-field captcha-form-item">
-                <div
-                  v-if="!captchaUnlocked"
-                  ref="slideTrackRef"
-                  class="slide-unlock"
-                >
-                  <div class="slide-unlock-bg">
-                    <span class="slide-unlock-text">向右滑到底，加载图形验证码</span>
-                  </div>
-                  <div
-                    class="slide-unlock-progress"
-                    :style="{ width: `${slideOffset + 44 + 8}px` }"
-                  />
-                  <button
-                    type="button"
-                    class="slide-unlock-handle"
-                    :class="{ dragging: slideDragging }"
-                    :style="{ transform: `translateX(${slideOffset}px)` }"
-                    aria-label="向右滑动"
-                    @pointerdown="onSlidePointerDown"
+          <Transition name="auth-panel" mode="out-in">
+            <div v-if="tab === 'login'" key="login" class="auth-panel">
+              <a-form layout="vertical" class="auth-form">
+                <a-form-item label="用户名 / QQ 邮箱" hide-asterisk class="auth-field">
+                  <a-input
+                    v-model="loginForm.username"
+                    allow-clear
+                    size="large"
+                    class="auth-input"
+                    placeholder="用户名或注册时绑定的邮箱"
+                    autocomplete="username"
                   >
-                    <span class="slide-unlock-arrows" aria-hidden="true">››</span>
+                    <template #prefix>
+                      <span class="input-ico" aria-hidden="true">
+                        <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
+                          <circle
+                            cx="12"
+                            cy="8.5"
+                            r="3.25"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                          />
+                          <path
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                            stroke-linecap="round"
+                            d="M6.5 19.25v-.75a4.5 4.5 0 0 1 4.5-4.5h2a4.5 4.5 0 0 1 4.5 4.5v.75"
+                          />
+                        </svg>
+                      </span>
+                    </template>
+                  </a-input>
+                </a-form-item>
+                <a-form-item label="密码" hide-asterisk class="auth-field">
+                  <a-input-password
+                    v-model="loginForm.password"
+                    size="large"
+                    class="auth-input"
+                    placeholder="密码"
+                  >
+                    <template #prefix>
+                      <span class="input-ico" aria-hidden="true">
+                        <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            d="M8 11V8a4 4 0 0 1 8 0v3"
+                          />
+                          <rect
+                            x="5"
+                            y="11"
+                            width="14"
+                            height="10"
+                            rx="2.25"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                          />
+                        </svg>
+                      </span>
+                    </template>
+                  </a-input-password>
+                </a-form-item>
+                <div class="auth-recovery-link-row">
+                  <button type="button" class="auth-recovery-link" @click="openRecovery">
+                    忘记密码？
                   </button>
                 </div>
-                <template v-else>
-                  <div class="captcha-unlocked">
+                <a-form-item label="验证码" hide-asterisk class="auth-field captcha-form-item">
+                  <div v-if="!captchaUnlocked" ref="slideTrackRef" class="slide-unlock">
+                    <div class="slide-unlock-bg">
+                      <span class="slide-unlock-text">向右滑到底，加载图形验证码</span>
+                    </div>
                     <div
-                      class="captcha-status"
-                      :class="{
-                        'captcha-status--loading': captchaImageLoading,
-                        'captcha-status--error': !captchaImageLoading && !captchaUrl && captchaLoadFailed,
-                        'captcha-status--ok': !captchaImageLoading && captchaUrl,
-                        'captcha-status--wait': !captchaImageLoading && !captchaUrl && !captchaLoadFailed,
-                      }"
+                      class="slide-unlock-progress"
+                      :style="{ width: `${slideOffset + 44 + 8}px` }"
+                    />
+                    <button
+                      type="button"
+                      class="slide-unlock-handle"
+                      :class="{ dragging: slideDragging }"
+                      :style="{ transform: `translateX(${slideOffset}px)` }"
+                      aria-label="向右滑动"
+                      @pointerdown="onSlidePointerDown"
                     >
-                      <template v-if="captchaImageLoading">
-                        <span class="captcha-status-pulse" aria-hidden="true" />
-                        正在加载图形验证码…
-                      </template>
-                      <template v-else-if="!captchaUrl && captchaLoadFailed">
-                        加载失败，请点击右侧区域重试
-                      </template>
-                      <template v-else-if="captchaUrl">
-                        <span class="captcha-status-ok-ico" aria-hidden="true">✓</span>
-                        人机验证已通过，请输入图中字符
-                      </template>
-                      <template v-else>正在准备验证码…</template>
-                    </div>
-                    <div class="captcha-row">
-                      <a-input
-                        v-model="loginForm.code"
-                        allow-clear
-                        size="large"
-                        class="auth-input captcha-input"
-                        placeholder="图中字符"
-                        :disabled="captchaImageLoading || !captchaUrl"
-                      />
-                      <button
-                        type="button"
-                        class="captcha-tile"
-                        :class="{ 'captcha-tile--loading': captchaImageLoading }"
-                        title="点击刷新验证码"
-                        @click="refreshCaptcha"
-                      >
-                        <img v-if="captchaUrl" :src="captchaUrl" alt="验证码" class="captcha-img" />
-                        <span v-else-if="captchaImageLoading" class="captcha-placeholder">加载中…</span>
-                        <span v-else class="captcha-placeholder">点击重试</span>
-                      </button>
-                    </div>
-                    <p class="captcha-hint">看不清可点击图片刷新</p>
+                      <span class="slide-unlock-arrows" aria-hidden="true">››</span>
+                    </button>
                   </div>
-                </template>
-              </a-form-item>
-              <a-button
-                type="primary"
-                size="large"
-                long
-                class="auth-submit"
-                :loading="loginLoading"
-                @click="onLogin"
-              >
-                进入码跃
-              </a-button>
-              <p class="auth-legal">
-                登录时会记录 IP、估算归属地及浏览器提供的设备概况，用于账号管理。
-                注册或登录即代表您同意
-                <RouterLink to="/legal/terms" class="auth-legal-link" @click="modalVisible = false">《服务协议》</RouterLink>
-                和
-                <RouterLink to="/legal/privacy" class="auth-legal-link" @click="modalVisible = false"
-                  >《隐私政策》</RouterLink
+                  <template v-else>
+                    <div class="captcha-unlocked">
+                      <div
+                        class="captcha-status"
+                        :class="{
+                          'captcha-status--loading': captchaImageLoading,
+                          'captcha-status--error':
+                            !captchaImageLoading && !captchaUrl && captchaLoadFailed,
+                          'captcha-status--ok': !captchaImageLoading && captchaUrl,
+                          'captcha-status--wait':
+                            !captchaImageLoading && !captchaUrl && !captchaLoadFailed,
+                        }"
+                      >
+                        <template v-if="captchaImageLoading">
+                          <span class="captcha-status-pulse" aria-hidden="true" />
+                          正在加载图形验证码…
+                        </template>
+                        <template v-else-if="!captchaUrl && captchaLoadFailed">
+                          加载失败，请点击右侧区域重试
+                        </template>
+                        <template v-else-if="captchaUrl">
+                          <span class="captcha-status-ok-ico" aria-hidden="true">✓</span>
+                          人机验证已通过，请输入图中字符
+                        </template>
+                        <template v-else>正在准备验证码…</template>
+                      </div>
+                      <div class="captcha-row">
+                        <a-input
+                          v-model="loginForm.code"
+                          allow-clear
+                          size="large"
+                          class="auth-input captcha-input"
+                          placeholder="图中字符"
+                          :disabled="captchaImageLoading || !captchaUrl"
+                        />
+                        <button
+                          type="button"
+                          class="captcha-tile"
+                          :class="{ 'captcha-tile--loading': captchaImageLoading }"
+                          title="点击刷新验证码"
+                          @click="refreshCaptcha"
+                        >
+                          <img
+                            v-if="captchaUrl"
+                            :src="captchaUrl"
+                            alt="验证码"
+                            class="captcha-img"
+                          />
+                          <span v-else-if="captchaImageLoading" class="captcha-placeholder"
+                            >加载中…</span
+                          >
+                          <span v-else class="captcha-placeholder">点击重试</span>
+                        </button>
+                      </div>
+                      <p class="captcha-hint">看不清可点击图片刷新</p>
+                    </div>
+                  </template>
+                </a-form-item>
+                <a-button
+                  type="primary"
+                  size="large"
+                  long
+                  class="auth-submit"
+                  :loading="loginLoading"
+                  @click="onLogin"
                 >
-              </p>
-            </a-form>
-          </div>
-
-          <div v-else-if="tab === 'recover'" key="recover" class="auth-panel">
-            <div class="recovery-heading">
-              <span class="recovery-heading__icon" aria-hidden="true">✉</span>
-              <div>
-                <strong>找回账号密码</strong>
-                <p>验证码将发送到账号绑定的邮箱，10 分钟内有效。</p>
-              </div>
+                  进入码跃
+                </a-button>
+                <p class="auth-legal">
+                  登录时会记录 IP、估算归属地及浏览器提供的设备概况，用于账号管理。
+                  注册或登录即代表您同意
+                  <RouterLink
+                    to="/legal/terms"
+                    class="auth-legal-link"
+                    @click="modalVisible = false"
+                    >《服务协议》</RouterLink
+                  >
+                  和
+                  <RouterLink
+                    to="/legal/privacy"
+                    class="auth-legal-link"
+                    @click="modalVisible = false"
+                    >《隐私政策》</RouterLink
+                  >
+                </p>
+              </a-form>
             </div>
-            <a-form layout="vertical" class="auth-form">
-              <a-form-item label="注册邮箱" hide-asterisk class="auth-field">
-                <a-input v-model="recoveryForm.email" type="email" size="large" class="auth-input" placeholder="请输入注册时绑定的邮箱" autocomplete="email" />
-              </a-form-item>
-              <a-form-item label="邮件验证码" hide-asterisk class="auth-field">
-                <div class="recovery-code-row">
-                  <a-input v-model="recoveryForm.code" :max-length="6" size="large" class="auth-input" placeholder="6 位数字验证码" inputmode="numeric" />
-                  <a-button class="recovery-code-button" :loading="sendingRecoveryCode" :disabled="recoveryCountdown > 0" @click="sendRecoveryCode">
-                    {{ recoveryCountdown > 0 ? `${recoveryCountdown}s 后重发` : '获取验证码' }}
-                  </a-button>
-                </div>
-              </a-form-item>
-              <a-form-item label="新密码" hide-asterisk class="auth-field">
-                <a-input-password v-model="recoveryForm.newPassword" size="large" class="auth-input" placeholder="6～20 位字母和数字" autocomplete="new-password" />
-              </a-form-item>
-              <a-form-item label="确认新密码" hide-asterisk class="auth-field">
-                <a-input-password v-model="recoveryForm.confirmPassword" size="large" class="auth-input" placeholder="再输入一次新密码" autocomplete="new-password" />
-              </a-form-item>
-              <a-button type="primary" size="large" long class="auth-submit" :loading="resettingPassword" @click="resetForgottenPassword">重置密码</a-button>
-              <button type="button" class="recovery-back" @click="tab = 'login'">← 返回登录</button>
-              <p class="recovery-help">账号没有绑定邮箱？请联系管理员核实身份后处理。</p>
-            </a-form>
-          </div>
 
-          <div v-else key="register" class="auth-panel">
-            <a-form layout="vertical" class="auth-form">
-              <a-form-item label="用户名" hide-asterisk class="auth-field">
-                <a-input
-                  v-model="registerForm.username"
-                  allow-clear
+            <div v-else-if="tab === 'recover'" key="recover" class="auth-panel">
+              <div class="recovery-heading">
+                <span class="recovery-heading__icon" aria-hidden="true">✉</span>
+                <div>
+                  <strong>找回账号密码</strong>
+                  <p>验证码将发送到账号绑定的邮箱，10 分钟内有效。</p>
+                </div>
+              </div>
+              <a-form layout="vertical" class="auth-form">
+                <a-form-item label="注册邮箱" hide-asterisk class="auth-field">
+                  <a-input
+                    v-model="recoveryForm.email"
+                    type="email"
+                    size="large"
+                    class="auth-input"
+                    placeholder="请输入注册时绑定的邮箱"
+                    autocomplete="email"
+                  />
+                </a-form-item>
+                <a-form-item label="邮件验证码" hide-asterisk class="auth-field">
+                  <div class="recovery-code-row">
+                    <a-input
+                      v-model="recoveryForm.code"
+                      :max-length="6"
+                      size="large"
+                      class="auth-input"
+                      placeholder="6 位数字验证码"
+                      inputmode="numeric"
+                    />
+                    <a-button
+                      class="recovery-code-button"
+                      :loading="sendingRecoveryCode"
+                      :disabled="recoveryCountdown > 0"
+                      @click="sendRecoveryCode"
+                    >
+                      {{ recoveryCountdown > 0 ? `${recoveryCountdown}s 后重发` : '获取验证码' }}
+                    </a-button>
+                  </div>
+                </a-form-item>
+                <div
+                  v-if="recoveryRequestNotice"
+                  class="recovery-request-notice"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <span class="recovery-request-notice__icon" aria-hidden="true">i</span>
+                  <span>{{ recoveryRequestNotice }}</span>
+                </div>
+                <a-form-item label="新密码" hide-asterisk class="auth-field">
+                  <a-input-password
+                    v-model="recoveryForm.newPassword"
+                    size="large"
+                    class="auth-input"
+                    placeholder="6～20 位字母和数字"
+                    autocomplete="new-password"
+                  />
+                </a-form-item>
+                <a-form-item label="确认新密码" hide-asterisk class="auth-field">
+                  <a-input-password
+                    v-model="recoveryForm.confirmPassword"
+                    size="large"
+                    class="auth-input"
+                    placeholder="再输入一次新密码"
+                    autocomplete="new-password"
+                  />
+                </a-form-item>
+                <a-button
+                  type="primary"
                   size="large"
-                  class="auth-input"
-                  placeholder="4～16 位字母、数字或下划线"
+                  long
+                  class="auth-submit"
+                  :loading="resettingPassword"
+                  @click="resetForgottenPassword"
+                  >重置密码</a-button
                 >
-                  <template #prefix>
-                    <span class="input-ico" aria-hidden="true">
-                      <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
-                        <circle cx="12" cy="8.5" r="3.25" fill="none" stroke="currentColor" stroke-width="1.75" />
-                        <path
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="1.75"
-                          stroke-linecap="round"
-                          d="M6.5 19.25v-.75a4.5 4.5 0 0 1 4.5-4.5h2a4.5 4.5 0 0 1 4.5 4.5v.75"
-                        />
-                      </svg>
-                    </span>
-                  </template>
-                </a-input>
-              </a-form-item>
-              <a-form-item label="邮箱（选填）" hide-asterisk class="auth-field">
-                <a-input
-                  v-model="registerForm.email"
-                  allow-clear
+                <button type="button" class="recovery-back" @click="tab = 'login'">
+                  ← 返回登录
+                </button>
+                <p class="recovery-help">账号没有绑定邮箱？请联系管理员核实身份后处理。</p>
+              </a-form>
+            </div>
+
+            <div v-else key="register" class="auth-panel">
+              <a-form layout="vertical" class="auth-form">
+                <a-form-item label="用户名" hide-asterisk class="auth-field">
+                  <a-input
+                    v-model="registerForm.username"
+                    allow-clear
+                    size="large"
+                    class="auth-input"
+                    placeholder="4～16 位字母、数字或下划线"
+                  >
+                    <template #prefix>
+                      <span class="input-ico" aria-hidden="true">
+                        <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
+                          <circle
+                            cx="12"
+                            cy="8.5"
+                            r="3.25"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                          />
+                          <path
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                            stroke-linecap="round"
+                            d="M6.5 19.25v-.75a4.5 4.5 0 0 1 4.5-4.5h2a4.5 4.5 0 0 1 4.5 4.5v.75"
+                          />
+                        </svg>
+                      </span>
+                    </template>
+                  </a-input>
+                </a-form-item>
+                <a-form-item label="邮箱（选填）" hide-asterisk class="auth-field">
+                  <a-input
+                    v-model="registerForm.email"
+                    allow-clear
+                    size="large"
+                    class="auth-input"
+                    placeholder="建议填写，忘记密码时可用邮箱找回"
+                  >
+                    <template #prefix>
+                      <span class="input-ico" aria-hidden="true">
+                        <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
+                          <rect
+                            x="3"
+                            y="5.5"
+                            width="18"
+                            height="13"
+                            rx="2"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                          />
+                          <path
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                            stroke-linecap="round"
+                            d="M3 7.5 12 13l9-5.5"
+                          />
+                        </svg>
+                      </span>
+                    </template>
+                  </a-input>
+                </a-form-item>
+                <a-form-item label="密码" hide-asterisk class="auth-field">
+                  <a-input-password
+                    v-model="registerForm.password"
+                    size="large"
+                    class="auth-input"
+                    placeholder="6～20 位，含字母与数字"
+                  >
+                    <template #prefix>
+                      <span class="input-ico" aria-hidden="true">
+                        <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            d="M8 11V8a4 4 0 0 1 8 0v3"
+                          />
+                          <rect
+                            x="5"
+                            y="11"
+                            width="14"
+                            height="10"
+                            rx="2.25"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                          />
+                        </svg>
+                      </span>
+                    </template>
+                  </a-input-password>
+                </a-form-item>
+                <a-form-item label="确认密码" hide-asterisk class="auth-field">
+                  <a-input-password
+                    v-model="registerForm.confirmPassword"
+                    size="large"
+                    class="auth-input"
+                    placeholder="再输入一次"
+                  >
+                    <template #prefix>
+                      <span class="input-ico" aria-hidden="true">
+                        <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            d="M8 11V8a4 4 0 0 1 8 0v3"
+                          />
+                          <rect
+                            x="5"
+                            y="11"
+                            width="14"
+                            height="10"
+                            rx="2.25"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.75"
+                          />
+                        </svg>
+                      </span>
+                    </template>
+                  </a-input-password>
+                </a-form-item>
+                <a-button
+                  type="primary"
                   size="large"
-                  class="auth-input"
-                  placeholder="建议填写，忘记密码时可用邮箱找回"
+                  long
+                  class="auth-submit auth-submit--secondary"
+                  :loading="registerLoading"
+                  @click="onRegister"
                 >
-                  <template #prefix>
-                    <span class="input-ico" aria-hidden="true">
-                      <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
-                        <rect
-                          x="3"
-                          y="5.5"
-                          width="18"
-                          height="13"
-                          rx="2"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="1.75"
-                        />
-                        <path
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="1.75"
-                          stroke-linecap="round"
-                          d="M3 7.5 12 13l9-5.5"
-                        />
-                      </svg>
-                    </span>
-                  </template>
-                </a-input>
-              </a-form-item>
-              <a-form-item label="密码" hide-asterisk class="auth-field">
-                <a-input-password
-                  v-model="registerForm.password"
-                  size="large"
-                  class="auth-input"
-                  placeholder="6～20 位，含字母与数字"
-                >
-                  <template #prefix>
-                    <span class="input-ico" aria-hidden="true">
-                      <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="1.75"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          d="M8 11V8a4 4 0 0 1 8 0v3"
-                        />
-                        <rect
-                          x="5"
-                          y="11"
-                          width="14"
-                          height="10"
-                          rx="2.25"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="1.75"
-                        />
-                      </svg>
-                    </span>
-                  </template>
-                </a-input-password>
-              </a-form-item>
-              <a-form-item label="确认密码" hide-asterisk class="auth-field">
-                <a-input-password
-                  v-model="registerForm.confirmPassword"
-                  size="large"
-                  class="auth-input"
-                  placeholder="再输入一次"
-                >
-                  <template #prefix>
-                    <span class="input-ico" aria-hidden="true">
-                      <svg class="input-ico__svg" viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="1.75"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          d="M8 11V8a4 4 0 0 1 8 0v3"
-                        />
-                        <rect
-                          x="5"
-                          y="11"
-                          width="14"
-                          height="10"
-                          rx="2.25"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="1.75"
-                        />
-                      </svg>
-                    </span>
-                  </template>
-                </a-input-password>
-              </a-form-item>
-              <a-button
-                type="primary"
-                size="large"
-                long
-                class="auth-submit auth-submit--secondary"
-                :loading="registerLoading"
-                @click="onRegister"
-              >
-                创建账号
-              </a-button>
-              <p class="auth-legal">
-                注册或登录即代表您同意
-                <RouterLink to="/legal/terms" class="auth-legal-link" @click="modalVisible = false">《服务协议》</RouterLink>
-                和
-                <RouterLink to="/legal/privacy" class="auth-legal-link" @click="modalVisible = false"
-                  >《隐私政策》</RouterLink
-                >
-              </p>
-            </a-form>
-          </div>
-        </Transition>
+                  创建账号
+                </a-button>
+                <p class="auth-legal">
+                  注册或登录即代表您同意
+                  <RouterLink
+                    to="/legal/terms"
+                    class="auth-legal-link"
+                    @click="modalVisible = false"
+                    >《服务协议》</RouterLink
+                  >
+                  和
+                  <RouterLink
+                    to="/legal/privacy"
+                    class="auth-legal-link"
+                    @click="modalVisible = false"
+                    >《隐私政策》</RouterLink
+                  >
+                </p>
+              </a-form>
+            </div>
+          </Transition>
         </div>
       </div>
     </div>
@@ -1459,24 +1572,140 @@ onBeforeUnmount(() => {
   background: linear-gradient(135deg, #0f766e 0%, #0d9488 55%, #2dd4bf 100%) !important;
 }
 
-.auth-recovery-link-row { display: flex; justify-content: flex-end; margin: -10px 0 18px; }
-.auth-recovery-link, .recovery-back { border: 0; background: transparent; color: #0f766e; font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
-.auth-recovery-link:hover, .recovery-back:hover { text-decoration: underline; }
-.auth-recovery-link:focus-visible, .recovery-back:focus-visible { outline: 2px solid #14b8a6; outline-offset: 3px; border-radius: 4px; }
-.recovery-heading { display: flex; gap: 13px; padding: 16px; margin: 0 0 21px; border: 1px solid #bdece5; border-radius: 14px; background: linear-gradient(120deg, #edfdf9, #f5fbff); }
-.recovery-heading__icon { display: grid; place-items: center; width: 38px; height: 38px; flex: none; border-radius: 11px; color: white; background: #0d9488; font-size: 21px; }
-.recovery-heading strong { font-size: 15px; color: #134e4a; }
-.recovery-heading p { margin: 5px 0 0; font-size: 12px; line-height: 1.5; color: #64748b; }
-.recovery-code-row { display: flex; width: 100%; gap: 9px; }
-.recovery-code-row > .auth-input { min-width: 0; flex: 1; }
-.recovery-code-button { height: 46px; min-width: 116px; border-radius: 11px; color: #0f766e; border-color: #8bd9ce; }
-.recovery-back { display: block; margin: 18px auto 0; }
-.recovery-help { margin: 18px 0 0; text-align: center; font-size: 12px; line-height: 1.5; color: #64748b; }
-.auth-card--dark .recovery-heading { background: #122c34; border-color: #24555a; }
-.auth-card--dark .recovery-heading strong { color: #ccfbf1; }
-.auth-card--dark .recovery-heading p, .auth-card--dark .recovery-help { color: #94a3b8; }
-.auth-card--dark .auth-recovery-link, .auth-card--dark .recovery-back { color: #5eead4; }
-.auth-card--dark .recovery-code-button { color: #5eead4; background: #122c34; border-color: #24555a; }
+.auth-recovery-link-row {
+  display: flex;
+  justify-content: flex-end;
+  margin: -10px 0 18px;
+}
+.auth-recovery-link,
+.recovery-back {
+  border: 0;
+  background: transparent;
+  color: #0f766e;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.auth-recovery-link:hover,
+.recovery-back:hover {
+  text-decoration: underline;
+}
+.auth-recovery-link:focus-visible,
+.recovery-back:focus-visible {
+  outline: 2px solid #14b8a6;
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.recovery-heading {
+  display: flex;
+  gap: 13px;
+  padding: 16px;
+  margin: 0 0 21px;
+  border: 1px solid #bdece5;
+  border-radius: 14px;
+  background: linear-gradient(120deg, #edfdf9, #f5fbff);
+}
+.recovery-heading__icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 11px;
+  color: white;
+  background: #0d9488;
+  font-size: 21px;
+}
+.recovery-heading strong {
+  font-size: 15px;
+  color: #134e4a;
+}
+.recovery-heading p {
+  margin: 5px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #64748b;
+}
+.recovery-code-row {
+  display: flex;
+  width: 100%;
+  gap: 9px;
+}
+.recovery-code-row > .auth-input {
+  min-width: 0;
+  flex: 1;
+}
+.recovery-code-button {
+  height: 46px;
+  min-width: 116px;
+  border-radius: 11px;
+  color: #0f766e;
+  border-color: #8bd9ce;
+}
+.recovery-request-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  margin: -4px 0 18px;
+  padding: 11px 13px;
+  border: 1px solid #bdece5;
+  border-radius: 11px;
+  background: #f0fdfa;
+  color: #285e59;
+  font-size: 12px;
+  line-height: 1.65;
+}
+.recovery-request-notice__icon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  margin-top: 1px;
+  border-radius: 50%;
+  background: #0d9488;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  font-style: normal;
+}
+.recovery-back {
+  display: block;
+  margin: 18px auto 0;
+}
+.recovery-help {
+  margin: 18px 0 0;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #64748b;
+}
+.auth-card--dark .recovery-heading {
+  background: #122c34;
+  border-color: #24555a;
+}
+.auth-card--dark .recovery-heading strong {
+  color: #ccfbf1;
+}
+.auth-card--dark .recovery-heading p,
+.auth-card--dark .recovery-help {
+  color: #94a3b8;
+}
+.auth-card--dark .recovery-request-notice {
+  color: #b9e9e2;
+  background: #102d31;
+  border-color: #24555a;
+}
+.auth-card--dark .auth-recovery-link,
+.auth-card--dark .recovery-back {
+  color: #5eead4;
+}
+.auth-card--dark .recovery-code-button {
+  color: #5eead4;
+  background: #122c34;
+  border-color: #24555a;
+}
 
 .auth-legal {
   margin: 12px 0 0;

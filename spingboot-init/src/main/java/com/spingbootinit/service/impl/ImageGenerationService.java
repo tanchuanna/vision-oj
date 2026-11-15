@@ -8,12 +8,15 @@ import com.spingbootinit.common.result.ResultCode;
 import com.spingbootinit.config.ImageGenerationProperties;
 import com.spingbootinit.model.dto.vision.ImageGenerateRequest;
 import com.spingbootinit.model.vo.vision.ImageGenerationVO;
-import com.spingbootinit.utils.MinioUtils;
 import com.spingbootinit.service.AiModelSettingsService;
+import com.spingbootinit.service.ImageModelSettingsService;
+import com.spingbootinit.service.ImageProviderCatalog;
+import com.spingbootinit.utils.MinioUtils;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.stereotype.Service;
 
+import java.io.InputStream;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -21,10 +24,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.UUID;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 
 @Slf4j
@@ -35,28 +38,46 @@ public class ImageGenerationService {
     private final ObjectMapper objectMapper;
     private final MinioUtils minioUtils;
     private final AiModelSettingsService modelSettings;
+    private final ImageModelSettingsService imageSettings;
     private static final Set<String> CLOUD_MODELS = Set.of("qwen-image-2.1-turbo", "qwen-image-2.1-pro");
     private final HttpClient httpClient;
 
     @Autowired
     public ImageGenerationService(ImageGenerationProperties properties, ObjectMapper objectMapper,
-                                  MinioUtils minioUtils, AiModelSettingsService modelSettings) {
-        this(properties, objectMapper, minioUtils, modelSettings,
+                                  MinioUtils minioUtils, AiModelSettingsService modelSettings,
+                                  ImageModelSettingsService imageSettings) {
+        this(properties, objectMapper, minioUtils, modelSettings, imageSettings,
                 HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1)
+                        .followRedirects(HttpClient.Redirect.NEVER)
                         .connectTimeout(Duration.ofSeconds(5)).build());
     }
 
     ImageGenerationService(ImageGenerationProperties properties, ObjectMapper objectMapper,
                            MinioUtils minioUtils, AiModelSettingsService modelSettings, HttpClient httpClient) {
+        this(properties, objectMapper, minioUtils, modelSettings, null, httpClient);
+    }
+
+    ImageGenerationService(ImageGenerationProperties properties, ObjectMapper objectMapper,
+                           MinioUtils minioUtils, AiModelSettingsService modelSettings,
+                           ImageModelSettingsService imageSettings, HttpClient httpClient) {
         this.properties = properties;
         this.objectMapper = objectMapper;
         this.minioUtils = minioUtils;
         this.modelSettings = modelSettings;
+        this.imageSettings = imageSettings;
         this.httpClient = httpClient;
     }
 
     public Map<String, Object> catalog() {
         return Map.of("local", localModels(), "cloud", List.of("qwen-image-2.1-turbo", "qwen-image-2.1-pro"));
+    }
+
+    public Map<String, Object> catalog(long userId) {
+        var configured = imageSettings.list(userId).stream().map(ImageModelSettingsService.SavedImageConfig::providerCode).toList();
+        var providers = ImageProviderCatalog.providers().stream().map(provider -> Map.of(
+                "code", provider.code(), "name", provider.name(), "shortName", provider.shortName(),
+                "description", provider.description(), "models", provider.models(), "configured", configured.contains(provider.code()))).toList();
+        return Map.of("local", localModels(), "cloud", List.of("qwen-image-2.1-turbo", "qwen-image-2.1-pro"), "providers", providers);
     }
 
     private List<String> localModels() {
@@ -78,7 +99,10 @@ public class ImageGenerationService {
 
     public ImageGenerationVO generate(ImageGenerateRequest request, long userId) {
         String source = request.getSource() == null || request.getSource().isBlank() ? "LOCAL_COMFYUI" : request.getSource();
-        if ("DASHSCOPE".equals(source)) return generateCloud(request, userId);
+        if ("DASHSCOPE".equals(source) && CLOUD_MODELS.contains(request.getModelId())) return generateCloud(request, userId);
+        if ("DASHSCOPE".equals(source) || "VOLCENGINE".equals(source) || "BAIDU_QIANFAN".equals(source) || "SILICONFLOW".equals(source)) {
+            return generateProviderCloud(request, userId, source);
+        }
         if (!"LOCAL_COMFYUI".equals(source)) throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "不支持的生图来源");
         if (!properties.isEnabled()) {
             throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "本地 AI 图像生成服务未启用");
@@ -172,6 +196,144 @@ public class ImageGenerationService {
             log.warn("百炼生图失败 errorType={}", e.getClass().getSimpleName());
             throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "百炼生图失败，请检查网络或稍后重试");
         }
+    }
+
+    private ImageGenerationVO generateProviderCloud(ImageGenerateRequest request, long userId, String providerCode) {
+        ImageProviderCatalog.ImageModel model = ImageProviderCatalog.requireModel(providerCode, request.getModelId());
+        if (imageSettings == null) throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片模型配置服务未就绪");
+        String prompt = request.getPrompt().trim();
+        if ("qwen-image".equals(model.id()) && prompt.length() > 800) {
+            throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "千帆 Qwen-Image 提示词不能超过 800 字符");
+        }
+        String apiKey = imageSettings.resolveKey(userId, providerCode);
+        long started = System.currentTimeMillis();
+        boolean success = false;
+        try {
+            URI endpoint = "DASHSCOPE".equals(providerCode) ? aliNativeEndpoint() : providerEndpoint(model);
+            HttpRequest call = HttpRequest.newBuilder(endpoint)
+                    .timeout(Duration.ofSeconds(properties.getTimeoutSeconds()))
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(providerRequestBody(model, prompt)))).build();
+            HttpResponse<String> response = httpClient.send(call, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            int status = response.statusCode();
+            if (status == 401 || status == 403) throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片厂商密钥无效或没有该模型权限");
+            if (status == 402 || status == 429) throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片厂商额度不足或请求过于频繁");
+            if (status / 100 != 2) throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片厂商生成失败（HTTP " + status + "）");
+            JsonNode body = objectMapper.readTree(response.body());
+            String url = providerImageUrl(body, model.apiKind());
+            URI imageUri = validImageUri(url, providerCode);
+            HttpRequest download = HttpRequest.newBuilder(imageUri).timeout(Duration.ofSeconds(30)).GET().build();
+            HttpResponse<InputStream> image = httpClient.send(download, HttpResponse.BodyHandlers.ofInputStream());
+            String contentType = image.headers().firstValue("Content-Type").orElse("").split(";")[0].trim().toLowerCase();
+            String extension = switch (contentType) {
+                case "image/png" -> ".png";
+                case "image/jpeg" -> ".jpg";
+                case "image/webp" -> ".webp";
+                default -> "";
+            };
+            try (InputStream stream = image.body()) {
+                if (image.statusCode() / 100 != 2 || extension.isEmpty())
+                    throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片厂商返回的图片格式无效");
+                byte[] bytes = stream.readNBytes(10 * 1024 * 1024 + 1);
+                if (bytes.length == 0 || bytes.length > 10 * 1024 * 1024)
+                    throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片厂商返回的图片为空或超过 10 MB");
+                String stored = minioUtils.uploadBytes(bytes, contentType, extension, "question-images/ai/");
+                success = true;
+                return ImageGenerationVO.builder().imageUrl(stored).source(providerCode).modelId(model.id())
+                        .generationMs(System.currentTimeMillis() - started).build();
+            }
+        } catch (BusinessException e) {
+            throw e;
+        } catch (java.net.http.HttpTimeoutException e) {
+            throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片厂商响应超时，请稍后重试");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片生成已中断");
+        } catch (Exception e) {
+            log.warn("Image provider generation failed provider={} errorType={}", providerCode, e.getClass().getSimpleName());
+            throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片生成失败，请检查厂商服务或服务器网络");
+        } finally {
+            modelSettings.recordUsage(userId,
+                    new AiModelSettingsService.ModelRoute(providerCode, model.id(), "", "", true),
+                    "IMAGE_GEN", System.currentTimeMillis() - started, success);
+        }
+    }
+
+    private URI aliNativeEndpoint() {
+        URI configured = cloudEndpoint(); // validates the administrator-supplied DashScope host
+        return URI.create("https://" + configured.getHost() + "/api/v1/services/aigc/multimodal-generation/generation");
+    }
+
+    static URI providerEndpoint(ImageProviderCatalog.ImageModel model) {
+        return switch (model.apiKind()) {
+            case "ALI_NATIVE" -> URI.create("https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation");
+            case "VOLC_IMAGE" -> URI.create("https://ark.cn-beijing.volces.com/api/v3/images/generations");
+            case "BAIDU_GENERIC" -> URI.create("https://qianfan.baidubce.com/v2/images/generations");
+            case "BAIDU_ERNIE" -> URI.create("https://qianfan.baidubce.com/v2/ernie-image/images/generations");
+            case "SILICON_IMAGE" -> URI.create("https://api.siliconflow.cn/v1/images/generations");
+            default -> throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "图片模型接口未接通");
+        };
+    }
+
+    static ObjectNode providerRequestBody(ImageProviderCatalog.ImageModel model, String prompt) {
+        ObjectNode body = new ObjectMapper().createObjectNode();
+        body.put("model", model.id());
+        switch (model.apiKind()) {
+            case "ALI_NATIVE" -> {
+                body.putObject("input").putArray("messages").addObject().put("role", "user")
+                        .putArray("content").addObject().put("text", prompt);
+                body.putObject("parameters").put("size", "1024*1024").put("n", 1);
+            }
+            case "VOLC_IMAGE" -> body.put("prompt", prompt).put("size", "2K").put("response_format", "url");
+            case "BAIDU_GENERIC" -> body.put("prompt", prompt).put("size", "1024x1024").put("n", 1);
+            case "BAIDU_ERNIE" -> body.put("prompt", prompt).put("size", "1024x1024");
+            case "SILICON_IMAGE" -> body.put("prompt", prompt).put("image_size",
+                    "Qwen/Qwen-Image".equals(model.id()) ? "1328x1328" : "1024x1024");
+            default -> throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "图片模型接口未接通");
+        }
+        return body;
+    }
+
+    static String providerImageUrl(JsonNode body, String apiKind) {
+        String url = switch (apiKind) {
+            case "ALI_NATIVE" -> body.path("output").path("choices").path(0).path("message")
+                    .path("content").path(0).path("image").asText();
+            case "SILICON_IMAGE" -> body.path("images").path(0).path("url").asText();
+            default -> body.path("data").path(0).path("url").asText();
+        };
+        if (url.isBlank()) throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片厂商未返回图片地址");
+        return url;
+    }
+
+    static URI validImageUri(String url, String providerCode) {
+        try {
+            URI uri = URI.create(url);
+            String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase();
+            boolean allowed = switch (providerCode) {
+                case "DASHSCOPE" -> knownHost(host, "aliyuncs.com");
+                case "VOLCENGINE" -> knownHost(host, "volces.com", "volccdn.com", "byteimg.com");
+                case "BAIDU_QIANFAN" -> knownHost(host, "baidubce.com", "bcebos.com", "bdstatic.com");
+                case "SILICONFLOW" -> knownHost(host, "siliconflow.cn", "siliconflow.com", "oss-cn-shanghai.aliyuncs.com");
+                default -> false;
+            };
+            // Qianfan currently returns signed bcebos http URLs. Download only over TLS from its known host.
+            if ("BAIDU_QIANFAN".equals(providerCode) && "http".equalsIgnoreCase(uri.getScheme())
+                    && knownHost(host, "bcebos.com") && uri.getPort() == -1 && uri.getUserInfo() == null) {
+                uri = URI.create("https://" + uri.getRawAuthority() + uri.getRawPath()
+                        + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery()));
+            }
+            if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getUserInfo() != null
+                    || uri.getPort() != -1 || !allowed) throw new IllegalArgumentException();
+            return uri;
+        } catch (Exception e) {
+            throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片厂商返回了未获允许的下载地址");
+        }
+    }
+
+    private static boolean knownHost(String host, String... suffixes) {
+        for (String suffix : suffixes) if (host.equals(suffix) || host.endsWith("." + suffix)) return true;
+        return false;
     }
 
     private URI cloudEndpoint() {

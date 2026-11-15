@@ -17,6 +17,9 @@ import java.util.List;
 @AllArgsConstructor
 public class QuestionRunVO {
 
+    /** SAMPLE / CUSTOM */
+    private String mode;
+
     /** 沙箱 HTTP/业务层 code，0 通常表示调用成功 */
     private Integer sandboxCode;
 
@@ -31,7 +34,7 @@ public class QuestionRunVO {
     private List<QuestionRunCaseVO> cases;
 
     /** 非 terminal 且全部样例规范化后一致 */
-    private boolean allSamplePassed;
+    private Boolean allSamplePassed;
 
     /**
      * 非致命提示：例如沙箱返回的 outputList 条数与样例组数不一致（仍尽量展示已返回的行）

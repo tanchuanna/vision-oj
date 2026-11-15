@@ -37,6 +37,8 @@ public interface QuestionService extends IService<Question> {
      */
     Page<QuestionAdminListItemVO> pageSelect(QuestionQueryRequest queryRequest);
 
+    Page<QuestionAdminListItemVO> pageSelectManaged(QuestionQueryRequest queryRequest, Long currentUserId);
+
     /**
      * 分页查询题目列表 公开
      * @param queryRequest
@@ -56,8 +58,12 @@ public interface QuestionService extends IService<Question> {
      */
     void updateByIdQuestion(@Valid QuestionUpdateRequest request);
 
+    void updateByIdQuestion(@Valid QuestionUpdateRequest request, Long currentUserId);
+
     /**
      * 批量删除题目
      */
     void removeBatchByIdsQuestion(@Valid QuestionBatchDeleteRequest request);
+
+    void removeBatchByIdsQuestion(@Valid QuestionBatchDeleteRequest request, Long currentUserId);
 }

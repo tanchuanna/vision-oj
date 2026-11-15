@@ -3,10 +3,13 @@ package com.spingbootinit.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.spingbootinit.mapper.SiteAnnouncementMapper;
+import com.spingbootinit.mapper.UserMapper;
 import com.spingbootinit.model.dto.notification.AnnouncementPublishRequest;
 import com.spingbootinit.model.entity.SiteAnnouncement;
+import com.spingbootinit.model.entity.User;
 import com.spingbootinit.model.vo.notification.SiteAnnouncementItemVO;
 import com.spingbootinit.service.SiteAnnouncementService;
+import jakarta.annotation.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +22,9 @@ public class SiteAnnouncementServiceImpl extends ServiceImpl<SiteAnnouncementMap
         implements SiteAnnouncementService {
 
     private static final int STATUS_PUBLISHED = 1;
+
+    @Resource
+    private UserMapper userMapper;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -51,6 +57,17 @@ public class SiteAnnouncementServiceImpl extends ServiceImpl<SiteAnnouncementMap
         v.setTitle(a.getTitle());
         v.setContent(a.getContent());
         v.setPublishedAt(a.getPublishedAt());
+        if (a.getPublisherId() != null) {
+            User publisher = userMapper.selectById(a.getPublisherId());
+            if (publisher != null) {
+                String name = publisher.getNickname();
+                if (name == null || name.isBlank()) {
+                    name = publisher.getUsername();
+                }
+                v.setPublisherName(name);
+                v.setPublisherRole(publisher.getUserRole());
+            }
+        }
         return v;
     }
 

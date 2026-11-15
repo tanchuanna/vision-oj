@@ -1,1382 +1,1621 @@
 <script setup lang="ts">
-import {computed, nextTick, onBeforeUnmount, ref, watch} from 'vue'
-import {Message} from '@arco-design/web-vue'
-import {RouterLink, useRoute, useRouter} from 'vue-router'
-import {getBackendErrorMessage} from '@/api/httpError'
-import {isResultSuccess} from '@/api/result'
-import {mapApiError} from '@/api/mapApiError'
-import {ApiError, QuestionSubmitControllerService, Service} from '@generated'
-import {useAuthStore} from '@/stores/auth'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { Message } from '@arco-design/web-vue'
+import { useRoute, useRouter } from 'vue-router'
+import { use } from 'echarts/core'
+import { CanvasRenderer } from 'echarts/renderers'
+import { BarChart, LineChart, PieChart } from 'echarts/charts'
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import VChart from 'vue-echarts'
+import { useAuthStore } from '@/stores/auth'
+import {
+  getSubmissionDetail,
+  getSubmissionOverview,
+  getSubmissionPage,
+  type SubmissionDetail,
+  type SubmissionFilters,
+  type SubmissionListItem,
+  type SubmissionOverview,
+  type SubmissionScope,
+} from '@/api/submissionDashboard'
 
-type SubmitRow = {
-  /** 数据库提交主键，仅管理员全站列表返回 */
-  id?: string
-  /** 当前用户在该题（或「全部」页下为账号全局）的第几次提交，从 1 起 */
-  submitNo?: number
-  /** 与后端 VO 一致：账号全局次序（列表与 status 接口均返回） */
-  globalSubmitNo?: number
-  /** 竞赛提交时带上竞赛 id；练习提交无此字段 */
-  contestId?: string
-  questionId?: string
-  questionTitle?: string
-  userId?: string
-  language?: string
-  status?: number
-  judgeInfo?: string
-  createTime?: string
-}
+use([
+  CanvasRenderer,
+  LineChart,
+  PieChart,
+  BarChart,
+  GridComponent,
+  LegendComponent,
+  TooltipComponent,
+])
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-
 const loading = ref(false)
-const rows = ref<SubmitRow[]>([])
+const overviewLoading = ref(false)
+const detailLoading = ref(false)
+const rows = ref<SubmissionListItem[]>([])
+const overview = ref<SubmissionOverview | null>(null)
+const detail = ref<SubmissionDetail | null>(null)
 const total = ref(0)
 const current = ref(1)
 const pageSize = ref(15)
+const rangeDays = ref<7 | 30 | 90>(30)
+const scope = ref<SubmissionScope>('SELF')
+const selectedUserId = ref<string>('')
+const questionKeyword = ref('')
+const userKeyword = ref('')
+const verdict = ref('')
+const language = ref('')
+const startDate = ref('')
+const endDate = ref('')
+const sort = ref<'ASC' | 'DESC'>('DESC')
+const filterOpen = ref(false)
+const detailOpen = ref(false)
+const detailFullscreen = ref(false)
+const highlightedIds = ref(new Set<string>())
+const liveNow = ref(Date.now())
+const lastSyncAt = ref(Date.now())
+const previousStatus = new Map<string, number | undefined>()
+let refreshTimer: number | undefined
+let clockTimer: number | undefined
+let refreshTicks = 0
 
-/** 题目 id -> 标题（按需拉取缓存） */
-const questionTitleCache = ref<Record<string, string>>({})
-
-/** 筛选：提交次序（账号下按时间全局第几次），与 URL query `order` 同步 */
-const filterSubmitNo = ref('')
-
-/** 刚提交代码后由 sessionStorage 注入，仅用于高亮与轮询，不写入筛选框、不自动筛题目 */
-const pendingPollQuestionId = ref('')
-/** 本题第几次，用于 GET /status/my */
-const pendingPollSubmitNo = ref('')
-/** 全站次序，与列表行 submitNo 一致，用于匹配行并就地更新状态 */
-const pendingGlobalSubmitNo = ref('')
-
-const PENDING_SUBMIT_SESSION_KEY = 'oj:pendingSubmitHighlight'
-
-/** 旧链接：URL 中仍带 snowflake `submitId` 时，用数据库主键轮询（兼容书签） */
-const highlightDbSubmitId = ref('')
-
-/** 判题结束后短暂脉冲高亮对应行（与 submitNo 对齐） */
-const flashAfterJudgeGlobalNo = ref('')
-
-/** 0 等待 1 判题中 2 成功 3 失败 */
-const STATUS_WAITING = 0
-const STATUS_RUNNING = 1
-const STATUS_DONE_OK = 2
-const STATUS_DONE_FAIL = 3
-
-/** 轻量 status 接口轮询间隔（要能看见 0→1→2 需快于判题耗时） */
-const STATUS_POLL_MS = 400
-/** 列表全量同步间隔（补全题目名等，非主状态来源） */
-const LIST_SYNC_MS = 1600
-const POLL_TIMEOUT_MS = 120_000
-
-/** 轮询期间用 status 接口刷新的实时状态（写回高亮行，避免列表 1s 才跳一次） */
-const pendingLiveStatus = ref<number | null>(null)
-const pendingLiveJudgeInfo = ref<string | undefined>(undefined)
-
-/** 防止 watch 因 router.replace 二次触发导致轮询被意外中断 */
-let pollingActive = false
-
-let submitPollAbort: AbortController | null = null
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms)
-  })
+const verdictMeta: Record<string, { label: string; abbr: string; tone: string; icon: string }> = {
+  Accepted: { label: '通过', abbr: 'AC', tone: 'success', icon: '✓' },
+  'Wrong Answer': { label: '答案错误', abbr: 'WA', tone: 'danger', icon: '×' },
+  'Compile Error': { label: '编译错误', abbr: 'CE', tone: 'danger', icon: '!' },
+  'Runtime Error': { label: '运行错误', abbr: 'RE', tone: 'danger', icon: '!' },
+  'Time Limit Exceeded': { label: '运行超时', abbr: 'TLE', tone: 'warning', icon: '⌛' },
+  'Memory Limit Exceeded': { label: '内存超限', abbr: 'MLE', tone: 'warning', icon: '◇' },
+  'Output Limit Exceeded': { label: '输出超限', abbr: 'OLE', tone: 'warning', icon: '!' },
+  'Presentation Error': { label: '格式错误', abbr: 'PE', tone: 'warning', icon: '!' },
+  'System Error': { label: '系统异常', abbr: 'SE', tone: 'neutral', icon: '!' },
+  Pending: { label: '等待评测', abbr: 'WJ', tone: 'pending', icon: '…' },
+  Judging: { label: '评测中', abbr: 'J', tone: 'pending', icon: '↻' },
+  Failed: { label: '未通过', abbr: 'FAIL', tone: 'danger', icon: '×' },
 }
-
-/** 管理员：全站记录（须在 applyCurrentPage 之上声明，避免引用顺序问题） */
-const adminScope = ref(false)
-const adminFilterUserId = ref('')
-const adminFilterQuestionId = ref('')
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
-
-const showAdminPanel = computed(() => auth.isAdmin === true)
-
-/**
- * 刚交卷进入列表时：数据按时间升序分页，新提交几乎总在最后一页。
- * 若始终把 current=1，表格里没有对应「全此次序」的行，轮询永远无法就地更新 —— 必须先翻到正确页。
- */
-function applyCurrentPageForPendingOrDefault() {
-  const ord = filterSubmitNo.value.trim()
-  if (ord.length > 0 && /^\d+$/.test(ord)) {
-    current.value = 1
-    return
+const canManage = computed(() => auth.isAdmin === true || auth.isTeacher === true)
+const managedScopeLabel = computed(() => (auth.isAdmin ? '全站管理' : '学生提交'))
+const hasPending = computed(() => rows.value.some((row) => row.status === 0 || row.status === 1))
+const metricCards = computed(() => {
+  const data = overview.value
+  if (scope.value === 'MANAGED') {
+    return [
+      { label: '总提交', value: data?.totalSubmissions ?? 0, icon: '▤', tone: 'teal' },
+      { label: '通过次数', value: data?.acceptedSubmissions ?? 0, icon: '✓', tone: 'green' },
+      { label: '活跃用户', value: data?.activeUsers ?? 0, icon: '◎', tone: 'blue' },
+      { label: '等待 / 评测中', value: data?.pendingSubmissions ?? 0, icon: '↻', tone: 'amber' },
+    ]
   }
-  if (showAdminPanel.value && adminScope.value) {
-    current.value = 1
-    return
+  return [
+    { label: '总提交', value: data?.totalSubmissions ?? 0, icon: '▤', tone: 'teal' },
+    { label: '通过次数', value: data?.acceptedSubmissions ?? 0, icon: '✓', tone: 'green' },
+    { label: '已解决题目', value: data?.solvedProblems ?? 0, icon: '◆', tone: 'blue' },
+    {
+      label: '通过率',
+      value: `${(data?.acceptedRate ?? 0).toFixed(1)}%`,
+      icon: '↗',
+      tone: 'amber',
+    },
+  ]
+})
+
+const trendOption = computed(() => ({
+  color: ['#168f80', '#72b6ff'],
+  tooltip: {
+    trigger: 'axis',
+    backgroundColor: '#172525',
+    borderWidth: 0,
+    textStyle: { color: '#fff' },
+  },
+  legend: {
+    top: 2,
+    right: 8,
+    icon: 'roundRect',
+    itemWidth: 14,
+    itemHeight: 8,
+    data: ['提交', '通过'],
+  },
+  grid: { left: 42, right: 18, top: 42, bottom: 28 },
+  xAxis: {
+    type: 'category',
+    boundaryGap: false,
+    data: overview.value?.trend.map((p) => p.date.slice(5)) ?? [],
+    axisLine: { lineStyle: { color: '#d9e2df' } },
+    axisLabel: { color: '#73807d' },
+  },
+  yAxis: {
+    type: 'value',
+    minInterval: 1,
+    splitLine: { lineStyle: { color: '#edf1ef' } },
+    axisLabel: { color: '#73807d' },
+  },
+  series: [
+    {
+      name: '提交',
+      type: 'line',
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 5,
+      areaStyle: { opacity: 0.08 },
+      data: overview.value?.trend.map((p) => p.total) ?? [],
+    },
+    {
+      name: '通过',
+      type: 'line',
+      smooth: true,
+      symbol: 'circle',
+      symbolSize: 5,
+      data: overview.value?.trend.map((p) => p.accepted) ?? [],
+    },
+  ],
+}))
+
+const verdictOption = computed(() => ({
+  color: ['#25a46f', '#ef6a61', '#f2a94a', '#6f89a8', '#b7c3bf'],
+  tooltip: {
+    trigger: 'item',
+    formatter: '{b}<br/>{c} 次（{d}%）',
+    backgroundColor: '#172525',
+    borderWidth: 0,
+    textStyle: { color: '#fff' },
+  },
+  legend: {
+    bottom: 0,
+    left: 'center',
+    icon: 'circle',
+    itemWidth: 8,
+    itemHeight: 8,
+    textStyle: { fontSize: 11 },
+  },
+  series: [
+    {
+      type: 'pie',
+      radius: ['48%', '70%'],
+      center: ['50%', '44%'],
+      padAngle: 2,
+      itemStyle: { borderColor: '#fff', borderWidth: 3, borderRadius: 5 },
+      label: { show: false },
+      data: (overview.value?.verdictDistribution ?? []).map((item) => ({
+        value: item.value,
+        name: verdictInfo(item.name).label,
+      })),
+    },
+  ],
+}))
+
+const languageOption = computed(() => {
+  const data = [...(overview.value?.languageDistribution ?? [])].slice(0, 6).reverse()
+  return {
+    color: ['#2aa696'],
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: { type: 'shadow' },
+      backgroundColor: '#172525',
+      borderWidth: 0,
+      textStyle: { color: '#fff' },
+    },
+    grid: { left: 66, right: 24, top: 12, bottom: 24 },
+    xAxis: {
+      type: 'value',
+      minInterval: 1,
+      splitLine: { lineStyle: { color: '#edf1ef' } },
+      axisLabel: { color: '#73807d' },
+    },
+    yAxis: {
+      type: 'category',
+      data: data.map((item) => languageLabel(item.name)),
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: { color: '#485653' },
+    },
+    series: [
+      {
+        type: 'bar',
+        barWidth: 12,
+        itemStyle: { borderRadius: [0, 6, 6, 0] },
+        data: data.map((item) => item.value),
+      },
+    ],
   }
-  const g = pendingGlobalSubmitNo.value
-  if (g && /^\d+$/.test(g)) {
-    current.value = Math.max(1, Math.ceil(Number(g) / pageSize.value))
-    return
-  }
-  current.value = 1
-}
+})
 
-function parseJudgeInfo(raw?: string): { message?: string; time?: number; memory?: number; detail?: string } {
-  if (!raw || raw === '{}') return {}
-  try {
-    const o = JSON.parse(raw) as { message?: string; time?: number; memory?: number }
-    if (o && typeof o === 'object' && typeof o.message === 'string') {
-      o.message = normalizeOjMessage(o.message)
-    }
-    return o && typeof o === 'object' ? o : {}
-  } catch {
-    return {}
+function filters(): SubmissionFilters {
+  return {
+    scope: scope.value,
+    userId: scope.value === 'MANAGED' && selectedUserId.value ? selectedUserId.value : undefined,
+    questionKeyword: questionKeyword.value.trim() || undefined,
+    userKeyword: scope.value === 'MANAGED' ? userKeyword.value.trim() || undefined : undefined,
+    verdict: verdict.value || undefined,
+    language: language.value || undefined,
+    startTime: startDate.value ? `${startDate.value}T00:00:00` : undefined,
+    endTime: endDate.value ? `${nextDate(endDate.value)}T00:00:00` : undefined,
+    sort: sort.value,
+    current: current.value,
+    pageSize: pageSize.value,
   }
 }
 
-function normalizeOjMessage(message?: string): string | undefined {
-  const msg = (message || '').trim()
-  if (!msg) return undefined
-  if (msg === '成功') return 'Accepted'
-  if (msg === '答案错误') return 'Wrong Answer'
-  if (msg === '编译错误') return 'Compile Error'
-  if (msg === '超时') return 'Time Limit Exceeded'
-  if (msg === '内存溢出' || msg === '内存超限') return 'Memory Limit Exceeded'
-  if (msg === '运行错误') return 'Runtime Error'
-  if (msg === '输出溢出' || msg === '输出超限') return 'Output Limit Exceeded'
-  if (msg === '危险操作') return 'Dangerous Operation'
-  if (msg === '展示错误' || msg === '格式错误') return 'Presentation Error'
-  if (msg === '系统错误') return 'System Error'
-  return msg
+function nextDate(value: string) {
+  const date = new Date(`${value}T00:00:00`)
+  date.setDate(date.getDate() + 1)
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 }
 
-function statusLabel(status?: number): string {
-  if (status === STATUS_WAITING) return '等待判题'
-  if (status === STATUS_RUNNING) return '判题中'
-  if (status === STATUS_DONE_OK) return '已完成'
-  if (status === STATUS_DONE_FAIL) return '已完成'
-  return '-'
-}
-
-function matchPendingRow(row: SubmitRow): boolean {
-  const g = pendingGlobalSubmitNo.value
-  if (!g) return false
-  return String(row.submitNo ?? '') === g || String(row.globalSubmitNo ?? '') === g
-}
-
-/** 高亮行优先展示 status 接口的最新状态 */
-function displayStatus(row: SubmitRow): number | undefined {
-  if (matchPendingRow(row) && pendingLiveStatus.value != null) {
-    return pendingLiveStatus.value
-  }
-  return row.status
-}
-
-function judgeInfoForRow(row: SubmitRow): string | undefined {
-  if (matchPendingRow(row) && pendingLiveJudgeInfo.value != null) {
-    return pendingLiveJudgeInfo.value
-  }
-  return row.judgeInfo
-}
-
-function statusLabelForRow(row: SubmitRow): string {
-  return statusLabel(displayStatus(row))
-}
-
-function resultLabel(row: SubmitRow): string {
-  const st = displayStatus(row)
-  const ji = parseJudgeInfo(judgeInfoForRow(row))
-  if (ji.message) return ji.message
-  if (st === STATUS_WAITING) return '等待判题'
-  if (st === STATUS_RUNNING) return '判题中'
-  if (st === STATUS_DONE_OK) return '通过'
-  if (st === STATUS_DONE_FAIL) return '未通过'
-  return '-'
-}
-
-function resultTone(row: SubmitRow): 'ac' | 'wa' | 'pend' | 'fail' | 'neutral' {
-  const msg = (parseJudgeInfo(judgeInfoForRow(row)).message || '').toLowerCase()
-  const st = displayStatus(row)
-  if (st === STATUS_WAITING || st === STATUS_RUNNING) return 'pend'
-  if (msg.includes('accept')) return 'ac'
-  if (st === STATUS_DONE_OK && !parseJudgeInfo(judgeInfoForRow(row)).message) return 'ac'
-  if (msg.includes('compile')) return 'fail'
-  if (st === STATUS_DONE_FAIL || msg.includes('wrong') || msg.includes('error') || msg.includes('limit'))
-    return 'wa'
-  if (st === STATUS_DONE_OK) return 'ac'
-  return 'neutral'
-}
-
-function formatTimeMem(row: SubmitRow): string {
-  const ji = parseJudgeInfo(row.judgeInfo)
-  const parts: string[] = []
-  if (ji.time != null && ji.time !== undefined) parts.push(`${ji.time} ms`)
-  if (ji.memory != null && ji.memory !== undefined) parts.push(`${ji.memory} KB`)
-  return parts.length ? parts.join(' / ') : '—'
-}
-
-function formatDateTime(raw?: string): string {
-  if (!raw) return '-'
-  const d = new Date(raw)
-  if (Number.isNaN(d.getTime())) return raw
-  return d
-    .toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    })
-    .replace(/\//g, '-')
-}
-
-function syncQueryFromFilter() {
-  const q = { ...route.query } as Record<string, string | string[] | undefined>
-  delete q.problemId
-  const ord = filterSubmitNo.value.trim()
-  if (ord && /^\d+$/.test(ord)) {
-    q.order = ord
-  } else {
-    delete q.order
-  }
-  void router.replace({ path: route.path, query: q })
-}
-
-function applyFilter() {
-  current.value = 1
-  syncQueryFromFilter()
-  void fetchList()
-}
-
-function onPrevPage() {
-  if (current.value <= 1) return
-  current.value -= 1
-  void fetchList()
-}
-
-function onNextPage() {
-  if (current.value >= totalPages.value) return
-  current.value += 1
-  void fetchList()
-}
-
-function onAdminApply() {
-  current.value = 1
-  void fetchList()
-}
-
-async function hydrateQuestionTitles(ids: (string | undefined)[]) {
-  const unique = [...new Set(ids.map((id) => String(id || '').trim()).filter((id) => /^\d+$/.test(id)))]
-  const missing = unique.filter((id) => !questionTitleCache.value[id])
-  if (missing.length === 0) return
-  await Promise.all(
-    missing.map(async (id) => {
-      try {
-        const data = await Service.getPublicQuestionDetail(id)
-        if (isResultSuccess(data.code) && data.data?.title) {
-          questionTitleCache.value = { ...questionTitleCache.value, [id]: data.data.title }
-        }
-      } catch {
-        /* 忽略单题标题失败 */
-      }
-    }),
-  )
-}
-
-async function fetchList(opts?: { silent?: boolean }) {
-  const silent = opts?.silent === true
-  const token = auth.token?.trim()
-  if (!token) {
-    Message.warning('请先登录后查看提交记录')
-    return
-  }
-
+async function loadPage(silent = false) {
   if (!silent) loading.value = true
   try {
-    let data
-    if (showAdminPanel.value && adminScope.value) {
-      const uid = adminFilterUserId.value.trim()
-      const qid = adminFilterQuestionId.value.trim()
-      const ord = filterSubmitNo.value.trim()
-      let userIdFilter: string | undefined
-      let questionIdFilter: string | undefined
-      let submitNoFilter: number | undefined
-      if (/^[1-9]\d*$/.test(uid)) userIdFilter = uid
-      if (/^[1-9]\d*$/.test(qid)) questionIdFilter = qid
-      if (userIdFilter != null && questionIdFilter != null && /^\d+$/.test(ord)) {
-        submitNoFilter = Number(ord)
+    const page = await getSubmissionPage(filters())
+    const nextRows = page.records ?? []
+    nextRows.forEach((row) => {
+      const old = previousStatus.get(row.submissionId)
+      if (old != null && old !== row.status && row.status !== 0 && row.status !== 1) {
+        highlightedIds.value = new Set([...highlightedIds.value, row.submissionId])
+        window.setTimeout(() => {
+          const next = new Set(highlightedIds.value)
+          next.delete(row.submissionId)
+          highlightedIds.value = next
+        }, 2200)
       }
-      data = await QuestionSubmitControllerService.pageAllQuestionSubmitsForAdmin(
-        current.value,
-        pageSize.value,
-        userIdFilter,
-        questionIdFilter,
-        submitNoFilter,
-      )
-    } else {
-      const ord = filterSubmitNo.value.trim()
-      const hasOrder = /^\d+$/.test(ord)
-      data = await QuestionSubmitControllerService.pageMyAllQuestionSubmits(
-        hasOrder ? Number(ord) : undefined,
-        current.value,
-        pageSize.value,
-      )
-    }
-    if (!isResultSuccess(data.code)) {
-      Message.error(data.message || '获取提交记录失败')
-      return
-    }
-    const page = data.data
-    rows.value = (page?.records as SubmitRow[] | undefined) ?? []
-    total.value = page?.total ?? 0
-    current.value = page?.current ?? current.value
-    pageSize.value = page?.size ?? pageSize.value
-
-    // 列表定时同步也更新当前提交的实时状态，作为轻量 status 接口的兜底。
-    const pendingRow = rows.value.find((row) => matchPendingRow(row))
-    if (pendingRow) {
-      if (pendingRow.status != null) pendingLiveStatus.value = pendingRow.status
-      if (pendingRow.judgeInfo != null) pendingLiveJudgeInfo.value = pendingRow.judgeInfo
-    }
-
-    await hydrateQuestionTitles(rows.value.filter((r) => !r.questionTitle).map((r) => r.questionId))
+      previousStatus.set(row.submissionId, row.status)
+    })
+    rows.value = nextRows
+    lastSyncAt.value = Date.now()
+    total.value = page.total ?? 0
+    current.value = page.current ?? current.value
+    pageSize.value = page.size ?? pageSize.value
   } catch (error) {
-    if (error instanceof ApiError && error.status === 401) {
-      Message.error('登录已失效，请重新登录')
-      return
-    }
-    Message.error(mapApiError(error, getBackendErrorMessage(error, '获取提交记录失败')))
+    if (!silent) Message.error(error instanceof Error ? error.message : '提交记录加载失败')
   } finally {
     if (!silent) loading.value = false
   }
 }
 
-async function ensurePendingSubmitRowOnPage(): Promise<void> {
-  const g = pendingGlobalSubmitNo.value
-  if (!g || !/^\d+$/.test(g)) return
-  if (showAdminPanel.value && adminScope.value) return
-  const target = Math.max(1, Math.ceil(Number(g) / pageSize.value))
-  if (current.value !== target) {
-    current.value = target
-    await fetchList({ silent: true })
-  }
-}
-
-/** 判题结束后静默重新拉取列表，必要时翻到包含该条的页并滚动、短时强调该行 */
-async function refreshAfterJudgeTerminal(savedGlobalNo: string, savedDbSubmitId: string) {
-  const ordFilter = filterSubmitNo.value.trim()
-  const filtered = ordFilter.length > 0 && /^\d+$/.test(ordFilter)
-  const onMyList = !(showAdminPanel.value && adminScope.value)
-
-  if (!filtered && onMyList && savedGlobalNo && /^\d+$/.test(savedGlobalNo)) {
-    const sn = Number(savedGlobalNo)
-    flashAfterJudgeGlobalNo.value = savedGlobalNo
-    window.setTimeout(() => {
-      flashAfterJudgeGlobalNo.value = ''
-    }, 2800)
-    current.value = Math.max(1, Math.ceil(sn / pageSize.value))
-  }
-
-  await fetchList({ silent: true })
-
-  await nextTick()
-  if (savedGlobalNo && /^\d+$/.test(savedGlobalNo)) {
-    const hit = rows.value.find(
-      (r) =>
-        String(r.submitNo ?? '') === savedGlobalNo ||
-        String(r.globalSubmitNo ?? '') === savedGlobalNo,
-    )
-    if (hit) {
-      const key = rowDomKey(hit)
-      document
-        .querySelector<HTMLElement>(`.submit-table [data-submit-row="${key}"]`)
-        ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      return
-    }
-  }
-  if (savedDbSubmitId && /^\d+$/.test(savedDbSubmitId)) {
-    document
-      .querySelector<HTMLElement>(`.submit-table [data-submit-row="${savedDbSubmitId}"]`)
-      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }
-}
-
-function isRowFlash(row: SubmitRow): boolean {
-  if (flashAfterJudgeGlobalNo.value === '') return false
-  const k = flashAfterJudgeGlobalNo.value
-  return String(row.submitNo ?? '') === k || String(row.globalSubmitNo ?? '') === k
-}
-
-function consumePendingSubmitFromSession() {
-  if (typeof sessionStorage === 'undefined') return
-  const raw = sessionStorage.getItem(PENDING_SUBMIT_SESSION_KEY)
-  if (!raw) return
-  sessionStorage.removeItem(PENDING_SUBMIT_SESSION_KEY)
+async function loadOverview(silent = false) {
+  if (!silent) overviewLoading.value = true
   try {
-    const o = JSON.parse(raw) as { questionId?: string; submitNo?: string; globalSubmitNo?: string; t?: number }
-    const qid = String(o.questionId || '').trim()
-    const sn = String(o.submitNo || '').trim()
-    const gsn = String(o.globalSubmitNo || '').trim()
-    const t = typeof o.t === 'number' ? o.t : 0
-    if (!/^\d+$/.test(qid) || !/^\d+$/.test(sn) || !/^\d+$/.test(gsn)) return
-    if (Date.now() - t > 10 * 60 * 1000) return
-    pendingPollQuestionId.value = qid
-    pendingPollSubmitNo.value = sn
-    pendingGlobalSubmitNo.value = gsn
-    pendingLiveStatus.value = STATUS_WAITING
-    pendingLiveJudgeInfo.value = '{}'
-  } catch {
-    /* ignore */
+    overview.value = await getSubmissionOverview(filters(), rangeDays.value)
+  } catch (error) {
+    if (!silent) Message.error(error instanceof Error ? error.message : '统计数据加载失败')
+  } finally {
+    if (!silent) overviewLoading.value = false
   }
 }
 
-function initFromRouteQuery() {
-  const ord = route.query.order
-  const ord0 = Array.isArray(ord) ? ord[0] : ord
-  if (ord0 && /^\d+$/.test(String(ord0))) {
-    filterSubmitNo.value = String(ord0)
-  } else {
-    filterSubmitNo.value = ''
-  }
-
-  const sid = route.query.submitId
-  const ss = Array.isArray(sid) ? sid[0] : sid
-  if (ss && /^\d+$/.test(String(ss))) {
-    highlightDbSubmitId.value = String(ss)
-  } else {
-    highlightDbSubmitId.value = ''
-  }
-
-  const fromSubmit = route.query.fromSubmit
-  const fs = Array.isArray(fromSubmit) ? fromSubmit[0] : fromSubmit
-  const hasLegacyProblemId = route.query.problemId != null
-  if (fs === '1' || fs === 'true' || hasLegacyProblemId) {
-    nextTick(() => {
-      const q = { ...route.query } as Record<string, string | string[] | undefined>
-      delete q.fromSubmit
-      delete q.problemId
-      void router.replace({ path: route.path, query: q })
-    })
-  }
+async function refreshAll(silent = false) {
+  await Promise.all([loadPage(silent), loadOverview(silent)])
 }
 
-function clearLegacySubmitIdFromUrl() {
-  const q = { ...route.query } as Record<string, string | string[] | undefined>
-  delete q.submitId
-  void router.replace({ path: route.path, query: q })
+function applyFilters() {
+  current.value = 1
+  filterOpen.value = false
+  void refreshAll()
 }
 
-function clearPendingPoll() {
-  pendingPollQuestionId.value = ''
-  pendingPollSubmitNo.value = ''
-  pendingGlobalSubmitNo.value = ''
-  pendingLiveStatus.value = null
-  pendingLiveJudgeInfo.value = undefined
+function resetFilters() {
+  questionKeyword.value = ''
+  userKeyword.value = ''
+  verdict.value = ''
+  language.value = ''
+  startDate.value = ''
+  endDate.value = ''
+  sort.value = 'DESC'
+  applyFilters()
 }
 
-function applyStatusSnapshot(vo: {
-  status?: number
-  judgeInfo?: string
-  language?: string
-  createTime?: string
-  questionId?: string
-  submitNo?: number
-  globalSubmitNo?: number
-}) {
-  if (vo.status != null) pendingLiveStatus.value = vo.status
-  if (vo.judgeInfo != null) pendingLiveJudgeInfo.value = vo.judgeInfo
-
-  const g = pendingGlobalSubmitNo.value
-  if (!g) return
-  const idx = rows.value.findIndex((r) => matchPendingRow(r))
-  const patch: SubmitRow = {
-    questionId: vo.questionId != null ? String(vo.questionId) : pendingPollQuestionId.value,
-    submitNo: vo.submitNo ?? Number(g),
-    globalSubmitNo: vo.globalSubmitNo ?? Number(g),
-    status: vo.status,
-    judgeInfo: vo.judgeInfo,
-    language: vo.language,
-    createTime: vo.createTime,
-  }
-  if (idx >= 0) {
-    rows.value[idx] = { ...rows.value[idx], ...patch }
-  } else {
-    rows.value = [...rows.value, patch]
-  }
-}
-
-async function fetchSubmitStatusSnapshot(): Promise<number | null> {
-  const qid = pendingPollQuestionId.value
-  const sn = pendingPollSubmitNo.value
-  if (!/^\d+$/.test(qid) || !/^\d+$/.test(sn)) return null
+async function openDetail(row: SubmissionListItem) {
+  detailOpen.value = true
+  detail.value = null
+  detailLoading.value = true
+  await router.replace({ query: { ...route.query, submissionId: row.submissionId } })
   try {
-    const parsed = await QuestionSubmitControllerService.getSubmitStatusBySubmitNo(
-      qid,
-      Number(sn),
-    )
-    if (!isResultSuccess(parsed.code) || !parsed.data) return pendingLiveStatus.value
-    applyStatusSnapshot(parsed.data)
-    return parsed.data.status ?? null
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 401) return null
-    return pendingLiveStatus.value
+    detail.value = await getSubmissionDetail(row.submissionId)
+    await nextTick()
+    await highlightCode()
+  } catch (error) {
+    Message.error(error instanceof Error ? error.message : '提交详情加载失败')
+    closeDetail()
+  } finally {
+    detailLoading.value = false
   }
 }
 
-function rowDomKey(row: SubmitRow): string {
-  if (row.id) return row.id
-  const q = row.questionId ?? ''
-  const n = row.submitNo ?? ''
-  return `${q}-${n}`
+function closeDetail() {
+  detailOpen.value = false
+  detailFullscreen.value = false
+  detail.value = null
+  const query = { ...route.query }
+  delete query.submissionId
+  void router.replace({ query })
 }
 
-function isRowHighlighted(row: SubmitRow): boolean {
-  if (pendingGlobalSubmitNo.value) {
-    return String(row.submitNo ?? '') === pendingGlobalSubmitNo.value
-  }
-  if (highlightDbSubmitId.value && row.id) {
-    return row.id === highlightDbSubmitId.value
-  }
-  return false
+async function highlightCode() {
+  const element = document.querySelector<HTMLElement>('#submission-code')
+  if (!element) return
+  const PrismModule = await import('prismjs')
+  const Prism = PrismModule.default
+  await import('prismjs/components/prism-clike')
+  await import('prismjs/components/prism-cpp')
+  await import('prismjs/components/prism-java')
+  await import('prismjs/components/prism-python')
+  element.className = `language-${prismLanguage(detail.value?.language)}`
+  Prism.highlightElement(element)
 }
 
-const showJudgePollingBanner = computed(
-  () =>
-    Boolean(
-      pendingPollQuestionId.value && pendingPollSubmitNo.value && pendingGlobalSubmitNo.value,
-    ),
-)
+function prismLanguage(value?: string) {
+  const lang = value?.toLowerCase()
+  if (lang === 'c++' || lang === 'cpp') return 'cpp'
+  if (lang === 'python') return 'python'
+  if (lang === 'java') return 'java'
+  return 'clike'
+}
 
-const judgePollBannerText = computed(() => {
-  const st = pendingLiveStatus.value
-  if (st === STATUS_RUNNING) return '正在判题中，请稍候…'
-  if (st === STATUS_WAITING) return '已提交，等待进入判题队列…'
-  if (st === STATUS_DONE_OK || st === STATUS_DONE_FAIL) return '判题已完成，正在同步结果…'
-  return '正在跟进本次提交的评测状态…'
+async function copyCode() {
+  if (!detail.value?.code) return
+  await navigator.clipboard.writeText(detail.value.code)
+  Message.success('代码已复制')
+}
+
+function continueProblem() {
+  if (!detail.value?.questionId) return
+  void router.push({ name: 'problem-solve', params: { id: detail.value.questionId } })
+}
+
+function verdictInfo(value?: string) {
+  if (!value) return verdictMeta.Pending!
+  return verdictMeta[value] ?? { label: value, abbr: 'OJ', tone: 'neutral', icon: '•' }
+}
+
+function rowVerdict(row: SubmissionListItem) {
+  if (row.status === 0) return verdictInfo('Pending')
+  if (row.status === 1) return verdictInfo('Judging')
+  return verdictInfo(row.verdict || (row.status === 2 ? 'Accepted' : 'Failed'))
+}
+
+function languageLabel(value?: string) {
+  const lang = (value || 'unknown').toLowerCase()
+  if (lang === 'cpp' || lang === 'c++') return 'C++'
+  if (lang === 'python') return 'Python'
+  if (lang === 'java') return 'Java'
+  return lang === 'unknown' ? '未知' : value || '未知'
+}
+
+function formatDate(value?: string) {
+  if (!value) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatClock(value: number) {
+  return new Date(value).toLocaleTimeString('zh-CN', { hour12: false })
+}
+
+function formatRelative(value?: string) {
+  if (!value) return ''
+  const timestamp = new Date(value).getTime()
+  if (Number.isNaN(timestamp)) return ''
+  const seconds = Math.max(0, Math.floor((liveNow.value - timestamp) / 1000))
+  if (seconds < 5) return '刚刚'
+  if (seconds < 60) return `${seconds} 秒前`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  return `${Math.floor(hours / 24)} 天前`
+}
+
+function formatMemory(value?: number) {
+  if (value == null) return '—'
+  return value >= 1024 ? `${(value / 1024).toFixed(value >= 10240 ? 0 : 1)} MB` : `${value} KB`
+}
+
+function scheduleRefresh() {
+  window.clearInterval(refreshTimer)
+  refreshTimer = window.setInterval(() => {
+    if (document.visibilityState !== 'visible') return
+    refreshTicks += 1
+    if (hasPending.value || refreshTicks % 5 === 0) void loadPage(true)
+    if (refreshTicks % 15 === 0) void loadOverview(true)
+  }, 1000)
+  window.clearInterval(clockTimer)
+  clockTimer = window.setInterval(() => {
+    liveNow.value = Date.now()
+  }, 1000)
+}
+
+watch(scope, () => {
+  current.value = 1
+  // 切换范围时清空指定用户过滤
+  selectedUserId.value = ''
+  void refreshAll()
+})
+watch(rangeDays, () => void loadOverview())
+watch(pageSize, () => {
+  current.value = 1
+  void loadPage()
 })
 
-function isRowJudging(row: SubmitRow): boolean {
-  return matchPendingRow(row) && displayStatus(row) === STATUS_RUNNING
-}
-
-/** 高亮行滚入视口，并对该条后台轮询直到判题结束 */
-function afterListLoadedForSubmit() {
-  const hasPending = Boolean(
-    pendingPollQuestionId.value && pendingPollSubmitNo.value && pendingGlobalSubmitNo.value,
-  )
-  if (!hasPending && !highlightDbSubmitId.value) return
-
-  nextTick(() => {
-    const key = highlightDbSubmitId.value
-      ? highlightDbSubmitId.value
-      : hasPending
-        ? `${pendingPollQuestionId.value}-${pendingGlobalSubmitNo.value}`
-        : ''
-    if (!key) return
-    const el = document.querySelector<HTMLElement>(`.submit-table [data-submit-row="${key}"]`)
-    el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  })
-
-  void pollSubmitUntilTerminal()
-}
-
-/**
- * 判题跟进：高频轮询 GET /status/my 更新高亮行（能看见 0→1→2）；
- * 列表接口较低频同步，用于翻页与补全题目标题。
- */
-async function pollSubmitUntilTerminal() {
-  // 防止重复启动轮询
-  if (pollingActive) {
-    submitPollAbort?.abort()
-  }
-  pollingActive = true
-  submitPollAbort?.abort()
-  submitPollAbort = new AbortController()
-  const signal = submitPollAbort.signal
-  const token = auth.token?.trim()
-  if (!token) {
-    pollingActive = false
+onMounted(async () => {
+  if (!auth.token) {
+    Message.warning('请先登录后查看提交记录')
     return
   }
-
-  const savedGlobal = pendingGlobalSubmitNo.value
-  const savedPerQ = pendingPollSubmitNo.value
-  const savedQid = pendingPollQuestionId.value
-  const legacyDbId = highlightDbSubmitId.value
-
-  const pendingChainOk =
-    Boolean(savedGlobal && /^\d+$/.test(savedGlobal)) &&
-    Boolean(savedPerQ && /^\d+$/.test(savedPerQ)) &&
-    Boolean(savedQid && /^\d+$/.test(savedQid))
-
-  if (!pendingChainOk && !legacyDbId) {
-    clearLegacySubmitIdFromUrl()
-    clearPendingPoll()
-    pollingActive = false
-    return
+  // 从路由读取数据范围（老师端跳转带 scope=MANAGED）
+  const routeScope = String(route.query.scope || '').toUpperCase()
+  if (routeScope === 'MANAGED' || routeScope === 'SELF') {
+    scope.value = routeScope as SubmissionScope
   }
-
-  await ensurePendingSubmitRowOnPage()
-  await fetchList({ silent: true })
-  await fetchSubmitStatusSnapshot()
-
-  const start = Date.now()
-  let lastListSync = Date.now()
-
-  while (Date.now() - start < POLL_TIMEOUT_MS) {
-    if (signal.aborted) return
-
-    if (pendingChainOk) {
-      const st = await fetchSubmitStatusSnapshot()
-      if (st === STATUS_DONE_OK || st === STATUS_DONE_FAIL) {
-        const row = rows.value.find((r) => matchPendingRow(r))
-        const msg = parseJudgeInfo(judgeInfoForRow(row ?? {})).message
-        if (st === STATUS_DONE_OK) {
-          Message.success(msg ? `判题完成：${msg}` : '判题通过')
-        } else {
-          Message.warning(msg ? `判题完成：${msg}` : '判题未通过')
-        }
-        clearLegacySubmitIdFromUrl()
-        clearPendingPoll()
-        highlightDbSubmitId.value = ''
-        pollingActive = false
-        await fetchList({ silent: true })
-        await refreshAfterJudgeTerminal(savedGlobal, '')
-        return
-      }
-    }
-
-    if (Date.now() - lastListSync >= LIST_SYNC_MS) {
-      await fetchList({ silent: true })
-      await fetchSubmitStatusSnapshot()
-      if (!rows.value.some((r) => matchPendingRow(r))) {
-        await ensurePendingSubmitRowOnPage()
-        await fetchList({ silent: true })
-        await fetchSubmitStatusSnapshot()
-      }
-      lastListSync = Date.now()
-    }
-
-    if (legacyDbId) {
-      try {
-        if (signal.aborted) return
-        const parsed = await QuestionSubmitControllerService.getSubmitStatus(legacyDbId)
-        if (signal.aborted) return
-        if (isResultSuccess(parsed.code)) {
-          const st = parsed.data?.status
-          const ji = parsed.data?.judgeInfo
-          if (st === STATUS_DONE_OK || st === STATUS_DONE_FAIL) {
-            const msg = parseJudgeInfo(ji).message
-            if (st === STATUS_DONE_OK) {
-              Message.success(msg ? `判题完成：${msg}` : '判题通过')
-            } else {
-              Message.warning(msg ? `判题完成：${msg}` : '判题未通过')
-            }
-            const snapG = pendingGlobalSubmitNo.value || savedGlobal
-            clearLegacySubmitIdFromUrl()
-            clearPendingPoll()
-            highlightDbSubmitId.value = ''
-            pollingActive = false
-            await refreshAfterJudgeTerminal(snapG, legacyDbId)
-            return
-          }
-        }
-      } catch (e) {
-        if (e instanceof ApiError && e.status === 401) return
-        if (signal.aborted) return
-      }
-    }
-
-    await delay(STATUS_POLL_MS)
+  // 老师从学生管理页跳转时带 userId，仅在 MANAGED 范围下生效
+  if (scope.value === 'MANAGED') {
+    selectedUserId.value = String(route.query.userId || '')
   }
-
-  Message.warning('判题等待较久，已为你同步列表')
-  const endGlobal = pendingGlobalSubmitNo.value || savedGlobal
-  const endDb = highlightDbSubmitId.value || legacyDbId
-  clearLegacySubmitIdFromUrl()
-  clearPendingPoll()
-  highlightDbSubmitId.value = ''
-  pollingActive = false
-  await refreshAfterJudgeTerminal(endGlobal, endDb)
-}
-
-async function loadListAndHandleSubmitHighlight() {
-  await fetchList()
-  if (
-    highlightDbSubmitId.value &&
-    showAdminPanel.value &&
-    adminScope.value &&
-    !rows.value.some((r) => r.id === highlightDbSubmitId.value)
-  ) {
-    await fetchList()
+  await refreshAll()
+  scheduleRefresh()
+  const submissionId = String(route.query.submissionId || '')
+  if (/^\d+$/.test(submissionId)) {
+    await openDetail({ submissionId } as SubmissionListItem)
   }
-  afterListLoadedForSubmit()
-}
-
-watch(
-  () => route.fullPath,
-  () => {
-    if (route.name !== 'submissions') return
-    consumePendingSubmitFromSession()
-    initFromRouteQuery()
-    // 如果已有轮询在进行中（通常因 router.replace 去除 fromSubmit 导致二次触发），
-    // 跳过重复的列表拉取与轮询启动，避免当前轮询被意外中断
-    if (pollingActive) return
-    applyCurrentPageForPendingOrDefault()
-    // 提前标记为 active，防止 router.replace 二次触发 watch 时重复初始化
-    const hasPending = Boolean(
-      pendingPollQuestionId.value && pendingPollSubmitNo.value && pendingGlobalSubmitNo.value,
-    )
-    if (hasPending || highlightDbSubmitId.value) {
-      pollingActive = true
-    }
-    void loadListAndHandleSubmitHighlight()
-  },
-  { immediate: true },
-)
-
-watch(adminScope, () => {
-  current.value = 1
-  void fetchList()
 })
 
 onBeforeUnmount(() => {
-  pollingActive = false
-  submitPollAbort?.abort()
-  submitPollAbort = null
-  clearPendingPoll()
+  window.clearInterval(refreshTimer)
+  window.clearInterval(clockTimer)
 })
 </script>
 
 <template>
-  <div class="submissions-page">
-    <section class="hero panel">
+  <main class="submission-workspace">
+    <header class="page-heading">
       <div>
-        <p class="eyebrow">Submission Log</p>
         <h1>提交记录</h1>
-        <p class="lead">
-          查看评测状态、运行时间与内存占用，风格参考常见 OJ 提交列表。
+        <p>
+          {{
+            scope === 'SELF'
+              ? '回顾每次尝试，找到下一步改进方向。'
+              : auth.isAdmin
+                ? '查看全站评测状态与异常提交。'
+                : '查看学生的评测记录与解题情况。'
+          }}
         </p>
       </div>
-      <div class="hero-meta">
-        <span class="meta-chip">共 {{ total }} 条</span>
-        <span class="meta-chip">每页 {{ pageSize }} 条</span>
-        <span class="meta-chip">{{ loading ? '加载中' : '已同步' }}</span>
+      <div class="heading-actions">
+        <span class="sync-state"
+          ><i :class="{ pulse: hasPending }" />{{
+            hasPending ? '正在同步评测' : `实时同步 · ${formatClock(liveNow)}`
+          }}</span
+        >
+        <button class="secondary-btn" type="button" @click="refreshAll()">刷新</button>
+        <button class="primary-btn" type="button" @click="router.push({ name: 'problems' })">
+          继续刷题
+        </button>
+      </div>
+    </header>
+
+    <div v-if="canManage" class="scope-switch" aria-label="数据范围">
+      <button :class="{ active: scope === 'SELF' }" type="button" @click="scope = 'SELF'">
+        我的提交
+      </button>
+      <button :class="{ active: scope === 'MANAGED' }" type="button" @click="scope = 'MANAGED'">
+        {{ managedScopeLabel }}
+      </button>
+    </div>
+
+    <section class="metrics-grid" :aria-busy="overviewLoading">
+      <article v-for="card in metricCards" :key="card.label" class="metric-card">
+        <span class="metric-icon" :data-tone="card.tone">{{ card.icon }}</span>
+        <div>
+          <strong>{{ card.value }}</strong
+          ><span>{{ card.label }}</span>
+        </div>
+      </article>
+    </section>
+
+    <section class="analytics-panel">
+      <div class="section-title-row">
+        <div>
+          <h2>学习趋势</h2>
+          <p>图表会随下方筛选条件同步变化</p>
+        </div>
+        <div class="range-switch">
+          <button
+            v-for="days in [7, 30, 90] as const"
+            :key="days"
+            :class="{ active: rangeDays === days }"
+            type="button"
+            @click="rangeDays = days"
+          >
+            {{ days }} 天
+          </button>
+        </div>
+      </div>
+      <div class="charts-grid">
+        <article class="chart-card chart-card--wide">
+          <h3>每日提交与通过</h3>
+          <VChart class="chart" :option="trendOption" autoresize />
+        </article>
+        <article class="chart-card">
+          <h3>判题结果</h3>
+          <VChart class="chart" :option="verdictOption" autoresize />
+        </article>
+        <article class="chart-card">
+          <h3>使用语言</h3>
+          <VChart class="chart" :option="languageOption" autoresize />
+        </article>
       </div>
     </section>
 
-    <section class="panel table-shell">
-      <div
-        v-if="showJudgePollingBanner"
-        class="judge-poll-banner"
-        :class="{ 'judge-poll-banner--running': pendingLiveStatus === STATUS_RUNNING }"
-        role="status"
-      >
-        <span class="judge-poll-banner__dot" aria-hidden="true" />
-        {{ judgePollBannerText }}
-        <span v-if="pendingLiveStatus != null" class="judge-poll-banner__phase">
-          （{{ statusLabel(pendingLiveStatus) }}）
-        </span>
-      </div>
-      <div class="filter-row">
-        <a-input
-          v-model="filterSubmitNo"
-          allow-clear
-          placeholder="次序 1、2、3…（本人在全站的第几次提交，留空表示全部）"
-          :disabled="showAdminPanel && adminScope"
-        />
-        <a-button type="primary" class="query-btn query-btn--primary" :loading="loading" @click="applyFilter">
-          筛选
-        </a-button>
+    <section class="records-panel">
+      <div class="records-heading">
+        <div>
+          <h2>{{ scope === 'SELF' ? '我的提交' : auth.isAdmin ? '全站提交' : '学生提交' }}</h2>
+          <span>共 {{ total }} 条</span>
+        </div>
+        <button class="mobile-filter-button" type="button" @click="filterOpen = true">筛选</button>
       </div>
 
-      <div v-if="showAdminPanel" class="admin-row">
-        <label class="admin-toggle">
-          <input v-model="adminScope" type="checkbox" />
-          <span>管理员：查看全站提交</span>
-        </label>
-        <template v-if="adminScope">
-          <a-input v-model="adminFilterUserId" allow-clear placeholder="用户 ID（可选）" class="admin-input" />
-          <a-input v-model="adminFilterQuestionId" allow-clear placeholder="题目 ID（可选）" class="admin-input" />
-          <a-input
-            v-model="filterSubmitNo"
-            allow-clear
-            placeholder="次序（须同时填用户+题目）"
-            class="admin-input"
-          />
-          <a-button type="outline" :loading="loading" @click="onAdminApply">应用</a-button>
-        </template>
+      <div class="filter-bar" :class="{ 'filter-bar--open': filterOpen }">
+        <div class="mobile-filter-head">
+          <strong>筛选提交记录</strong><button type="button" @click="filterOpen = false">×</button>
+        </div>
+        <label
+          ><span>题目</span
+          ><input v-model="questionKeyword" placeholder="名称或 ID" @keyup.enter="applyFilters"
+        /></label>
+        <label v-if="scope === 'MANAGED'"
+          ><span>用户</span
+          ><input v-model="userKeyword" placeholder="昵称、用户名或 ID" @keyup.enter="applyFilters"
+        /></label>
+        <label
+          ><span>结果</span
+          ><select v-model="verdict">
+            <option value="">全部结果</option>
+            <option v-for="(meta, key) in verdictMeta" :key="key" :value="key">
+              {{ meta.label }} {{ meta.abbr }}
+            </option>
+          </select></label
+        >
+        <label
+          ><span>语言</span
+          ><select v-model="language">
+            <option value="">全部语言</option>
+            <option value="cpp">C++</option>
+            <option value="java">Java</option>
+            <option value="python">Python</option>
+          </select></label
+        >
+        <label><span>开始日期</span><input v-model="startDate" type="date" /></label>
+        <label><span>结束日期</span><input v-model="endDate" type="date" /></label>
+        <label
+          ><span>排序</span
+          ><select v-model="sort">
+            <option value="DESC">最新优先</option>
+            <option value="ASC">最早优先</option>
+          </select></label
+        >
+        <div class="filter-actions">
+          <button type="button" class="ghost-btn" @click="resetFilters">重置</button
+          ><button type="button" class="primary-btn" @click="applyFilters">应用筛选</button>
+        </div>
       </div>
 
-      <div class="table-wrap">
-        <table class="submit-table">
+      <div class="table-shell" :class="{ loading }">
+        <table>
           <thead>
             <tr>
-              <th>次序</th>
-              <th>题目</th>
-              <th v-if="showAdminPanel && adminScope">用户</th>
-              <th>语言</th>
-              <th>状态</th>
-              <th>结果</th>
-              <th>时间 / 内存</th>
               <th>提交时间</th>
+              <th>题目</th>
+              <th v-if="scope === 'MANAGED'">用户</th>
+              <th>评测结果</th>
+              <th>语言</th>
+              <th>运行时间</th>
+              <th>内存</th>
+              <th><span class="sr-only">操作</span></th>
             </tr>
           </thead>
           <tbody>
-            <tr v-if="loading && rows.length === 0">
-              <td :colspan="showAdminPanel && adminScope ? 8 : 7" class="empty-cell">加载中...</td>
-            </tr>
-            <tr v-else-if="rows.length === 0">
-              <td :colspan="showAdminPanel && adminScope ? 8 : 7" class="empty-cell">暂无提交记录</td>
-            </tr>
             <tr
-              v-for="(row, i) in rows"
-              v-else
-              :key="rowDomKey(row) || i"
-              :data-submit-row="rowDomKey(row)"
+              v-for="row in rows"
+              :key="row.submissionId"
               :class="{
-                'row--highlight': isRowHighlighted(row),
-                'row--judging': isRowJudging(row),
-                'row--result-flash': isRowFlash(row),
+                highlight: highlightedIds.has(row.submissionId),
+                judging: row.status === 0 || row.status === 1,
               }"
+              tabindex="0"
+              @click="openDetail(row)"
+              @keyup.enter="openDetail(row)"
             >
-              <td class="mono">
-                <span>第 {{ row.submitNo ?? '-' }} 次</span>
-                <span v-if="showAdminPanel && adminScope && row.id" class="muted id-hint">#{{ row.id }}</span>
-              </td>
-              <td class="title-cell">
-                <template v-if="row.questionId && /^\d+$/.test(row.questionId)">
-                  <RouterLink :to="{ name: 'problem-solve', params: { id: row.questionId } }" class="problem-link">
-                    {{ row.questionTitle || questionTitleCache[row.questionId] || `题目 #${row.questionId}` }}
-                  </RouterLink>
-                  <span v-if="row.contestId" class="contest-chip" title="该提交计入对应竞赛榜单">比赛</span>
-                  <span class="muted id-hint">#{{ row.questionId }}</span>
-                </template>
-                <span v-else class="muted">-</span>
-              </td>
-              <td v-if="showAdminPanel && adminScope" class="mono muted">{{ row.userId || '-' }}</td>
-              <td>{{ row.language || '-' }}</td>
-              <td>
-                <span
-                  class="status-pill"
-                  :class="{ 'status-pill--running': displayStatus(row) === STATUS_RUNNING }"
+              <td data-label="提交时间">
+                <time>{{ formatDate(row.createTime) }}</time
+                ><small class="live-age"
+                  >{{ formatRelative(row.createTime)
+                  }}<template v-if="row.globalSubmitNo">
+                    · 第 {{ row.globalSubmitNo }} 次</template
+                  ></small
                 >
-                  {{ statusLabelForRow(row) }}
-                </span>
               </td>
-              <td>
-                <span class="result-pill" :data-tone="resultTone(row)">{{ resultLabel(row) }}</span>
-                <small v-if="parseJudgeInfo(judgeInfoForRow(row)).detail" class="judge-detail">
-                  {{ parseJudgeInfo(judgeInfoForRow(row)).detail }}
-                </small>
+              <td data-label="题目">
+                <strong>{{ row.questionTitle || '题目已删除' }}</strong
+                ><small>#{{ row.questionId }}</small>
               </td>
-              <td class="mono muted">{{ formatTimeMem(row) }}</td>
-              <td class="muted">{{ formatDateTime(row.createTime) }}</td>
+              <td v-if="scope === 'MANAGED'" data-label="用户">
+                <div class="user-cell">
+                  <img v-if="row.avatar" :src="row.avatar" alt="" /><span v-else>{{
+                    (row.nickname || row.username || '用').slice(0, 1)
+                  }}</span>
+                  <div>
+                    {{ row.nickname || row.username || '未知用户'
+                    }}<small>@{{ row.username || row.userId }}</small>
+                  </div>
+                </div>
+              </td>
+              <td data-label="评测结果">
+                <span class="verdict-chip" :data-tone="rowVerdict(row).tone"
+                  ><b>{{ rowVerdict(row).icon }}</b
+                  >{{ rowVerdict(row).label }} <em>{{ rowVerdict(row).abbr }}</em></span
+                >
+              </td>
+              <td data-label="语言">
+                <span class="language-chip">{{ languageLabel(row.language) }}</span>
+              </td>
+              <td data-label="运行时间">
+                {{ row.runtimeMs == null ? '—' : `${row.runtimeMs} ms` }}
+              </td>
+              <td data-label="内存">{{ formatMemory(row.memoryKb) }}</td>
+              <td class="row-action">查看详情 <span>›</span></td>
+            </tr>
+            <tr v-if="!loading && rows.length === 0">
+              <td class="empty-state" :colspan="scope === 'MANAGED' ? 8 : 7">
+                <span>⌁</span><strong>没有找到提交记录</strong>
+                <p>调整筛选条件，或去题库完成一次新的挑战。</p>
+                <button
+                  class="primary-btn"
+                  type="button"
+                  @click="router.push({ name: 'problems' })"
+                >
+                  前往题库
+                </button>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <div class="pager-row">
-        <a-button :disabled="current <= 1 || loading" @click="onPrevPage">上一页</a-button>
-        <span>第 {{ current }} / {{ totalPages }} 页</span>
-        <a-button :disabled="current >= totalPages || loading" @click="onNextPage">下一页</a-button>
-      </div>
+      <footer class="pagination">
+        <label
+          >每页
+          <select v-model.number="pageSize">
+            <option :value="15">15</option>
+            <option :value="30">30</option>
+            <option :value="50">50</option>
+          </select>
+          条</label
+        >
+        <div>
+          <button
+            type="button"
+            :disabled="current <= 1"
+            @click="
+              current--
+              loadPage()
+            "
+          >
+            上一页</button
+          ><span>{{ current }} / {{ totalPages }}</span
+          ><button
+            type="button"
+            :disabled="current >= totalPages"
+            @click="
+              current++
+              loadPage()
+            "
+          >
+            下一页
+          </button>
+        </div>
+      </footer>
     </section>
-  </div>
+
+    <div v-if="detailOpen" class="drawer-backdrop" @click.self="closeDetail">
+      <aside class="detail-drawer" :class="{ fullscreen: detailFullscreen }" aria-label="提交详情">
+        <header>
+          <div>
+            <span>提交详情</span><small v-if="detail">#{{ detail.submissionId }}</small>
+          </div>
+          <div>
+            <button type="button" @click="detailFullscreen = !detailFullscreen">
+              {{ detailFullscreen ? '退出全屏' : '全屏' }}</button
+            ><button class="drawer-close" type="button" aria-label="关闭" @click="closeDetail">
+              ×
+            </button>
+          </div>
+        </header>
+        <div v-if="detailLoading" class="detail-loading">正在读取提交详情…</div>
+        <template v-else-if="detail">
+          <div class="detail-scroll">
+            <section class="detail-summary">
+              <span class="verdict-chip verdict-chip--large" :data-tone="rowVerdict(detail).tone"
+                ><b>{{ rowVerdict(detail).icon }}</b
+                >{{ rowVerdict(detail).label }} <em>{{ rowVerdict(detail).abbr }}</em></span
+              >
+              <h2>{{ detail.questionTitle }}</h2>
+              <p>提交于 {{ formatDate(detail.createTime) }}</p>
+              <dl>
+                <div>
+                  <dt>语言</dt>
+                  <dd>{{ languageLabel(detail.language) }}</dd>
+                </div>
+                <div>
+                  <dt>运行时间</dt>
+                  <dd>{{ detail.runtimeMs == null ? '—' : `${detail.runtimeMs} ms` }}</dd>
+                </div>
+                <div>
+                  <dt>内存</dt>
+                  <dd>{{ formatMemory(detail.memoryKb) }}</dd>
+                </div>
+                <div>
+                  <dt>代码长度</dt>
+                  <dd>{{ detail.codeLength ?? 0 }} 字符</dd>
+                </div>
+              </dl>
+            </section>
+            <section v-if="detail.errorDetail" class="error-panel">
+              <h3>错误详情</h3>
+              <pre>{{ detail.errorDetail }}</pre>
+            </section>
+            <section class="code-panel">
+              <div>
+                <h3>提交代码</h3>
+                <button type="button" @click="copyCode">复制代码</button>
+              </div>
+              <pre><code id="submission-code">{{ detail.code }}</code></pre>
+            </section>
+          </div>
+          <footer class="drawer-footer">
+            <span>{{
+              detail.ownSubmission
+                ? '这是你的提交，可以回到题目继续调整。'
+                : '管理员只读查看，不会覆盖你的编辑器草稿。'
+            }}</span
+            ><button
+              v-if="detail.ownSubmission"
+              class="primary-btn"
+              type="button"
+              @click="continueProblem"
+            >
+              回到题目继续修改
+            </button>
+          </footer>
+        </template>
+      </aside>
+    </div>
+  </main>
 </template>
 
 <style scoped>
-.submissions-page {
-  position: relative;
-  isolation: isolate;
-  width: min(1620px, calc(100vw - 30px));
+.submission-workspace {
+  min-height: calc(100vh - 58px);
+  padding: 28px clamp(16px, 4vw, 64px) 56px;
+  background: #f7f3e9;
+  color: #202927;
+}
+.page-heading,
+.analytics-panel,
+.records-panel {
+  max-width: 1600px;
   margin: 0 auto;
-  padding: 28px 12px 52px;
+  background: #fff;
+  border: 1px solid #e5e6df;
+  border-radius: 18px;
 }
-
-.submissions-page::before,
-.submissions-page::after {
-  content: '';
-  position: absolute;
-  z-index: -1;
-  pointer-events: none;
-  filter: blur(40px);
-  border-radius: 999px;
-  opacity: 0.42;
-  animation: floatGlow 10s ease-in-out infinite;
-}
-
-.submissions-page::before {
-  width: 320px;
-  height: 320px;
-  left: -82px;
-  top: 36px;
-  background: radial-gradient(circle, color-mix(in srgb, var(--app-accent) 70%, transparent), transparent 72%);
-}
-
-.submissions-page::after {
-  width: 300px;
-  height: 300px;
-  right: -60px;
-  top: 120px;
-  background: radial-gradient(circle, color-mix(in srgb, #7c3aed 55%, transparent), transparent 70%);
-  animation-delay: -4s;
-}
-
-@keyframes floatGlow {
-  0%,
-  100% {
-    transform: translate(0, 0) scale(1);
-  }
-  50% {
-    transform: translate(12px, -8px) scale(1.05);
-  }
-}
-
-.panel {
-  background: var(--app-panel-bg, color-mix(in srgb, var(--color-bg-2) 88%, transparent));
-  border: 1px solid var(--color-border-2);
-  border-radius: 16px;
-  box-shadow: var(--app-panel-shadow, 0 18px 50px rgba(0, 0, 0, 0.06));
-  backdrop-filter: blur(12px);
-}
-
-.hero {
+.page-heading {
+  min-height: 92px;
+  padding: 22px 26px;
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  padding: 26px 28px;
-  margin-bottom: 20px;
+  gap: 22px;
 }
-
-.eyebrow {
-  font-size: 12px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--color-text-3);
-  margin: 0 0 8px;
-}
-
-.hero h1 {
-  margin: 0 0 10px;
-  font-size: clamp(26px, 3vw, 34px);
-  font-weight: 700;
-  letter-spacing: -0.02em;
-}
-
-.lead {
+.page-heading h1 {
   margin: 0;
-  max-width: 640px;
-  color: var(--color-text-2);
-  line-height: 1.65;
+  font-size: 30px;
+  letter-spacing: -0.03em;
 }
-
-.hero-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+.page-heading p {
+  margin: 7px 0 0;
+  color: #6b7673;
 }
-
-.meta-chip {
-  display: inline-flex;
-  align-items: center;
-  padding: 6px 12px;
-  border-radius: 999px;
-  font-size: 12px;
-  background: color-mix(in srgb, var(--app-accent) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--app-accent) 28%, transparent);
-  color: var(--color-text-2);
-}
-
-.table-shell {
-  padding: 22px 24px 28px;
-}
-
-.judge-poll-banner {
+.heading-actions,
+.filter-actions {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 14px;
-  padding: 10px 14px;
-  border-radius: 10px;
+}
+.sync-state {
   font-size: 13px;
-  line-height: 1.45;
-  color: var(--color-text-2);
-  background: color-mix(in srgb, var(--app-accent) 10%, var(--color-fill-2));
-  border: 1px solid color-mix(in srgb, var(--app-accent) 22%, var(--color-border-2));
+  color: #66736f;
+  display: flex;
+  align-items: center;
+  gap: 7px;
 }
-
-.judge-poll-banner--running {
-  border-color: color-mix(in srgb, rgb(var(--primary-6)) 35%, var(--color-border-2));
-  background: color-mix(in srgb, rgb(var(--primary-6)) 14%, var(--color-fill-2));
-}
-
-.judge-poll-banner__phase {
-  margin-left: 4px;
-  font-weight: 600;
-  color: rgb(var(--primary-6));
-}
-
-.judge-poll-banner__dot {
+.sync-state i {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--app-accent);
-  flex-shrink: 0;
-  animation: judgePollPulse 1.2s ease-in-out infinite;
+  background: #24a674;
+  box-shadow: 0 0 0 4px #dff4ea;
 }
-
-.judge-poll-banner--running .judge-poll-banner__dot {
-  background: rgb(var(--primary-6));
-}
-
-@keyframes judgePollPulse {
-  0%,
-  100% {
-    opacity: 0.45;
-    transform: scale(0.92);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 16px;
-  align-items: center;
-}
-
-.filter-row :deep(.arco-input-wrapper) {
-  flex: 1;
-  min-width: 200px;
-  max-width: 360px;
-}
-
-.query-btn--primary {
+.primary-btn,
+.secondary-btn,
+.ghost-btn {
+  min-height: 40px;
+  padding: 0 17px;
   border-radius: 10px;
-}
-
-.admin-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 18px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--color-fill-2) 80%, transparent);
-  border: 1px dashed var(--color-border-2);
-}
-
-.admin-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--color-text-2);
+  border: 1px solid transparent;
+  font-weight: 700;
   cursor: pointer;
-  user-select: none;
 }
-
-.admin-input {
-  width: 160px;
+.primary-btn {
+  background: #128f80;
+  color: #fff;
 }
-
-.table-wrap {
-  overflow-x: auto;
+.secondary-btn {
+  background: #fff;
+  border-color: #cbd9d5;
+  color: #146f65;
+}
+.ghost-btn {
+  background: #f5f6f3;
+  border-color: #e1e5e0;
+  color: #53605d;
+}
+.scope-switch {
+  max-width: 1600px;
+  margin: 14px auto 0;
+  display: flex;
+  width: max-content;
+  padding: 4px;
+  background: #eaece6;
+  border-radius: 11px;
+}
+.scope-switch button,
+.range-switch button {
+  border: 0;
+  background: transparent;
+  padding: 8px 14px;
+  border-radius: 8px;
+  color: #64706d;
+  cursor: pointer;
+}
+.scope-switch button.active,
+.range-switch button.active {
+  background: #fff;
+  color: #087b6e;
+  font-weight: 700;
+  box-shadow: 0 1px 3px #1f332214;
+}
+.metrics-grid {
+  max-width: 1600px;
+  margin: 16px auto;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+}
+.metric-card {
+  background: #fff;
+  border: 1px solid #e4e6df;
+  border-radius: 16px;
+  padding: 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.metric-card strong {
+  display: block;
+  font-size: 25px;
+}
+.metric-card span:not(.metric-icon) {
+  font-size: 13px;
+  color: #73807c;
+}
+.metric-icon {
+  width: 44px;
+  height: 44px;
   border-radius: 12px;
-  border: 1px solid var(--color-border-2);
-  background: color-mix(in srgb, var(--color-bg-2) 95%, transparent);
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  background: #e7f6f3;
+  color: #0d8c7d;
 }
-
-.submit-table {
-  width: 100%;
-  border-collapse: collapse;
+.metric-icon[data-tone='green'] {
+  background: #e6f6ec;
+  color: #1a9963;
+}
+.metric-icon[data-tone='blue'] {
+  background: #eaf2ff;
+  color: #387ed1;
+}
+.metric-icon[data-tone='amber'] {
+  background: #fff1dd;
+  color: #d47c16;
+}
+.analytics-panel {
+  padding: 20px 22px;
+  margin-bottom: 16px;
+}
+.section-title-row,
+.records-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.section-title-row h2,
+.records-heading h2 {
+  margin: 0;
+  font-size: 19px;
+}
+.section-title-row p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #84908c;
+}
+.range-switch {
+  display: flex;
+  padding: 3px;
+  background: #f1f2ee;
+  border-radius: 9px;
+}
+.charts-grid {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 14px;
+}
+.chart-card {
+  min-width: 0;
+  height: 280px;
+  padding: 14px 14px 4px;
+  border: 1px solid #eceee9;
+  border-radius: 13px;
+}
+.chart-card h3 {
+  margin: 0;
   font-size: 14px;
-  color: var(--color-text-1);
 }
-
-.submit-table th,
-.submit-table td {
-  padding: 12px 14px;
+.chart {
+  height: 235px;
+  width: 100%;
+}
+.records-panel {
+  padding: 20px 22px;
+}
+.records-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.records-heading span {
+  font-size: 13px;
+  color: #7d8985;
+}
+.mobile-filter-button {
+  display: none;
+}
+.filter-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.3fr) minmax(130px, 0.8fr) minmax(120px, 0.75fr) repeat(
+      2,
+      minmax(130px, 0.8fr)
+    ) minmax(120px, 0.7fr) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 16px 0;
+}
+.filter-bar label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  color: #66736f;
+}
+.filter-bar input,
+.filter-bar select,
+.pagination select {
+  height: 40px;
+  border: 1px solid #dce2de;
+  border-radius: 9px;
+  padding: 0 11px;
+  background: #fff;
+  color: #26312e;
+  outline: none;
+}
+.filter-bar input:focus,
+.filter-bar select:focus {
+  border-color: #27a697;
+  box-shadow: 0 0 0 3px #2a9d8f18;
+}
+.mobile-filter-head {
+  display: none;
+}
+.table-shell {
+  border: 1px solid #e3e7e3;
+  border-radius: 13px;
+  overflow: auto;
+  max-height: 620px;
+}
+.table-shell.loading {
+  opacity: 0.62;
+  pointer-events: none;
+}
+table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 13px;
+}
+thead {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+th {
+  background: #f4f6f4;
+  color: #53615d;
   text-align: left;
-  border-bottom: 1px solid var(--color-border-1);
-}
-
-.submit-table thead th {
-  font-weight: 600;
-  color: var(--color-text-2);
-  background: color-mix(in srgb, var(--color-fill-2) 65%, transparent);
+  padding: 13px 14px;
   white-space: nowrap;
 }
-
-.submit-table tbody tr:hover {
-  background: color-mix(in srgb, var(--app-accent) 6%, transparent);
-}
-
-.submit-table tbody tr.row--highlight {
-  outline: 2px solid rgb(var(--primary-6));
-  outline-offset: -2px;
-  background: color-mix(in srgb, rgb(var(--primary-6)) 12%, transparent);
-}
-
-.submit-table tbody tr.row--highlight:hover {
-  background: color-mix(in srgb, rgb(var(--primary-6)) 16%, transparent);
-}
-
-.submit-table tbody tr.row--judging {
-  background: color-mix(in srgb, rgb(var(--primary-6)) 18%, transparent);
-}
-
-.submit-table tbody tr.row--judging .status-pill--running {
-  color: rgb(var(--primary-6));
-  border: 1px solid color-mix(in srgb, rgb(var(--primary-6)) 45%, transparent);
-  animation: statusRunningPulse 1.1s ease-in-out infinite;
-}
-
-@keyframes statusRunningPulse {
-  0%,
-  100% {
-    opacity: 0.75;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
-.submit-table tbody tr.row--result-flash {
-  animation: judgeRowFlash 2.6s ease-out 1;
-}
-
-@keyframes judgeRowFlash {
-  0% {
-    background: color-mix(in srgb, rgb(var(--primary-6)) 26%, transparent);
-    box-shadow: inset 0 0 0 2px rgb(var(--primary-6));
-  }
-  45% {
-    background: color-mix(in srgb, rgb(var(--primary-6)) 12%, transparent);
-  }
-  100% {
-    background: transparent;
-    box-shadow: none;
-  }
-}
-
-.submit-table tbody tr:nth-child(even) {
-  background: color-mix(in srgb, var(--color-fill-1) 72%, transparent);
-}
-
-.mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 13px;
-}
-
-.muted {
-  color: var(--color-text-3);
-}
-
-.title-cell {
-  min-width: 160px;
-}
-
-.problem-link {
-  color: rgb(var(--primary-6));
-  text-decoration: none;
-  font-weight: 500;
-}
-
-.problem-link:hover {
-  text-decoration: underline;
-}
-
-.id-hint {
-  display: inline-block;
-  margin-left: 8px;
-  font-size: 12px;
-}
-
-.contest-chip {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
+td {
+  padding: 13px 14px;
+  border-top: 1px solid #edf0ed;
   vertical-align: middle;
-  color: rgb(var(--orange-6));
-  background: color-mix(in srgb, rgb(var(--orange-6)) 14%, transparent);
-  border: 1px solid color-mix(in srgb, rgb(var(--orange-6)) 28%, transparent);
 }
-
-.empty-cell {
-  text-align: center;
-  padding: 28px !important;
-  color: var(--color-text-3);
+tbody tr {
+  cursor: pointer;
+  background: #fff;
+  transition: background-color 0.16s;
 }
-
-.status-pill {
-  display: inline-block;
-  padding: 2px 8px;
-  border-radius: 6px;
-  font-size: 12px;
-  background: color-mix(in srgb, var(--color-fill-3) 90%, transparent);
-  color: var(--color-text-2);
-  border: 1px solid color-mix(in srgb, var(--color-border-2) 80%, transparent);
+tbody tr:hover {
+  background: #f4faf8;
 }
-
-.result-pill {
-  display: inline-block;
-  padding: 3px 10px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 500;
+tbody tr.highlight {
+  animation: row-flash 1.5s ease;
 }
-
-.result-pill[data-tone='ac'] {
-  background: color-mix(in srgb, #16a34a 18%, transparent);
-  color: #166534;
+tbody tr.judging td:first-child {
+  box-shadow: inset 3px 0 #e3a23a;
 }
-
-html[data-theme='dark'] .result-pill[data-tone='ac'] {
-  color: #86efac;
-}
-
-.result-pill[data-tone='wa'],
-.result-pill[data-tone='fail'] {
-  background: color-mix(in srgb, #dc2626 16%, transparent);
-  color: #991b1b;
-}
-
-html[data-theme='dark'] .result-pill[data-tone='wa'],
-html[data-theme='dark'] .result-pill[data-tone='fail'] {
-  color: #fca5a5;
-}
-
-.result-pill[data-tone='pend'] {
-  background: color-mix(in srgb, #ca8a04 18%, transparent);
-  color: #854d0e;
-}
-
-html[data-theme='dark'] .result-pill[data-tone='pend'] {
-  color: #fde047;
-}
-
-.result-pill[data-tone='neutral'] {
-  background: color-mix(in srgb, var(--color-fill-3) 90%, transparent);
-  color: var(--color-text-2);
-}
-
-.judge-detail {
+td strong {
   display: block;
-  max-width: 300px;
-  margin-top: 5px;
-  color: var(--app-text-muted);
-  font-size: 11px;
-  line-height: 1.4;
-  white-space: normal;
+  color: #22302d;
 }
-
-.pager-row {
+td small {
+  display: block;
+  color: #89938f;
+  margin-top: 4px;
+}
+.row-action {
+  color: #0d8275;
+  white-space: nowrap;
+}
+.row-action span {
+  font-size: 20px;
+}
+.verdict-chip,
+.language-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.verdict-chip b {
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 50%;
+  font-style: normal;
+}
+.verdict-chip em {
+  font-style: normal;
+  font-size: 10px;
+  opacity: 0.72;
+}
+.verdict-chip[data-tone='success'] {
+  background: #e3f5ea;
+  color: #187b50;
+}
+.verdict-chip[data-tone='danger'] {
+  background: #fde8e6;
+  color: #b23e38;
+}
+.verdict-chip[data-tone='warning'] {
+  background: #fff0d8;
+  color: #a86112;
+}
+.verdict-chip[data-tone='pending'] {
+  background: #e9f0fa;
+  color: #496a91;
+}
+.verdict-chip[data-tone='neutral'] {
+  background: #ecefed;
+  color: #58635f;
+}
+.language-chip {
+  background: #f0f2f0;
+  color: #4e5a56;
+}
+.user-cell {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 16px;
-  margin-top: 20px;
-  color: var(--color-text-2);
+  gap: 9px;
+}
+.user-cell > img,
+.user-cell > span {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #dff3ef;
+  display: grid;
+  place-items: center;
+  color: #087b6e;
+  font-weight: 800;
+}
+.empty-state {
+  text-align: center;
+  padding: 58px !important;
+}
+.empty-state > span {
+  display: block;
+  font-size: 34px;
+  color: #38a899;
+}
+.empty-state strong {
+  font-size: 17px;
+  margin-top: 8px;
+}
+.empty-state p {
+  color: #77827f;
+}
+.pagination {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 15px;
+  color: #687470;
+  font-size: 13px;
+}
+.pagination select {
+  height: 34px;
+}
+.pagination > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.pagination button {
+  height: 36px;
+  padding: 0 13px;
+  border: 1px solid #d7dfdb;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+}
+.pagination button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: #17211f66;
+  z-index: 1000;
+  display: flex;
+  justify-content: flex-end;
+}
+.detail-drawer {
+  height: 100%;
+  width: min(680px, 94vw);
+  background: #fbfaf6;
+  box-shadow: -10px 0 30px #14241e24;
+  display: flex;
+  flex-direction: column;
+}
+.detail-drawer.fullscreen {
+  width: 100vw;
+}
+.detail-drawer > header {
+  height: 64px;
+  padding: 0 18px 0 22px;
+  border-bottom: 1px solid #e3e6e1;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.detail-drawer > header > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.detail-drawer > header span {
+  font-size: 18px;
+  font-weight: 800;
+}
+.detail-drawer > header small {
+  color: #87918e;
+}
+.detail-drawer > header button,
+.code-panel button {
+  border: 1px solid #d8dfdb;
+  background: #fff;
+  border-radius: 8px;
+  padding: 7px 11px;
+  cursor: pointer;
+}
+.drawer-close {
+  font-size: 22px !important;
+  border: 0 !important;
+}
+.detail-loading {
+  margin: auto;
+  color: #687470;
+}
+.detail-scroll {
+  padding: 20px;
+  overflow: auto;
+  flex: 1;
+}
+.detail-summary,
+.error-panel,
+.code-panel {
+  background: #fff;
+  border: 1px solid #e2e6e1;
+  border-radius: 15px;
+  padding: 18px;
+  margin-bottom: 14px;
+}
+.verdict-chip--large {
   font-size: 14px;
+  padding: 7px 11px;
 }
-
-html[data-theme='dark'] .panel {
-  background: linear-gradient(180deg, rgba(16, 24, 39, 0.88), rgba(10, 16, 30, 0.9));
-  border-color: rgba(94, 112, 143, 0.35);
-  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.42);
+.detail-summary h2 {
+  margin: 16px 0 4px;
 }
-
-html[data-theme='dark'] .hero h1 {
-  color: #e9f0ff;
+.detail-summary > p {
+  margin: 0;
+  color: #798480;
 }
-
-html[data-theme='dark'] .lead,
-html[data-theme='dark'] .pager-row,
-html[data-theme='dark'] .admin-toggle {
-  color: #b6c4de;
+.detail-summary dl {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 18px 0 0;
 }
-
-html[data-theme='dark'] .meta-chip {
-  color: #c4d4f2;
-  border-color: rgba(63, 148, 255, 0.45);
-  background: rgba(41, 98, 255, 0.18);
+.detail-summary dl div {
+  padding: 11px;
+  background: #f5f6f2;
+  border-radius: 10px;
 }
-
-html[data-theme='dark'] .table-wrap {
-  background: rgba(8, 16, 28, 0.86);
-  border-color: rgba(94, 112, 143, 0.38);
+.detail-summary dt {
+  font-size: 11px;
+  color: #7a8581;
 }
-
-html[data-theme='dark'] .submit-table {
-  color: #d6e3ff;
+.detail-summary dd {
+  margin: 5px 0 0;
+  font-weight: 700;
 }
-
-html[data-theme='dark'] .submit-table thead th {
-  color: #cfe1ff;
-  background: rgba(34, 55, 84, 0.82);
-  border-bottom-color: rgba(96, 121, 161, 0.45);
+.error-panel {
+  border-color: #f0c9c4;
+  background: #fff9f8;
 }
-
-html[data-theme='dark'] .submit-table td {
-  border-bottom-color: rgba(73, 93, 123, 0.38);
+.error-panel h3,
+.code-panel h3 {
+  margin: 0 0 12px;
 }
-
-html[data-theme='dark'] .submit-table tbody tr:nth-child(odd) {
-  background: rgba(13, 25, 43, 0.58);
+.error-panel pre {
+  white-space: pre-wrap;
+  color: #963d37;
+  font:
+    12px/1.65 ui-monospace,
+    monospace;
 }
-
-html[data-theme='dark'] .submit-table tbody tr:nth-child(even) {
-  background: rgba(17, 31, 52, 0.54);
+.code-panel > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
-
-html[data-theme='dark'] .submit-table tbody tr:hover {
-  background: rgba(28, 57, 97, 0.6);
+.code-panel > pre {
+  margin: 0;
+  background: #102a33;
+  color: #e8f5f3;
+  border-radius: 11px;
+  padding: 16px;
+  overflow: auto;
+  max-height: 55vh;
+  font:
+    13px/1.7 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
 }
-
-html[data-theme='dark'] .muted,
-html[data-theme='dark'] .empty-cell,
-html[data-theme='dark'] .id-hint {
-  color: #90a5c8;
+.drawer-footer {
+  padding: 14px 18px;
+  background: #fff;
+  border-top: 1px solid #e1e5e0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
-
-html[data-theme='dark'] .problem-link {
-  color: #7dc2ff;
+.drawer-footer span {
+  font-size: 12px;
+  color: #6d7874;
 }
-
-html[data-theme='dark'] .status-pill {
-  color: #d0dcf4;
-  background: rgba(76, 94, 128, 0.3);
-  border-color: rgba(118, 136, 168, 0.45);
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
-
-html[data-theme='dark'] .admin-row {
-  background: rgba(20, 34, 56, 0.6);
-  border-color: rgba(112, 132, 170, 0.4);
+@keyframes row-flash {
+  0%,
+  100% {
+    background: #fff;
+  }
+  35% {
+    background: #dbf6eb;
+  }
 }
-
-html[data-theme='dark'] .filter-row :deep(.arco-input-wrapper),
-html[data-theme='dark'] .admin-row :deep(.arco-input-wrapper) {
-  background: rgba(18, 30, 48, 0.92);
-  border-color: rgba(105, 128, 166, 0.48);
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
 }
-
-html[data-theme='dark'] .filter-row :deep(.arco-input),
-html[data-theme='dark'] .admin-row :deep(.arco-input) {
-  color: #d4e2ff;
+@media (max-width: 1100px) {
+  .charts-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .chart-card--wide {
+    grid-column: 1/-1;
+  }
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .filter-bar {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .filter-actions {
+    justify-content: flex-end;
+  }
 }
-
-html[data-theme='dark'] .filter-row :deep(.arco-input::placeholder),
-html[data-theme='dark'] .admin-row :deep(.arco-input::placeholder) {
-  color: #7f93b8;
+@media (max-width: 720px) {
+  .submission-workspace {
+    padding: 12px 10px 34px;
+  }
+  .page-heading {
+    padding: 17px;
+    align-items: flex-start;
+  }
+  .page-heading h1 {
+    font-size: 25px;
+  }
+  .heading-actions .sync-state,
+  .heading-actions .secondary-btn {
+    display: none;
+  }
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .metric-card {
+    padding: 12px;
+    gap: 9px;
+  }
+  .metric-icon {
+    width: 36px;
+    height: 36px;
+  }
+  .metric-card strong {
+    font-size: 20px;
+  }
+  .analytics-panel,
+  .records-panel {
+    padding: 15px;
+  }
+  .charts-grid {
+    grid-template-columns: 1fr;
+  }
+  .chart-card--wide {
+    grid-column: auto;
+  }
+  .records-heading {
+    margin-bottom: 12px;
+  }
+  .mobile-filter-button {
+    display: block;
+    border: 1px solid #cbd9d5;
+    background: #fff;
+    color: #087b6e;
+    border-radius: 8px;
+    padding: 8px 13px;
+  }
+  .filter-bar {
+    display: none;
+  }
+  .filter-bar.filter-bar--open {
+    position: fixed;
+    z-index: 1100;
+    inset: auto 0 0;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    max-height: 86vh;
+    overflow: auto;
+    background: #fff;
+    padding: 18px;
+    border-radius: 18px 18px 0 0;
+    box-shadow: 0 -12px 35px #1526212b;
+  }
+  .mobile-filter-head {
+    display: flex;
+    grid-column: 1/-1;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 18px;
+  }
+  .mobile-filter-head button {
+    border: 0;
+    background: transparent;
+    font-size: 25px;
+  }
+  .filter-actions {
+    grid-column: 1/-1;
+  }
+  .table-shell {
+    border: 0;
+    max-height: none;
+    overflow: visible;
+  }
+  table,
+  tbody,
+  tr,
+  td {
+    display: block;
+  }
+  thead {
+    display: none;
+  }
+  tbody {
+    display: grid;
+    gap: 10px;
+  }
+  tbody tr {
+    border: 1px solid #e1e5e1;
+    border-radius: 13px;
+    padding: 12px;
+    position: relative;
+  }
+  td {
+    border: 0;
+    padding: 5px 0 5px 94px;
+    min-height: 28px;
+  }
+  td::before {
+    content: attr(data-label);
+    position: absolute;
+    left: 13px;
+    color: #7b8682;
+    font-size: 12px;
+  }
+  td[data-label='题目'] {
+    padding-left: 0;
+    padding-right: 25px;
+    margin-bottom: 7px;
+  }
+  td[data-label='题目']::before {
+    display: none;
+  }
+  .row-action {
+    position: absolute;
+    right: 12px;
+    top: 15px;
+    font-size: 0;
+  }
+  .row-action span {
+    font-size: 24px;
+  }
+  .empty-state {
+    padding: 40px 15px !important;
+  }
+  .empty-state::before {
+    display: none;
+  }
+  .pagination {
+    gap: 10px;
+  }
+  .pagination > label {
+    display: none;
+  }
+  .detail-drawer {
+    width: 100vw;
+  }
+  .detail-summary dl {
+    grid-template-columns: 1fr 1fr;
+  }
+  .drawer-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .drawer-footer .primary-btn {
+    width: 100%;
+  }
+}
+:global(html[data-theme='dark']) .submission-workspace {
+  background: #111817;
+  color: #e9f0ed;
+}
+:global(html[data-theme='dark']) .page-heading,
+:global(html[data-theme='dark']) .analytics-panel,
+:global(html[data-theme='dark']) .records-panel,
+:global(html[data-theme='dark']) .metric-card,
+:global(html[data-theme='dark']) .chart-card,
+:global(html[data-theme='dark']) tbody tr,
+:global(html[data-theme='dark']) .detail-summary,
+:global(html[data-theme='dark']) .error-panel,
+:global(html[data-theme='dark']) .code-panel {
+  background: #19211f;
+  border-color: #2e3a36;
+}
+:global(html[data-theme='dark']) th {
+  background: #232d2a;
+  color: #bac6c1;
+}
+:global(html[data-theme='dark']) td {
+  border-color: #2b3532;
+}
+:global(html[data-theme='dark']) td strong,
+:global(html[data-theme='dark']) .page-heading h1,
+:global(html[data-theme='dark']) .section-title-row h2,
+:global(html[data-theme='dark']) .records-heading h2 {
+  color: #edf4f1;
+}
+:global(html[data-theme='dark']) .detail-drawer {
+  background: #121a18;
+}
+:global(html[data-theme='dark']) .detail-drawer > header,
+:global(html[data-theme='dark']) .drawer-footer {
+  background: #19211f;
+  border-color: #303b38;
+}
+.sync-state i.pulse {
+  animation: sync-pulse 1.1s ease-in-out infinite;
+}
+.live-age {
+  color: #118575 !important;
+  font-variant-numeric: tabular-nums;
+}
+@keyframes sync-pulse {
+  0%,
+  100% {
+    transform: scale(0.85);
+    opacity: 0.7;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
 }
 </style>

@@ -6,6 +6,9 @@ export type StudyAiMessage = {
   role: 'user' | 'assistant'
   content: string
   html?: string
+  imagePreview?: string
+  providerCode?: string
+  modelId?: string
 }
 
 export const useStudyAiCopilotStore = defineStore('studyAiCopilot', () => {

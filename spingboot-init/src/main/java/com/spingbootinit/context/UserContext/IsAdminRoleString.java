@@ -1,5 +1,6 @@
 package com.spingbootinit.context.UserContext;
 
+import com.spingbootinit.security.UserRolePolicy;
 import org.springframework.stereotype.Component;
 
 /**
@@ -9,11 +10,9 @@ import org.springframework.stereotype.Component;
  **/
 @Component
 public class IsAdminRoleString {
+    private final UserRolePolicy rolePolicy = new UserRolePolicy();
+
     public  boolean isAdminRoleString(String role) {
-        if (role == null || role.isBlank()) {
-            return false;
-        }
-        String r = role.trim();
-        return "admin".equalsIgnoreCase(r) || "管理员".equals(r) || r.toUpperCase().contains("ADMIN");
+        return rolePolicy.isAdmin(role);
     }
 }

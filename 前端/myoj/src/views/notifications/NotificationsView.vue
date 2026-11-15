@@ -5,10 +5,10 @@ import { Message } from '@arco-design/web-vue'
 import {
   fetchNotificationPage,
   fetchRecentAnnouncements,
+  type InAppNotificationItem,
   markAllNotificationsRead,
   markNotificationsRead,
   readAnnouncementsUpTo,
-  type InAppNotificationItem,
   type SiteAnnouncementItem,
 } from '@/api/inAppNotifications'
 import { isResultSuccess } from '@/api/result'
@@ -44,6 +44,28 @@ function typeLabel(type?: number): string {
   if (type === 5) return '账号限制'
   if (type === 6) return '限制解除'
   return '通知'
+}
+
+function roleLabel(role?: string): string {
+  if (!role) return ''
+  const r = role.toLowerCase()
+  if (r === 'admin') return '管理员'
+  if (r === 'teacher') return '老师'
+  if (r === 'user' || r === 'student') return '学生'
+  return role
+}
+
+function roleTagClass(role?: string): string {
+  const r = (role || '').toLowerCase()
+  if (r === 'admin') return 'role-tag role-tag--admin'
+  if (r === 'teacher') return 'role-tag role-tag--teacher'
+  return 'role-tag role-tag--user'
+}
+
+function sourceTagClass(source?: string): string {
+  if (source === '管理员') return 'role-tag role-tag--admin'
+  if (source === '用户') return 'role-tag role-tag--user'
+  return 'role-tag role-tag--system'
 }
 
 async function loadAnnouncements() {
@@ -86,9 +108,11 @@ async function loadMessages() {
 async function onMarkAnnouncementsRead() {
   if (!announcements.value.length) return
   const ids = announcements.value.map((a) => String(a.id ?? '')).filter(Boolean)
-  const maxId = ids.filter((id) => /^[1-9]\d*$/.test(id)).reduce((m, id) => {
-    return id.length > m.length || (id.length === m.length && id > m) ? id : m
-  }, '')
+  const maxId = ids
+    .filter((id) => /^[1-9]\d*$/.test(id))
+    .reduce((m, id) => {
+      return id.length > m.length || (id.length === m.length && id > m) ? id : m
+    }, '')
   if (!maxId) return
   try {
     const res = await readAnnouncementsUpTo(maxId)
@@ -168,7 +192,12 @@ onBeforeUnmount(() => {
     <section class="notif-panel">
       <div class="notif-panel__head">
         <h2>全站公告</h2>
-        <a-button v-if="announcements.length" type="outline" size="small" @click="onMarkAnnouncementsRead">
+        <a-button
+          v-if="announcements.length"
+          type="outline"
+          size="small"
+          @click="onMarkAnnouncementsRead"
+        >
           将以上公告标为已读
         </a-button>
       </div>
@@ -177,7 +206,18 @@ onBeforeUnmount(() => {
         <ul v-else class="ann-list">
           <li v-for="a in announcements" :key="a.id" class="ann-item">
             <p class="ann-title">{{ a.title }}</p>
-            <p class="ann-meta">{{ formatTime(a.publishedAt) }}</p>
+            <p class="ann-meta">
+              <template v-if="a.publisherName">
+                <span class="ann-publisher">
+                  {{ a.publisherName }}
+                  <span v-if="roleLabel(a.publisherRole)" :class="roleTagClass(a.publisherRole)">
+                    {{ roleLabel(a.publisherRole) }}
+                  </span>
+                </span>
+                <span class="ann-meta-sep">·</span>
+              </template>
+              {{ formatTime(a.publishedAt) }}
+            </p>
             <pre class="ann-body">{{ a.content }}</pre>
           </li>
         </ul>
@@ -187,7 +227,12 @@ onBeforeUnmount(() => {
     <section v-if="auth.isLoggedIn" class="notif-panel">
       <div class="notif-panel__head">
         <h2>我的消息</h2>
-        <a-button type="outline" size="small" :disabled="!messages.length" @click="onMarkAllMessagesRead">
+        <a-button
+          type="outline"
+          size="small"
+          :disabled="!messages.length"
+          @click="onMarkAllMessagesRead"
+        >
           全部标为已读
         </a-button>
       </div>
@@ -205,6 +250,7 @@ onBeforeUnmount(() => {
             @keydown.enter="openMessage(m)"
           >
             <span class="msg-type">{{ typeLabel(m.type) }}</span>
+            <span v-if="m.source" :class="sourceTagClass(m.source)">{{ m.source }}</span>
             <div class="msg-main">
               <p class="msg-title">{{ m.title }}</p>
               <p v-if="m.body" class="msg-body">{{ m.body }}</p>
@@ -214,9 +260,18 @@ onBeforeUnmount(() => {
           </li>
         </ul>
         <div v-if="msgTotal > msgPageSize" class="msg-pager">
-          <a-button type="outline" size="small" :disabled="msgCurrent <= 1" @click="onPrevMsg">上一页</a-button>
-          <span class="msg-pager-meta">{{ msgCurrent }} / {{ msgTotalPages }} · 共 {{ msgTotal }} 条</span>
-          <a-button type="outline" size="small" :disabled="msgCurrent >= msgTotalPages" @click="onNextMsg">
+          <a-button type="outline" size="small" :disabled="msgCurrent <= 1" @click="onPrevMsg"
+            >上一页</a-button
+          >
+          <span class="msg-pager-meta"
+            >{{ msgCurrent }} / {{ msgTotalPages }} · 共 {{ msgTotal }} 条</span
+          >
+          <a-button
+            type="outline"
+            size="small"
+            :disabled="msgCurrent >= msgTotalPages"
+            @click="onNextMsg"
+          >
             下一页
           </a-button>
         </div>
@@ -301,6 +356,51 @@ onBeforeUnmount(() => {
   margin: 0 0 8px;
   font-size: 12px;
   color: var(--app-text-subtle);
+}
+
+.ann-publisher {
+  font-weight: 600;
+  color: var(--color-text-2);
+}
+
+.ann-meta-sep {
+  margin: 0 6px;
+  color: var(--app-text-subtle);
+}
+
+.role-tag {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 7px;
+  margin-left: 6px;
+  border-radius: 999px;
+  vertical-align: middle;
+  border: 1px solid transparent;
+}
+
+.role-tag--admin {
+  background: color-mix(in srgb, #f53f3f 14%, var(--color-bg-2));
+  color: #f53f3f;
+  border-color: color-mix(in srgb, #f53f3f 35%, var(--color-border-2));
+}
+
+.role-tag--teacher {
+  background: color-mix(in srgb, #165dff 14%, var(--color-bg-2));
+  color: #165dff;
+  border-color: color-mix(in srgb, #165dff 35%, var(--color-border-2));
+}
+
+.role-tag--user {
+  background: color-mix(in srgb, #00b42a 14%, var(--color-bg-2));
+  color: #00b42a;
+  border-color: color-mix(in srgb, #00b42a 35%, var(--color-border-2));
+}
+
+.role-tag--system {
+  background: var(--color-fill-3);
+  color: var(--app-text-muted);
+  border: 1px solid var(--color-border-2);
 }
 
 .ann-body {

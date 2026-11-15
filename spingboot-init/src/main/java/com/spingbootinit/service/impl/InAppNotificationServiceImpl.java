@@ -70,7 +70,21 @@ public class InAppNotificationServiceImpl extends ServiceImpl<UserInAppNotificat
         v.setLinkRef(n.getLinkRef());
         v.setRead(n.getReadAt() != null);
         v.setCreateTime(n.getCreateTime());
+        v.setSource(resolveSource(n.getType()));
         return v;
+    }
+
+    private String resolveSource(Integer type) {
+        if (type == null) {
+            return "系统";
+        }
+        return switch (type) {
+            case UserInAppNotification.TYPE_COMMENT_ON_POST,
+                 UserInAppNotification.TYPE_COMMENT_REPLY -> "用户";
+            case UserInAppNotification.TYPE_ACCOUNT_ADMIN_BAN,
+                 UserInAppNotification.TYPE_ACCOUNT_ADMIN_UNBAN -> "管理员";
+            default -> "系统";
+        };
     }
 
     @Override

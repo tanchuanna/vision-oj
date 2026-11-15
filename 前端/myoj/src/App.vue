@@ -12,7 +12,7 @@ const GlobalMusicPlayer = defineAsyncComponent(() => import('@/components/Global
 </template>
 
 <style>
-* ,
+*,
 *::before,
 *::after {
   box-sizing: border-box;
@@ -20,6 +20,7 @@ const GlobalMusicPlayer = defineAsyncComponent(() => import('@/components/Global
 
 :root {
   color-scheme: light;
+  --app-header-height: 66px;
   --app-bg: #f5efe2;
   --app-bg-secondary: #efe4cf;
   --app-surface: rgba(255, 251, 244, 0.82);
@@ -66,11 +67,17 @@ const GlobalMusicPlayer = defineAsyncComponent(() => import('@/components/Global
   --color-primary-light-4: #44d1b7;
   --color-primary-light-5: #1fb79c;
   --color-primary-light-6: #0f8c7a;
- }
+}
 
 /* 明确浅色：避免从深色切回时第三方样式或 clip 字重绘导致整页白底白字 */
 html[data-theme='light'] {
   color-scheme: light;
+}
+
+@media (max-width: 860px) {
+  :root {
+    --app-header-height: 62px;
+  }
 }
 
 html[data-theme='light'] body {
@@ -174,9 +181,21 @@ html[data-theme='dark'] body::before {
 /** 暗黑：冷青氛围与 Arco 深色组件统一，避免页面底与表格「两套灰色」 */
 html[data-theme='dark'] body {
   background:
-    radial-gradient(circle at 14% 18%, color-mix(in srgb, var(--app-accent) 22%, transparent), transparent 36%),
-    radial-gradient(circle at 88% 10%, color-mix(in srgb, var(--app-accent) 8%, transparent), transparent 30%),
-    radial-gradient(circle at 76% 84%, color-mix(in srgb, var(--app-accent-2) 14%, transparent), transparent 28%),
+    radial-gradient(
+      circle at 14% 18%,
+      color-mix(in srgb, var(--app-accent) 22%, transparent),
+      transparent 36%
+    ),
+    radial-gradient(
+      circle at 88% 10%,
+      color-mix(in srgb, var(--app-accent) 8%, transparent),
+      transparent 30%
+    ),
+    radial-gradient(
+      circle at 76% 84%,
+      color-mix(in srgb, var(--app-accent-2) 14%, transparent),
+      transparent 28%
+    ),
     linear-gradient(185deg, var(--app-bg-secondary) 0%, var(--app-bg) 45%, var(--color-bg-3) 100%);
 }
 

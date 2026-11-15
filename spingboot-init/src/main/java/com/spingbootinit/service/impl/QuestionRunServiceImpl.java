@@ -3,14 +3,14 @@ package com.spingbootinit.service.impl;
 import com.spingbootinit.common.exception.BusinessException;
 import com.spingbootinit.common.result.ResultCode;
 import com.spingbootinit.context.UserContext.UserContext;
-import com.spingbootinit.judo.codesandbox.CodeSandbox;
 import com.spingbootinit.judo.ImageJudgeInputService;
+import com.spingbootinit.judo.codesandbox.CodeSandbox;
 import com.spingbootinit.judo.codesandbox.CodeSandboxFactory;
 import com.spingbootinit.judo.codesandbox.CodeSandboxProxy;
 import com.spingbootinit.judo.codesandbox.model.ExecuteCodeRequest;
 import com.spingbootinit.judo.codesandbox.model.ExecuteCodeResponse;
-import com.spingbootinit.judo.strategy.ObjectCountJudgeStrategy;
 import com.spingbootinit.judo.strategy.ImageOutputJudgeStrategy;
+import com.spingbootinit.judo.strategy.ObjectCountJudgeStrategy;
 import com.spingbootinit.model.dto.question.JudgeCase;
 import com.spingbootinit.model.dto.question.QuestionRunRequest;
 import com.spingbootinit.model.dto.questionsubmit.JudgeInfo;
@@ -83,7 +83,7 @@ public class QuestionRunServiceImpl implements QuestionRunService {
         }
         String qidRaw = StringUtils.trimToEmpty(request.getQuestionId());
         String language = StringUtils.trimToEmpty(request.getLanguage());
-        String code = StringUtils.trimToEmpty(request.getCode());
+        String code = request.getCode();
         if (StringUtils.isBlank(qidRaw) || StringUtils.isBlank(language) || StringUtils.isBlank(code)) {
             throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "请完善题目、语言和代码");
         }
@@ -102,18 +102,37 @@ public class QuestionRunServiceImpl implements QuestionRunService {
             throw new BusinessException(ResultCode.NOT_FOUND_ERROR.getCode(), "题目不存在");
         }
 
+        boolean customMode = "CUSTOM".equalsIgnoreCase(StringUtils.trimToEmpty(request.getMode()));
+        String mode = customMode ? "CUSTOM" : "SAMPLE";
+        if (customMode && question.getQuestionType() != null
+                && question.getQuestionType().toUpperCase(Locale.ROOT).startsWith("IMAGE_")) {
+            throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "图像题不支持自定义输入，图片路径由评测环境提供");
+        }
+
         List<JudgeCase> all = question.getJudgeCase();
-        if (all == null || all.isEmpty()) {
+        if (!customMode && (all == null || all.isEmpty())) {
             throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "题目暂无测试用例，无法运行");
         }
 
-        List<JudgeCase> markedSamples = all.stream().filter(c -> Boolean.TRUE.equals(c.getSample())).toList();
-        // 运行按钮只能使用公开样例，绝不能把隐藏图片、标准答案通过运行结果泄露给学生。
-        List<JudgeCase> source = markedSamples.isEmpty() ? all.subList(0, 1) : markedSamples;
-        int n = Math.min(SAMPLE_LIMIT, source.size());
-        List<JudgeCase> samples = new ArrayList<>(source.subList(0, n));
-        List<String> inputList = samples.stream().map(JudgeCase::getInput).toList();
-        List<String> imageBase64List = imageJudgeInputService.prepare(question, inputList, language);
+        List<JudgeCase> samples;
+        List<String> inputList;
+        List<String> imageBase64List;
+        if (customMode) {
+            samples = List.of();
+            inputList = List.of(request.getCustomInput() == null ? "" : request.getCustomInput());
+            imageBase64List = List.of();
+        } else {
+            List<JudgeCase> markedSamples = all.stream().filter(c -> Boolean.TRUE.equals(c.getSample())).toList();
+            // 运行按钮只能使用公开样例，绝不能把隐藏图片、标准答案通过运行结果泄露给学生。
+            if (markedSamples.isEmpty()) {
+                throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "题目暂无公开样例，请直接提交代码进行完整评测");
+            }
+            List<JudgeCase> source = markedSamples;
+            int n = Math.min(SAMPLE_LIMIT, source.size());
+            samples = new ArrayList<>(source.subList(0, n));
+            inputList = samples.stream().map(JudgeCase::getInput).toList();
+            imageBase64List = imageJudgeInputService.prepare(question, inputList, language);
+        }
 
         ExecuteCodeRequest executeCodeRequest = ExecuteCodeRequest.builder()
                 .code(code)
@@ -126,7 +145,7 @@ public class QuestionRunServiceImpl implements QuestionRunService {
         CodeSandbox codeSandbox = codeSandboxFactory.newInstance(defaultJudgeStrategy);
         codeSandbox = new CodeSandboxProxy(codeSandbox);
 
-        log.info("[运行代码] questionId={}, language={}, 样例数={}", questionId, language, inputList.size());
+        log.info("[运行代码] questionId={}, language={}, mode={}, 输入组数={}", questionId, language, mode, inputList.size());
         ExecuteCodeResponse res = codeSandbox.executeCode(executeCodeRequest);
 
         JudgeInfo ji = res.getJudgeInfo();
@@ -137,12 +156,13 @@ public class QuestionRunServiceImpl implements QuestionRunService {
 
         if (terminal) {
             return QuestionRunVO.builder()
+                    .mode(mode)
                     .sandboxCode(res.getCode())
                     .sandboxMessage(res.getMessage())
                     .judgeInfo(res.getJudgeInfo())
                     .terminalError(true)
                     .cases(List.of())
-                    .allSamplePassed(false)
+                    .allSamplePassed(customMode ? null : false)
                     .hints(List.of())
                     .suspectedShortcut(false)
                     .build();
@@ -151,6 +171,28 @@ public class QuestionRunServiceImpl implements QuestionRunService {
         List<String> outputs = res.getOutputList();
         if (outputs == null) {
             outputs = List.of();
+        }
+
+        if (customMode) {
+            String actual = outputs.isEmpty() || outputs.get(0) == null ? "" : outputs.get(0);
+            return QuestionRunVO.builder()
+                    .mode(mode)
+                    .sandboxCode(res.getCode())
+                    .sandboxMessage(res.getMessage())
+                    .judgeInfo(res.getJudgeInfo())
+                    .terminalError(false)
+                    .cases(List.of(QuestionRunCaseVO.builder()
+                            .index(1)
+                            .input(inputList.get(0))
+                            .expectedOutput(null)
+                            .actualOutput(actual)
+                            .passed(null)
+                            .build()))
+                    .allSamplePassed(null)
+                    .warning(outputs.size() > 1 ? "自定义运行只展示第一组输出" : null)
+                    .hints(List.of())
+                    .suspectedShortcut(false)
+                    .build();
         }
 
         String warning = null;
@@ -204,6 +246,7 @@ public class QuestionRunServiceImpl implements QuestionRunService {
         }
 
         return QuestionRunVO.builder()
+                .mode(mode)
                 .sandboxCode(res.getCode())
                 .sandboxMessage(res.getMessage())
                 .judgeInfo(res.getJudgeInfo())

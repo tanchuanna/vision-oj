@@ -25,4 +25,7 @@ public class InAppNotificationItemVO {
     private Boolean read;
 
     private Date createTime;
+
+    /** 消息来源：管理员 / 系统 / 用户 */
+    private String source;
 }

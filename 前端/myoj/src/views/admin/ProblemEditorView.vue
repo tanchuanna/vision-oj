@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
-import { ApiError, Service, type QuestionAddRequest, type QuestionUpdateRequest } from '@generated'
+import { ApiError, type QuestionAddRequest, type QuestionUpdateRequest, Service } from '@generated'
 import { useRoute, useRouter } from 'vue-router'
 import { getBackendErrorMessage } from '@/api/httpError'
 import { isResultSuccess } from '@/api/result'
@@ -13,6 +13,10 @@ import axios from 'axios'
 import { PROBLEM_DIFFICULTIES, PROBLEM_KNOWLEDGE_TAGS } from '@/config/problemTaxonomy'
 import AiModelPicker from '@/components/study/ai/AiModelPicker.vue'
 import { useAiModelsStore } from '@/stores/aiModels'
+import type { ImageProvider } from '@/api/aiImageModels'
+import { renderMarkdownToHtml } from '@/utils/renderMarkdown'
+import { normalizeOjStatement } from '@/utils/normalizeOjStatement'
+import { pageManagedQuestions, updateManagedQuestion } from '@/api/questionManage'
 
 const route = useRoute()
 const router = useRouter()
@@ -25,20 +29,59 @@ const DRAFT_TTL_MS = 15 * 60 * 1000 // 15分钟自动清理这个草稿
 const isEditMode = computed(() => Boolean(route.params.id))
 const submitting = ref(false)
 const preflightBusy = ref(false)
-const preflightResult = ref<{ ready: boolean; checks: Array<{ name: string; passed: boolean; detail: string }> } | null>(null)
+const preflightResult = ref<{
+  ready: boolean
+  checks: Array<{ name: string; passed: boolean; detail: string }>
+} | null>(null)
 const preflightError = ref('')
 const preflightSnapshot = ref('')
-const visiblePreflight = computed(() => preflightSnapshot.value === JSON.stringify(buildProblemPayload()) ? preflightResult.value : null)
+const visiblePreflight = computed(() =>
+  preflightSnapshot.value === JSON.stringify(buildProblemPayload()) ? preflightResult.value : null,
+)
 const imageUploading = ref(false)
 const hiddenImagesUploading = ref(false)
 const visionDetecting = ref(false)
 const imageGenerating = ref(false)
 const imageGeneratePrompt = ref('')
 const imageGenerateError = ref('')
-const imageSource = ref<'UPLOAD' | 'LOCAL_COMFYUI' | 'DASHSCOPE'>('LOCAL_COMFYUI')
-const generationModels = ref<{ local: string[]; cloud: string[] }>({ local: [], cloud: ['qwen-image-2.1-turbo', 'qwen-image-2.1-pro'] })
+type ImageSource =
+  | 'UPLOAD'
+  | 'LOCAL_COMFYUI'
+  | 'DASHSCOPE'
+  | 'VOLCENGINE'
+  | 'BAIDU_QIANFAN'
+  | 'SILICONFLOW'
+const imageSource = ref<ImageSource>('LOCAL_COMFYUI')
+const generationModels = ref<{ local: string[]; cloud: string[]; providers: ImageProvider[] }>({
+  local: [],
+  cloud: [],
+  providers: [],
+})
 const generationModel = ref('')
-const generatedPreview = ref<{ url: string; prompt: string; source: 'LOCAL_COMFYUI' | 'DASHSCOPE'; modelId: string } | null>(null)
+const generatedPreview = ref<{
+  url: string
+  prompt: string
+  source: Exclude<ImageSource, 'UPLOAD'>
+  modelId: string
+} | null>(null)
+const selectedImageProvider = computed(() =>
+  generationModels.value.providers.find((item) => item.code === imageSource.value),
+)
+const selectedGenerationModels = computed(() =>
+  imageSource.value === 'LOCAL_COMFYUI'
+    ? generationModels.value.local.map((id) => ({ id, name: id }))
+    : selectedImageProvider.value?.models || [],
+)
+const imageProviderIcons: Record<string, string> = {
+  DASHSCOPE: '/ai-providers/dashscope.png',
+  VOLCENGINE: '/ai-providers/volcengine.png',
+  BAIDU_QIANFAN: '/ai-providers/baidu.png',
+  SILICONFLOW: '/ai-providers/siliconflow.png',
+}
+const failedImageProviderIcons = ref<string[]>([])
+const imageProviderName = (code: string) =>
+  generationModels.value.providers.find((item) => item.code === code)?.name ||
+  (code === 'LOCAL_COMFYUI' ? '本地 GPU' : code)
 const hiddenGenerationBusy = ref(false)
 const generatedCasesReady = ref(false)
 const generationPending = ref(false)
@@ -81,19 +124,64 @@ type StructuredProblem = {
   rawOcrText?: string
 }
 const COCO_LABEL_ZH: Record<string, string> = {
-  head: '未戴安全帽头部', helmet: '安全帽',
-  person: '行人', bicycle: '自行车', car: '汽车', motorcycle: '摩托车', airplane: '飞机',
-  bus: '公交车', train: '火车', truck: '卡车', boat: '船', 'traffic light': '交通灯',
-  'fire hydrant': '消防栓', 'stop sign': '停车标志', bench: '长椅', bird: '鸟', cat: '猫',
-  dog: '狗', horse: '马', sheep: '羊', cow: '牛', backpack: '背包', umbrella: '雨伞',
-  bottle: '瓶子', chair: '椅子', couch: '沙发', tv: '电视', laptop: '笔记本电脑',
-  cell_phone: '手机', 'cell phone': '手机', book: '书', clock: '时钟',
+  head: '未戴安全帽头部',
+  helmet: '安全帽',
+  person: '行人',
+  bicycle: '自行车',
+  car: '汽车',
+  motorcycle: '摩托车',
+  airplane: '飞机',
+  bus: '公交车',
+  train: '火车',
+  truck: '卡车',
+  boat: '船',
+  'traffic light': '交通灯',
+  'fire hydrant': '消防栓',
+  'stop sign': '停车标志',
+  bench: '长椅',
+  bird: '鸟',
+  cat: '猫',
+  dog: '狗',
+  horse: '马',
+  sheep: '羊',
+  cow: '牛',
+  backpack: '背包',
+  umbrella: '雨伞',
+  bottle: '瓶子',
+  chair: '椅子',
+  couch: '沙发',
+  tv: '电视',
+  laptop: '笔记本电脑',
+  cell_phone: '手机',
+  'cell phone': '手机',
+  book: '书',
+  clock: '时钟',
 }
 const VISION_MODELS = [
-  { value: 'YOLO_GENERAL', label: '通用目标检测', description: 'YOLOv8n · COCO 80 类', tasks: ['IMAGE_OBJECT_COUNT', 'IMAGE_CLASSIFICATION', 'IMAGE_OBJECT_DETECTION'] },
-  { value: 'YOLO_HELMET', label: '校园安全检测', description: '自训练 · head / helmet / person', tasks: ['IMAGE_OBJECT_COUNT', 'IMAGE_CLASSIFICATION', 'IMAGE_OBJECT_DETECTION'] },
-  { value: 'EASYOCR_ZH_EN', label: '中英文 OCR', description: 'EasyOCR · 文字识别', tasks: ['IMAGE_OCR'] },
-  { value: 'OPENCV_ANALYSIS', label: '图像属性分析', description: 'OpenCV + Pillow', tasks: ['IMAGE_ANALYSIS'] },
+  {
+    value: 'YOLO_GENERAL',
+    label: '通用目标检测',
+    description: 'YOLOv8n · COCO 80 类',
+    tasks: ['IMAGE_OBJECT_COUNT', 'IMAGE_CLASSIFICATION', 'IMAGE_OBJECT_DETECTION'],
+  },
+  {
+    value: 'YOLO_HELMET',
+    label: '校园安全检测',
+    description: '自训练 · head / helmet / person',
+    tasks: ['IMAGE_OBJECT_COUNT', 'IMAGE_CLASSIFICATION', 'IMAGE_OBJECT_DETECTION'],
+  },
+  {
+    value: 'EASYOCR_ZH_EN',
+    label: '中英文 OCR',
+    description: 'EasyOCR · 文字识别',
+    tasks: ['IMAGE_OCR'],
+  },
+  {
+    value: 'OPENCV_ANALYSIS',
+    label: '图像属性分析',
+    description: 'OpenCV + Pillow',
+    tasks: ['IMAGE_ANALYSIS'],
+  },
 ] as const
 const visionAnnotation = ref<VisionAnnotation | null>(null)
 const tagInput = ref('')
@@ -127,36 +215,33 @@ function createInitialForm(): QuestionAddRequest {
 }
 
 const form = ref<QuestionAddRequest>(createInitialForm())
-const availableVisionModels = computed(() => VISION_MODELS.filter(
-  (item) => (item.tasks as readonly string[]).includes(form.value.questionType || ''),
-))
+const availableVisionModels = computed(() =>
+  VISION_MODELS.filter((item) =>
+    (item.tasks as readonly string[]).includes(form.value.questionType || ''),
+  ),
+)
 
 const titleCount = computed(() => (form.value.title || '').trim().length)
 const caseCount = computed(() => form.value.judgeCase?.length ?? 0)
-const customTags = computed(() => tags.value.filter(
-  (tag) => !(PROBLEM_DIFFICULTIES as readonly string[]).includes(tag)
-    && !(PROBLEM_KNOWLEDGE_TAGS as readonly string[]).includes(tag),
-))
+const customTags = computed(() =>
+  tags.value.filter(
+    (tag) =>
+      !(PROBLEM_DIFFICULTIES as readonly string[]).includes(tag) &&
+      !(PROBLEM_KNOWLEDGE_TAGS as readonly string[]).includes(tag),
+  ),
+)
 
 const markdownPreviewHtml = computed(() => {
-  const raw = form.value.content || ''
-  const escaped = raw
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-  return escaped
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
-    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/^- (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>)/gs, '<ul>$1</ul>')
-    .replace(/\n{2,}/g, '</p><p>')
-    .replace(/\n/g, '<br />')
-    .replace(/^/, '<p>')
-    .replace(/$/, '</p>')
+  return renderMarkdownToHtml(normalizeOjStatement(form.value.content || ''))
 })
+const statementNeedsCleanup = computed(
+  () => normalizeOjStatement(form.value.content || '') !== (form.value.content || ''),
+)
+
+function tidyStatement() {
+  form.value.content = normalizeOjStatement(form.value.content || '')
+  Message.success('已整理常见公式写法，请在预览中核对题意和样例')
+}
 
 function insertAtCursor(snippet: string) {
   const area = document.querySelector<HTMLTextAreaElement>('.md-editor__textarea textarea')
@@ -207,7 +292,9 @@ function removeTagValue(value: string) {
 }
 
 function selectDifficulty(value: string) {
-  tags.value = tags.value.filter((tag) => !(PROBLEM_DIFFICULTIES as readonly string[]).includes(tag))
+  tags.value = tags.value.filter(
+    (tag) => !(PROBLEM_DIFFICULTIES as readonly string[]).includes(tag),
+  )
   if (value) tags.value.unshift(value)
 }
 
@@ -236,26 +323,30 @@ function removeJudgeCase(idx: number) {
 }
 
 function validate(): boolean {
-  if (!form.value.title?.trim()) return Message.warning('请输入题目标题'), false
-  if (!form.value.content?.trim()) return Message.warning('请输入题目描述'), false
-  if (!form.value.answer?.trim()) return Message.warning('请输入参考答案'), false
+  if (!form.value.title?.trim()) return (Message.warning('请输入题目标题'), false)
+  if (!form.value.content?.trim()) return (Message.warning('请输入题目描述'), false)
+  if (!form.value.answer?.trim()) return (Message.warning('请输入参考答案'), false)
   if (!tags.value.some((tag) => (PROBLEM_DIFFICULTIES as readonly string[]).includes(tag))) {
-    return Message.warning('请选择题目难度'), false
+    return (Message.warning('请选择题目难度'), false)
   }
   if (!tags.value.some((tag) => (PROBLEM_KNOWLEDGE_TAGS as readonly string[]).includes(tag))) {
-    return Message.warning('请至少选择一个知识点'), false
+    return (Message.warning('请至少选择一个知识点'), false)
   }
   if (form.value.questionType?.startsWith('IMAGE_') && !form.value.imageUrl?.trim()) {
-    return Message.warning('请上传或填写图像题题图'), false
+    return (Message.warning('请上传或填写图像题题图'), false)
   }
   if (form.value.questionType?.startsWith('IMAGE_')) {
     const cases = form.value.judgeCase || []
     const uniqueImages = new Set(cases.map((item) => item.input?.trim()).filter(Boolean))
-    if (!cases.some((item) => item.sample === true) || !cases.some((item) => item.sample !== true) || uniqueImages.size < 2) {
-      return Message.warning('图像题至少需要 1 张公开样例和 1 张不同的隐藏评测图片'), false
+    if (
+      !cases.some((item) => item.sample === true) ||
+      !cases.some((item) => item.sample !== true) ||
+      uniqueImages.size < 2
+    ) {
+      return (Message.warning('图像题至少需要 1 张公开样例和 1 张不同的隐藏评测图片'), false)
     }
   }
-  if (!form.value.judgeCase?.length) return Message.warning('请至少填写一组测试用例'), false
+  if (!form.value.judgeCase?.length) return (Message.warning('请至少填写一组测试用例'), false)
 
   for (const [idx, item] of form.value.judgeCase.entries()) {
     if (!item.input?.trim() || !item.output?.trim()) {
@@ -276,7 +367,10 @@ function safeJsonParse<T>(raw: string | null, fallback: T): T {
 }
 
 function getToken(): string {
-  const auth = safeJsonParse<{ token?: string; accessToken?: string }>(localStorage.getItem(AUTH_STORAGE_KEY), {})
+  const auth = safeJsonParse<{ token?: string; accessToken?: string }>(
+    localStorage.getItem(AUTH_STORAGE_KEY),
+    {},
+  )
   return (auth.accessToken || auth.token || '').trim()
 }
 
@@ -324,10 +418,12 @@ async function uploadImageFile(file: File): Promise<string> {
   data.append('image', file)
   const token = getToken()
   const res = await axios.post<{ code?: number; message?: string; data?: string }>(
-    `${API_BASE_URL}/file/question-image`, data,
+    `${API_BASE_URL}/file/question-image`,
+    data,
     { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
   )
-  if (!isResultSuccess(res.data.code) || !res.data.data) throw new Error(res.data.message || `${file.name} 上传失败`)
+  if (!isResultSuccess(res.data.code) || !res.data.data)
+    throw new Error(res.data.message || `${file.name} 上传失败`)
   return res.data.data
 }
 
@@ -335,10 +431,17 @@ async function annotateImage(imageUrl: string): Promise<VisionAnnotation> {
   const token = getToken()
   const res = await axios.post<{ code?: number; message?: string; data?: VisionAnnotation }>(
     `${API_BASE_URL}/vision/annotate`,
-    { imageUrl, confidence: 0.25, iou: 0.7, taskType: form.value.questionType, modelKey: form.value.visionModelKey || 'YOLO_GENERAL' },
+    {
+      imageUrl,
+      confidence: 0.25,
+      iou: 0.7,
+      taskType: form.value.questionType,
+      modelKey: form.value.visionModelKey || 'YOLO_GENERAL',
+    },
     { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
   )
-  if (!isResultSuccess(res.data.code) || !res.data.data) throw new Error(res.data.message || '图片识别失败')
+  if (!isResultSuccess(res.data.code) || !res.data.data)
+    throw new Error(res.data.message || '图片识别失败')
   return res.data.data
 }
 
@@ -346,14 +449,21 @@ function annotationOutput(annotation: VisionAnnotation): string {
   const type = form.value.questionType
   const counts = annotation.counts || {}
   if (type === 'IMAGE_CLASSIFICATION') {
-    return [...(annotation.boxes || [])].sort((a, b) => b.confidence - a.confidence)[0]?.label || 'unknown'
+    return (
+      [...(annotation.boxes || [])].sort((a, b) => b.confidence - a.confidence)[0]?.label ||
+      'unknown'
+    )
   }
   if (type === 'IMAGE_OBJECT_DETECTION') {
-    return JSON.stringify((annotation.boxes || []).map(({ label, x1, y1, x2, y2 }) => ({ label, x1, y1, x2, y2 })))
+    return JSON.stringify(
+      (annotation.boxes || []).map(({ label, x1, y1, x2, y2 }) => ({ label, x1, y1, x2, y2 })),
+    )
   }
   if (type === 'IMAGE_OCR') return annotation.ocr_text?.trim() || '未识别到文字'
   if (type === 'IMAGE_ANALYSIS') return JSON.stringify(annotation.image_analysis || {})
-  return JSON.stringify(Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))))
+  return JSON.stringify(
+    Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))),
+  )
 }
 
 async function uploadHiddenImages(event: Event) {
@@ -368,12 +478,18 @@ async function uploadHiddenImages(event: Event) {
     for (const file of files) {
       const imageUrl = await uploadImageFile(file)
       const annotation = await annotateImage(imageUrl)
-      form.value.judgeCase.push({ input: imageUrl, output: annotationOutput(annotation), sample: false })
+      form.value.judgeCase.push({
+        input: imageUrl,
+        output: annotationOutput(annotation),
+        sample: false,
+      })
       completed++
     }
     Message.success(`已生成 ${completed} 组隐藏评测用例，学生端不会公开`)
   } catch (error) {
-    Message.error(getBackendErrorMessage(error, error instanceof Error ? error.message : '隐藏题图处理失败'))
+    Message.error(
+      getBackendErrorMessage(error, error instanceof Error ? error.message : '隐藏题图处理失败'),
+    )
   } finally {
     hiddenImagesUploading.value = false
   }
@@ -393,10 +509,12 @@ async function uploadTraditionalProblemPhoto(event: Event) {
     data.append('image', file)
     const token = getToken()
     const res = await axios.post<{ code?: number; message?: string; data?: string }>(
-      `${API_BASE_URL}/file/question-image`, data,
+      `${API_BASE_URL}/file/question-image`,
+      data,
       { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
     )
-    if (!isResultSuccess(res.data.code) || !res.data.data) return void Message.error(res.data.message || '题目图片上传失败')
+    if (!isResultSuccess(res.data.code) || !res.data.data)
+      return void Message.error(res.data.message || '题目图片上传失败')
     smartImportImageUrl.value = res.data.data
     Message.success('题目图片已上传，可以开始 AI 智能录题')
   } catch (error) {
@@ -422,9 +540,17 @@ async function runSmartProblemImport() {
       return void Message.error(ocr.data.message || 'OCR 未识别到题目文字，请上传更清晰的图片')
     }
     smartImportOcrText.value = ocr.data.data.ocr_text.trim()
-    const structured = await axios.post<{ code?: number; message?: string; data?: StructuredProblem }>(
+    const structured = await axios.post<{
+      code?: number
+      message?: string
+      data?: StructuredProblem
+    }>(
       `${API_BASE_URL}/bailian_assist/structure-problem`,
-      { ocrText: smartImportOcrText.value, providerCode: aiModels.selectedProvider, modelId: aiModels.selectedModel || undefined },
+      {
+        ocrText: smartImportOcrText.value,
+        providerCode: aiModels.selectedProvider,
+        modelId: aiModels.selectedModel || undefined,
+      },
       { headers },
     )
     if (!isResultSuccess(structured.data.code) || !structured.data.data) {
@@ -443,14 +569,6 @@ async function runSmartProblemImport() {
   }
 }
 
-function normalizeOjStatement(content: string): string {
-  return content
-    .replace(/\$([^$\n]+)\$/g, (_, math: string) => math
-      .replace(/\\leq?/g, '≤').replace(/\\geq?/g, '≥')
-      .replace(/10\^9/g, '1,000,000,000').replace(/2\^\{31\}-1/g, '2,147,483,647'))
-    .replace(/^```\r?\n([^\r\n]+)\r?\n```$/gm, '`$1`')
-}
-
 function applyStructuredProblem(data: StructuredProblem) {
   form.value.questionType = 'TEXT'
   form.value.imageUrl = ''
@@ -458,7 +576,12 @@ function applyStructuredProblem(data: StructuredProblem) {
   if (data.title?.trim()) form.value.title = data.title.trim()
   if (data.content?.trim()) form.value.content = normalizeOjStatement(data.content.trim())
   if (data.answer?.trim()) form.value.answer = data.answer.trim()
-  if (data.judgeCase?.length) form.value.judgeCase = data.judgeCase.map((item, index) => ({ input: item.input || '', output: item.output || '', sample: index === 0 }))
+  if (data.judgeCase?.length)
+    form.value.judgeCase = data.judgeCase.map((item, index) => ({
+      input: item.input || '',
+      output: item.output || '',
+      sample: index === 0,
+    }))
   if (data.judgeConfig) form.value.judgeConfig = { ...form.value.judgeConfig, ...data.judgeConfig }
   const nextTags = [...(data.tags || [])]
   if (data.difficulty && !nextTags.includes(data.difficulty)) nextTags.unshift(data.difficulty)
@@ -472,9 +595,18 @@ async function runAiProblemGenerate() {
   aiOperationError.value = ''
   try {
     const token = getToken()
-    const response = await axios.post<{ code?: number; message?: string; data?: StructuredProblem }>(
+    const response = await axios.post<{
+      code?: number
+      message?: string
+      data?: StructuredProblem
+    }>(
       `${API_BASE_URL}/bailian_assist/structure-problem`,
-      { ocrText: prompt, mode: 'GENERATE', providerCode: aiModels.selectedProvider, modelId: aiModels.selectedModel || undefined },
+      {
+        ocrText: prompt,
+        mode: 'GENERATE',
+        providerCode: aiModels.selectedProvider,
+        modelId: aiModels.selectedModel || undefined,
+      },
       { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
     )
     if (!isResultSuccess(response.data.code) || !response.data.data) {
@@ -501,7 +633,13 @@ async function detectObjects() {
     const token = getToken()
     const res = await axios.post<{ code?: number; message?: string; data?: VisionAnnotation }>(
       `${API_BASE_URL}/vision/annotate`,
-      { imageUrl, confidence: 0.25, iou: 0.7, taskType: form.value.questionType, modelKey: form.value.visionModelKey || 'YOLO_GENERAL' },
+      {
+        imageUrl,
+        confidence: 0.25,
+        iou: 0.7,
+        taskType: form.value.questionType,
+        modelKey: form.value.visionModelKey || 'YOLO_GENERAL',
+      },
       { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
     )
     if (!isResultSuccess(res.data.code) || !res.data.data) {
@@ -518,14 +656,25 @@ async function detectObjects() {
     // 模型或题型变化后重新计算全部隐藏标准答案，避免沿用旧模型输出。
     for (const hiddenUrl of hiddenUrls) {
       const hiddenAnnotation = await annotateImage(hiddenUrl)
-      form.value.judgeCase?.push({ input: hiddenUrl, output: annotationOutput(hiddenAnnotation), sample: false })
+      form.value.judgeCase?.push({
+        input: hiddenUrl,
+        output: annotationOutput(hiddenAnnotation),
+        sample: false,
+      })
     }
     if (form.value.questionType === 'IMAGE_OCR' && !res.data.data.ocr_text?.trim()) {
       Message.warning('OCR 未识别到文字，已生成题目框架；请更换清晰图片或人工填写标准文本')
-    } else if (['IMAGE_OBJECT_COUNT', 'IMAGE_CLASSIFICATION', 'IMAGE_OBJECT_DETECTION'].includes(form.value.questionType || '') && !Object.keys(counts).length) {
+    } else if (
+      ['IMAGE_OBJECT_COUNT', 'IMAGE_CLASSIFICATION', 'IMAGE_OBJECT_DETECTION'].includes(
+        form.value.questionType || '',
+      ) &&
+      !Object.keys(counts).length
+    ) {
       Message.warning('未检测到目标，已生成空目标计数题；建议降低置信度后再次识别或人工复核')
     } else {
-      Message.success(`一键出题完成：已识别 ${Object.keys(counts).length} 个类别，并填充全部题目信息`)
+      Message.success(
+        `一键出题完成：已识别 ${Object.keys(counts).length} 个类别，并填充全部题目信息`,
+      )
     }
     return res.data.data
   } catch (error) {
@@ -538,7 +687,8 @@ async function detectObjects() {
 async function generateVisionProblemImage() {
   const prompt = imageGeneratePrompt.value.trim()
   if (!prompt) return void Message.warning('请先描述想生成的题图场景')
-  if (!form.value.questionType?.startsWith('IMAGE_')) return void Message.warning('请先选择图像编程题类型')
+  if (!form.value.questionType?.startsWith('IMAGE_'))
+    return void Message.warning('请先选择图像编程题类型')
   imageGenerating.value = true
   imageGenerateError.value = ''
   generatedCasesReady.value = false
@@ -554,11 +704,16 @@ async function generateVisionProblemImage() {
     const source = imageSource.value
     const modelId = generationModel.value
     if (!modelId) throw new Error('请先选择生图模型')
+    if (source !== 'LOCAL_COMFYUI' && !selectedImageProvider.value?.configured)
+      throw new Error('请先在账户设置的图片模型页配置该厂商密钥')
     const url = await requestGeneratedImage(prompt, source, modelId)
     generatedPreview.value = { url, prompt, source, modelId }
     Message.success('预览图已生成，确认满意后再生成隐藏用例')
   } catch (error) {
-    const message = getBackendErrorMessage(error, error instanceof Error ? error.message : 'AI 题图生成失败')
+    const message = getBackendErrorMessage(
+      error,
+      error instanceof Error ? error.message : 'AI 题图生成失败',
+    )
     imageGenerateError.value = message
     Message.error(message)
   } finally {
@@ -566,7 +721,7 @@ async function generateVisionProblemImage() {
   }
 }
 
-function selectImageSource(source: 'UPLOAD' | 'LOCAL_COMFYUI' | 'DASHSCOPE') {
+function selectImageSource(source: ImageSource) {
   if (imageGenerating.value || hiddenGenerationBusy.value) return
   if (imageSource.value === source) return
   if (form.value.imageUrl) {
@@ -582,7 +737,13 @@ function selectImageSource(source: 'UPLOAD' | 'LOCAL_COMFYUI' | 'DASHSCOPE') {
   generatedPreview.value = null
   generatedCasesReady.value = false
   imageGenerateError.value = ''
-  generationModel.value = source === 'DASHSCOPE' ? 'qwen-image-2.1-turbo' : generationModels.value.local[0] || ''
+  generationModel.value =
+    source === 'UPLOAD'
+      ? ''
+      : source === 'LOCAL_COMFYUI'
+        ? generationModels.value.local[0] || ''
+        : generationModels.value.providers.find((provider) => provider.code === source)?.models[0]
+            ?.id || ''
 }
 
 function discardGeneratedPreview() {
@@ -600,24 +761,40 @@ function discardGeneratedPreview() {
 async function loadGenerationModels() {
   try {
     const token = getToken()
-    const res = await axios.get<{ code?: number; data?: { local?: string[]; cloud?: string[] } }>(
-      `${API_BASE_URL}/vision/generation-models`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
-    )
+    const res = await axios.get<{
+      code?: number
+      data?: { local?: string[]; cloud?: string[]; providers?: ImageProvider[] }
+    }>(`${API_BASE_URL}/vision/generation-models`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
     if (isResultSuccess(res.data.code) && res.data.data) {
-      generationModels.value = { local: res.data.data.local || [], cloud: res.data.data.cloud || [] }
-      const available = imageSource.value === 'DASHSCOPE' ? generationModels.value.cloud : generationModels.value.local
-      if (!available.includes(generationModel.value)) generationModel.value = available[0] || ''
+      generationModels.value = {
+        local: res.data.data.local || [],
+        cloud: res.data.data.cloud || [],
+        providers: res.data.data.providers || [],
+      }
+      const available = selectedGenerationModels.value.map((model) => model.id)
+      if (!available.includes(generationModel.value) && !isEditMode.value)
+        generationModel.value = available[0] || ''
     }
-  } catch { /* 模型目录不可用时，生成按钮会提示重新检查服务。 */ }
+  } catch {
+    /* 模型目录不可用时，生成按钮会提示重新检查服务。 */
+  }
 }
 
-async function requestGeneratedImage(prompt: string, source: 'LOCAL_COMFYUI' | 'DASHSCOPE', modelId: string): Promise<string> {
+async function requestGeneratedImage(
+  prompt: string,
+  source: Exclude<ImageSource, 'UPLOAD'>,
+  modelId: string,
+): Promise<string> {
   const token = getToken()
   const res = await axios.post<{ code?: number; message?: string; data?: { imageUrl?: string } }>(
-    `${API_BASE_URL}/vision/generate-image`, { prompt, source, modelId, width: 512, height: 512, steps: 20 },
+    `${API_BASE_URL}/vision/generate-image`,
+    { prompt, source, modelId, width: 512, height: 512, steps: 20 },
     { headers: token ? { Authorization: `Bearer ${token}` } : undefined, timeout: 200000 },
   )
-  if (!isResultSuccess(res.data.code) || !res.data.data?.imageUrl) throw new Error(res.data.message || 'AI 未返回图片')
+  if (!isResultSuccess(res.data.code) || !res.data.data?.imageUrl)
+    throw new Error(res.data.message || 'AI 未返回图片')
   return res.data.data.imageUrl
 }
 
@@ -636,22 +813,28 @@ async function acceptGeneratedPreview() {
     if (!annotation) throw new Error('题图已生成但识别失败，请检查 YOLO/OCR 服务后重新识别')
     const detectedLabels = Object.keys(annotation.counts || {})
     const mainLabel = detectedLabels[0] || ''
-    const plural = mainLabel === 'bus' ? 'buses' : mainLabel === 'person' ? 'people' : `${mainLabel}s`
-    const hiddenPrompts = form.value.questionType === 'IMAGE_OBJECT_COUNT' && mainLabel
-      ? [
-          `A clear realistic photograph of exactly two separate ${plural}, full objects visible, simple background, no text`,
-          `A clear realistic photograph of an empty outdoor scene with no ${plural}, no people, no text`,
-        ]
-      : [
-          `${preview.prompt}, alternate scene with different objects and arrangement, clear full view`,
-          `${preview.prompt}, distinct background and lighting, different object arrangement, clear full view`,
-        ]
+    const plural =
+      mainLabel === 'bus' ? 'buses' : mainLabel === 'person' ? 'people' : `${mainLabel}s`
+    const hiddenPrompts =
+      form.value.questionType === 'IMAGE_OBJECT_COUNT' && mainLabel
+        ? [
+            `A clear realistic photograph of exactly two separate ${plural}, full objects visible, simple background, no text`,
+            `A clear realistic photograph of an empty outdoor scene with no ${plural}, no people, no text`,
+          ]
+        : [
+            `${preview.prompt}, alternate scene with different objects and arrangement, clear full view`,
+            `${preview.prompt}, distinct background and lighting, different object arrangement, clear full view`,
+          ]
     // 隐藏题图使用变化场景，生成后仍以实际识别结果验题；数量并不由提示词保证。
     let hiddenCreated = 0
     for (const hiddenPrompt of hiddenPrompts) {
       const url = await requestGeneratedImage(hiddenPrompt, preview.source, preview.modelId)
       const annotation = await annotateImage(url)
-      form.value.judgeCase?.push({ input: url, output: annotationOutput(annotation), sample: false })
+      form.value.judgeCase?.push({
+        input: url,
+        output: annotationOutput(annotation),
+        sample: false,
+      })
       hiddenCreated++
     }
     generatedCasesReady.value = true
@@ -663,7 +846,10 @@ async function acceptGeneratedPreview() {
   } catch (error) {
     // Retrying adoption starts from a clean sample and never accumulates partial hidden cases.
     form.value.judgeCase = []
-    const message = getBackendErrorMessage(error, error instanceof Error ? error.message : 'AI 题图生成失败')
+    const message = getBackendErrorMessage(
+      error,
+      error instanceof Error ? error.message : 'AI 题图生成失败',
+    )
     imageGenerateError.value = message
     Message.error(message)
   } finally {
@@ -672,13 +858,17 @@ async function acceptGeneratedPreview() {
 }
 
 function visionSceneTitle(counts: Record<string, number>): string {
-  const labels = Object.keys(counts).slice(0, 3).map((label) => COCO_LABEL_ZH[label] || label)
+  const labels = Object.keys(counts)
+    .slice(0, 3)
+    .map((label) => COCO_LABEL_ZH[label] || label)
   if (!labels.length) return '图像目标计数'
   return `${labels.join('、')}目标统计`
 }
 
 function buildVisionStatement(counts: Record<string, number>): string {
-  const detected = Object.keys(counts).map((label) => `\`${label}\``).join('、')
+  const detected = Object.keys(counts)
+    .map((label) => `\`${label}\``)
+    .join('、')
   return `## 题目描述
 
 请编写一个 Python 程序，读取系统提供的题目图片，使用目标检测模型识别图片中的目标，并统计每个目标类别的数量。
@@ -710,7 +900,8 @@ function buildVisionStatement(counts: Record<string, number>): string {
 }
 
 function buildVisionReferenceAnswer(): string {
-  const modelPath = form.value.visionModelKey === 'YOLO_HELMET' ? '/models/hard-hat-best.pt' : '/models/yolov8n.pt'
+  const modelPath =
+    form.value.visionModelKey === 'YOLO_HELMET' ? '/models/hard-hat-best.pt' : '/models/yolov8n.pt'
   return `### 解题思路
 
 1. 从标准输入读取沙箱图片路径。
@@ -747,47 +938,76 @@ if __name__ == "__main__":
 
 function fillVisionProblem(annotation: VisionAnnotation, imageUrl: string) {
   const counts = annotation.counts || {}
-  const orderedCounts = Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)))
+  const orderedCounts = Object.fromEntries(
+    Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)),
+  )
   const type = form.value.questionType || 'IMAGE_OBJECT_COUNT'
-  const dominant = [...(annotation.boxes || [])].sort((a, b) => b.confidence - a.confidence)[0]?.label || 'unknown'
-  const boxes = (annotation.boxes || []).map(({ label, x1, y1, x2, y2 }) => ({ label, x1, y1, x2, y2 }))
+  const dominant =
+    [...(annotation.boxes || [])].sort((a, b) => b.confidence - a.confidence)[0]?.label || 'unknown'
+  const boxes = (annotation.boxes || []).map(({ label, x1, y1, x2, y2 }) => ({
+    label,
+    x1,
+    y1,
+    x2,
+    y2,
+  }))
   if (type === 'IMAGE_CLASSIFICATION') {
     form.value.title = `${COCO_LABEL_ZH[dominant] || dominant}图像分类`
-    form.value.content = buildGenericVisionStatement('识别图片中的主要目标类别', '输出一个 YOLO 英文类别名称，例如 `car`。')
+    form.value.content = buildGenericVisionStatement(
+      '识别图片中的主要目标类别',
+      '输出一个 YOLO 英文类别名称，例如 `car`。',
+    )
     form.value.answer = buildClassificationAnswer()
     form.value.countTolerance = 0
     form.value.judgeCase = [{ input: imageUrl, output: dominant, sample: true }]
   } else if (type === 'IMAGE_OBJECT_DETECTION') {
     form.value.title = `${visionSceneTitle(orderedCounts)}与位置检测`
-    form.value.content = buildGenericVisionStatement('检测图片中所有目标的类别及位置', '输出 JSON 数组，每项包含 `label`、`x1`、`y1`、`x2`、`y2`；坐标归一化到 0～1。')
+    form.value.content = buildGenericVisionStatement(
+      '检测图片中所有目标的类别及位置',
+      '输出 JSON 数组，每项包含 `label`、`x1`、`y1`、`x2`、`y2`；坐标归一化到 0～1。',
+    )
     form.value.answer = buildDetectionAnswer()
     form.value.countTolerance = 50
     form.value.judgeCase = [{ input: imageUrl, output: JSON.stringify(boxes), sample: true }]
   } else if (type === 'IMAGE_OCR') {
     form.value.title = '题图文字 OCR 识别'
-    form.value.content = buildGenericVisionStatement('识别题目图片中的文字', '按阅读顺序输出识别到的纯文本，不要输出解释或 JSON。')
+    form.value.content = buildGenericVisionStatement(
+      '识别题目图片中的文字',
+      '按阅读顺序输出识别到的纯文本，不要输出解释或 JSON。',
+    )
     form.value.answer = buildOcrAnswer()
     form.value.countTolerance = 2
-    form.value.judgeCase = [{ input: imageUrl, output: annotation.ocr_text?.trim() || '未识别到文字', sample: true }]
+    form.value.judgeCase = [
+      { input: imageUrl, output: annotation.ocr_text?.trim() || '未识别到文字', sample: true },
+    ]
   } else if (type === 'IMAGE_ANALYSIS') {
     form.value.title = '图像尺寸与灰度特征统计'
-    form.value.content = buildGenericVisionStatement('读取图片并计算基础图像属性', '输出 JSON，字段为 `width`、`height`、`mode`、`mean_gray`、`edge_strength`。')
+    form.value.content = buildGenericVisionStatement(
+      '读取图片并计算基础图像属性',
+      '输出 JSON，字段为 `width`、`height`、`mode`、`mean_gray`、`edge_strength`。',
+    )
     form.value.answer = buildAnalysisAnswer()
     form.value.countTolerance = 2
-    form.value.judgeCase = [{ input: imageUrl, output: JSON.stringify(annotation.image_analysis || {}), sample: true }]
+    form.value.judgeCase = [
+      { input: imageUrl, output: JSON.stringify(annotation.image_analysis || {}), sample: true },
+    ]
   } else {
     form.value.title = visionSceneTitle(orderedCounts)
     form.value.content = buildVisionStatement(orderedCounts)
     form.value.answer = buildVisionReferenceAnswer()
     form.value.countTolerance = 0
-    form.value.judgeCase = [{ input: imageUrl, output: JSON.stringify(orderedCounts), sample: true }]
+    form.value.judgeCase = [
+      { input: imageUrl, output: JSON.stringify(orderedCounts), sample: true },
+    ]
   }
   form.value.judgeConfig = {
     timeLimit: 60_000,
     memoryLimit: 1_572_864,
     stackLimit: 65_536,
   }
-  tags.value = tags.value.filter((tag) => !(PROBLEM_DIFFICULTIES as readonly string[]).includes(tag))
+  tags.value = tags.value.filter(
+    (tag) => !(PROBLEM_DIFFICULTIES as readonly string[]).includes(tag),
+  )
   for (const tag of ['中等', '图像识别', '模拟']) {
     if (!tags.value.includes(tag)) tags.value.push(tag)
   }
@@ -798,7 +1018,8 @@ function buildGenericVisionStatement(task: string, output: string): string {
 }
 
 function buildClassificationAnswer(): string {
-  const path = form.value.visionModelKey === 'YOLO_HELMET' ? '/models/hard-hat-best.pt' : '/models/yolov8n.pt'
+  const path =
+    form.value.visionModelKey === 'YOLO_HELMET' ? '/models/hard-hat-best.pt' : '/models/yolov8n.pt'
   return `读取图片后使用 \`${path}\` 推理，选择置信度最高检测框对应的英文类别并输出。`
 }
 
@@ -828,7 +1049,7 @@ async function loadQuestionForEdit() {
   const id = String(route.params.id || '').trim()
   if (!id) return
   try {
-    const data = await Service.adminPageQuestions({
+    const data = await pageManagedQuestions({
       current: 1,
       pageSize: 1,
       id,
@@ -852,7 +1073,12 @@ async function loadQuestionForEdit() {
       imageUrl: item.imageUrl || '',
       visionModelKey: item.visionModelKey || 'YOLO_GENERAL',
       countTolerance: item.countTolerance ?? 0,
-      judgeCase: item.judgeCase?.length ? item.judgeCase.map((c, index) => ({ ...c, sample: c.sample ?? index === 0 })) : form.value.judgeCase,
+      judgeCase: item.judgeCase?.length
+        ? item.judgeCase.map((c: Record<string, unknown>, index: number) => ({
+            ...c,
+            sample: c.sample ?? index === 0,
+          }))
+        : form.value.judgeCase,
       judgeConfig: { ...form.value.judgeConfig, ...item.judgeConfig },
       tags: item.tags || [],
     }
@@ -860,28 +1086,42 @@ async function loadQuestionForEdit() {
     const generation = item as typeof item & { generationSource?: string; generationModel?: string }
     imageGenerationSource.value = generation.generationSource || ''
     imageGenerationModel.value = generation.generationModel || ''
-    imageSource.value = generation.generationSource === 'DASHSCOPE' ? 'DASHSCOPE' : generation.generationSource === 'LOCAL_COMFYUI' ? 'LOCAL_COMFYUI' : 'UPLOAD'
+    imageSource.value = [
+      'LOCAL_COMFYUI',
+      'DASHSCOPE',
+      'VOLCENGINE',
+      'BAIDU_QIANFAN',
+      'SILICONFLOW',
+    ].includes(generation.generationSource || '')
+      ? (generation.generationSource as ImageSource)
+      : 'UPLOAD'
     generationModel.value = generation.generationModel || generationModel.value
-    if (formattedContent !== (item.content || '')) Message.info('已整理题面中的公式和样例格式，请检查后保存修改')
+    if (formattedContent !== (item.content || ''))
+      Message.info('已整理题面中的公式和样例格式，请检查后保存修改')
   } catch (error) {
     Message.error(getBackendErrorMessage(error, '加载题目失败'))
   }
 }
 
-function buildProblemPayload(): QuestionAddRequest & { generationSource?: string; generationModel?: string } {
+function buildProblemPayload(): QuestionAddRequest & {
+  generationSource?: string
+  generationModel?: string
+} {
   return {
-      ...form.value,
-      generationSource: form.value.questionType?.startsWith('IMAGE_') ? (imageGenerationSource.value || 'UPLOAD') : undefined,
-      generationModel: imageGenerationModel.value || undefined,
-      title: form.value.title?.trim(),
-      content: form.value.content?.trim(),
-      answer: form.value.answer?.trim(),
-      tags: [...tags.value],
-      judgeCase: (form.value.judgeCase || []).map((c) => ({
-        input: c.input?.trim() || '',
-        output: c.output?.trim() || '',
-        sample: c.sample === true,
-      })),
+    ...form.value,
+    generationSource: form.value.questionType?.startsWith('IMAGE_')
+      ? imageGenerationSource.value || 'UPLOAD'
+      : undefined,
+    generationModel: imageGenerationModel.value || undefined,
+    title: form.value.title?.trim(),
+    content: normalizeOjStatement(form.value.content || '').trim(),
+    answer: form.value.answer?.trim(),
+    tags: [...tags.value],
+    judgeCase: (form.value.judgeCase || []).map((c) => ({
+      input: c.input?.trim() || '',
+      output: c.output?.trim() || '',
+      sample: c.sample === true,
+    })),
   }
 }
 
@@ -896,9 +1136,11 @@ async function preflightProblem(payload = buildProblemPayload()): Promise<boolea
       code?: number
       message?: string
       data?: { ready: boolean; checks: Array<{ name: string; passed: boolean; detail: string }> }
-    }>(`${API_BASE_URL}/question/admin/preflight`, payload,
-      { headers: token ? { Authorization: `Bearer ${token}` } : undefined })
-    if (!isResultSuccess(res.data.code) || !res.data.data) throw new Error(res.data.message || '验题服务未返回结果')
+    }>(`${API_BASE_URL}/question/manage/preflight`, payload, {
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
+    if (!isResultSuccess(res.data.code) || !res.data.data)
+      throw new Error(res.data.message || '验题服务未返回结果')
     if (JSON.stringify(buildProblemPayload()) !== snapshot) {
       preflightError.value = '验题期间题目已修改，请重新验题'
       return false
@@ -922,17 +1164,21 @@ async function runPreflight() {
 
 async function submitProblem() {
   if (!validate() || submitting.value) return
-  if (generatedPreview.value || generationPending.value) return void Message.warning('请先确认题图并完成隐藏用例生成')
+  if (generatedPreview.value || generationPending.value)
+    return void Message.warning('请先确认题图并完成隐藏用例生成')
 
   submitting.value = true
   try {
     const payload = buildProblemPayload()
-    if (payload.questionType?.startsWith('IMAGE_') && !await preflightProblem(payload)) {
+    if (payload.questionType?.startsWith('IMAGE_') && !(await preflightProblem(payload))) {
       Message.warning('验题未通过，已暂停发布；请查看下方检查结果')
       return
     }
     if (isEditMode.value) {
-      const updateBody: QuestionUpdateRequest & { generationSource?: string; generationModel?: string } = {
+      const updateBody: QuestionUpdateRequest & {
+        generationSource?: string
+        generationModel?: string
+      } = {
         id: String(route.params.id || '').trim(),
         title: payload.title ?? '',
         content: payload.content ?? '',
@@ -940,20 +1186,26 @@ async function submitProblem() {
         questionType: payload.questionType || 'TEXT',
         imageUrl: payload.imageUrl || '',
         visionModelKey: payload.visionModelKey || 'YOLO_GENERAL',
-        generationSource: (payload as QuestionAddRequest & { generationSource?: string }).generationSource,
-        generationModel: (payload as QuestionAddRequest & { generationModel?: string }).generationModel,
+        generationSource: (payload as QuestionAddRequest & { generationSource?: string })
+          .generationSource,
+        generationModel: (payload as QuestionAddRequest & { generationModel?: string })
+          .generationModel,
         countTolerance: payload.countTolerance ?? 0,
         tags: payload.tags ?? [],
         judgeCase: payload.judgeCase ?? [],
-        judgeConfig: payload.judgeConfig ?? { timeLimit: 1000, memoryLimit: 262144, stackLimit: 65536 },
+        judgeConfig: payload.judgeConfig ?? {
+          timeLimit: 1000,
+          memoryLimit: 262144,
+          stackLimit: 65536,
+        },
       }
-      const res = await Service.adminUpdateQuestion(updateBody)
+      const res = await updateManagedQuestion(updateBody)
       if (!isResultSuccess(res.code)) {
         Message.error(res.message || '更新题目失败')
         return
       }
       Message.success('更新成功')
-      router.push({ name: 'admin-problems' })
+      router.push({ name: 'manage-problems' })
       return
     } else {
       const res = await Service.addQuestion(payload)
@@ -965,13 +1217,16 @@ async function submitProblem() {
         window.localStorage.removeItem(DRAFT_KEY)
       }
       Message.success(`新增成功，题目 ID：${res.data ?? '-'}`)
-      router.push({ name: 'admin-problems' })
+      router.push({ name: 'manage-problems' })
     }
   } catch (error) {
     const msg =
       error instanceof ApiError
         ? error.body?.message || (isEditMode.value ? '更新题目失败' : '新增题目失败')
-        : mapApiError(error, getBackendErrorMessage(error, isEditMode.value ? '更新题目失败' : '新增题目失败'))
+        : mapApiError(
+            error,
+            getBackendErrorMessage(error, isEditMode.value ? '更新题目失败' : '新增题目失败'),
+          )
     Message.error(msg)
   } finally {
     submitting.value = false
@@ -1035,7 +1290,9 @@ onMounted(async () => {
             form.value = {
               ...form.value,
               ...parsed.form,
-              judgeCase: parsed.form.judgeCase?.length ? parsed.form.judgeCase : form.value.judgeCase,
+              judgeCase: parsed.form.judgeCase?.length
+                ? parsed.form.judgeCase
+                : form.value.judgeCase,
               judgeConfig: { ...form.value.judgeConfig, ...parsed.form.judgeConfig },
             }
           }
@@ -1104,9 +1361,13 @@ onBeforeUnmount(() => {
   }
 })
 
-watch([form, tags, mdMode], () => {
-  if (!isEditMode.value) saveDraft()
-}, { deep: true })
+watch(
+  [form, tags, mdMode],
+  () => {
+    if (!isEditMode.value) saveDraft()
+  },
+  { deep: true },
+)
 
 watch(
   () => form.value.questionType,
@@ -1115,7 +1376,11 @@ watch(
     if (!type?.startsWith('IMAGE_')) tags.value = tags.value.filter((tag) => tag !== '图像识别')
     if (type === 'IMAGE_OCR') form.value.visionModelKey = 'EASYOCR_ZH_EN'
     else if (type === 'IMAGE_ANALYSIS') form.value.visionModelKey = 'OPENCV_ANALYSIS'
-    else if (type?.startsWith('IMAGE_') && !['YOLO_GENERAL', 'YOLO_HELMET'].includes(form.value.visionModelKey || '')) form.value.visionModelKey = 'YOLO_GENERAL'
+    else if (
+      type?.startsWith('IMAGE_') &&
+      !['YOLO_GENERAL', 'YOLO_HELMET'].includes(form.value.visionModelKey || '')
+    )
+      form.value.visionModelKey = 'YOLO_GENERAL'
   },
 )
 </script>
@@ -1149,28 +1414,48 @@ watch(
     <section class="workspace-layout">
       <aside class="workspace-nav panel" aria-label="创建题目步骤导航">
         <p class="workspace-nav__title">出题步骤</p>
-        <a href="#section-basic" class="workspace-nav__item" :class="{ 'is-active': activeStep === 'basic' }" @click="onStepClick('basic')">
+        <a
+          href="#section-basic"
+          class="workspace-nav__item"
+          :class="{ 'is-active': activeStep === 'basic' }"
+          @click="onStepClick('basic')"
+        >
           <span>01</span>
           <div>
             <strong>基本资料</strong>
             <small>标题与标签</small>
           </div>
         </a>
-        <a href="#section-content" class="workspace-nav__item" :class="{ 'is-active': activeStep === 'content' }" @click="onStepClick('content')">
+        <a
+          href="#section-content"
+          class="workspace-nav__item"
+          :class="{ 'is-active': activeStep === 'content' }"
+          @click="onStepClick('content')"
+        >
           <span>02</span>
           <div>
             <strong>题面编辑</strong>
             <small>Markdown 题目描述</small>
           </div>
         </a>
-        <a href="#section-answer" class="workspace-nav__item" :class="{ 'is-active': activeStep === 'answer' }" @click="onStepClick('answer')">
+        <a
+          href="#section-answer"
+          class="workspace-nav__item"
+          :class="{ 'is-active': activeStep === 'answer' }"
+          @click="onStepClick('answer')"
+        >
           <span>03</span>
           <div>
             <strong>参考答案</strong>
             <small>思路与代码要点</small>
           </div>
         </a>
-        <a href="#section-judge" class="workspace-nav__item" :class="{ 'is-active': activeStep === 'judge' }" @click="onStepClick('judge')">
+        <a
+          href="#section-judge"
+          class="workspace-nav__item"
+          :class="{ 'is-active': activeStep === 'judge' }"
+          @click="onStepClick('judge')"
+        >
           <span>04</span>
           <div>
             <strong>判题设置</strong>
@@ -1180,379 +1465,726 @@ watch(
       </aside>
 
       <div class="workspace-grid">
-      <article class="workspace-card panel">
-        <p class="card-kicker">基础信息</p>
-        <a-form layout="vertical">
-          <div id="section-basic" class="form-section">
-            <div class="form-section__head">
-              <strong>题目基本资料</strong>
-              <span>标题与标签将展示在题库列表</span>
-            </div>
-            <a-form-item label="题目类型" class="question-type-selector">
-              <a-select v-model="form.questionType">
-                <a-option value="TEXT">传统文本编程题</a-option>
-                <a-option value="IMAGE_OBJECT_COUNT">图像目标计数题</a-option>
-                <a-option value="IMAGE_CLASSIFICATION">图像分类题</a-option>
-                <a-option value="IMAGE_OBJECT_DETECTION">目标检测框题</a-option>
-                <a-option value="IMAGE_OCR">OCR 文字识别题</a-option>
-                <a-option value="IMAGE_ANALYSIS">图像属性分析题</a-option>
-              </a-select>
-              <p class="question-type-selector__hint">
-                <span v-if="form.questionType === 'TEXT'">选择传统文本题后，可使用拍照录题或 AI 一键命题。</span>
-                <span v-else>图像题将使用下方的模型选择、题图上传和自动标注工具。</span>
-              </p>
-            </a-form-item>
-            <Transition name="form-reveal">
-            <section v-if="form.questionType === 'TEXT'" class="smart-import-card">
-              <AiModelPicker :disabled="smartImportRunning || aiGenerating" />
-              <div class="smart-import-card__intro">
-                <span class="smart-import-card__icon">AI</span>
-                <div>
-                  <strong>传统题目 · AI 拍照录题</strong>
-                  <p>上传试卷、书本或题目截图，自动完成 OCR、题目结构化、难度分类和表单填充。</p>
-                </div>
+        <article class="workspace-card panel">
+          <p class="card-kicker">基础信息</p>
+          <a-form layout="vertical">
+            <div id="section-basic" class="form-section">
+              <div class="form-section__head">
+                <strong>题目基本资料</strong>
+                <span>标题与标签将展示在题库列表</span>
               </div>
-              <div class="smart-import-card__flow">
-                <span>① 上传题图</span><i>→</i><span>② OCR 识别</span><i>→</i><span>③ AI 结构化</span><i>→</i><span>④ 自动填充</span>
-              </div>
-              <div class="smart-import-card__actions">
-                <label class="smart-import-upload">
-                  {{ smartImportUploading ? '上传中…' : smartImportImageUrl ? '重新上传题目' : '上传题目照片' }}
-                  <input type="file" accept="image/*" :disabled="smartImportUploading || smartImportRunning" @change="uploadTraditionalProblemPhoto" />
-                </label>
-                <a-button type="primary" :loading="smartImportRunning" :disabled="!smartImportImageUrl" @click="runSmartProblemImport">
-                  {{ smartImportRunning ? 'OCR 与 AI 正在处理…' : '✦ 开始 AI 智能录题' }}
-                </a-button>
-                <span v-if="smartImportImageUrl" class="smart-import-ready">✓ 图片已就绪</span>
-              </div>
-              <div class="smart-import-divider"><span>或者让 AI 直接命题</span></div>
-              <div class="smart-generate-row">
-                <a-textarea
-                  v-model="aiGeneratePrompt"
-                  :auto-size="{ minRows: 2, maxRows: 4 }"
-                  placeholder="例如：生成一道适合大一学生的简单数组题，考查双指针，数据范围 1≤n≤10^5"
-                />
-                <a-button type="primary" status="success" :loading="aiGenerating" :disabled="!aiGeneratePrompt.trim()" @click="runAiProblemGenerate">
-                  {{ aiGenerating ? 'AI 正在命题…' : '✦ AI 一键出题' }}
-                </a-button>
-              </div>
-              <div v-if="smartImportPreview || smartImportOcrText" class="smart-import-card__result">
-                <img v-if="smartImportPreview" :src="smartImportPreview" alt="传统题目图片预览" />
-                <div>
-                  <strong>{{ smartImportOcrText ? 'OCR 原文（可用于核对）' : '图片预览' }}</strong>
-                  <p v-if="smartImportOcrText">{{ smartImportOcrText }}</p>
-                  <p v-else>点击“开始 AI 智能录题”后，将自动识别并填写下方全部字段。</p>
-                </div>
-              </div>
-              <div v-if="aiOperationError" class="smart-import-error" role="alert">
-                <span>!</span>
-                <div><strong>AI 功能暂时不可用</strong><p>{{ aiOperationError }}</p></div>
-                <button type="button" aria-label="关闭错误提示" @click="aiOperationError = ''">×</button>
-              </div>
-              <p class="smart-import-warning">AI 可能误识别数字、符号和公式，发布前必须人工核对输入输出约束与样例。</p>
-            </section>
-            </Transition>
-            <a-form-item label="题目标题">
-            <a-input v-model="form.title" allow-clear placeholder="例如：两数之和" />
-            </a-form-item>
-
-            <div v-if="form.questionType?.startsWith('IMAGE_')" class="vision-fields">
-              <div class="vision-model-picker">
-                <div class="vision-model-picker__head">
-                  <div><strong>选择识别模型</strong><p>系统会自动使用对应模型生成标准答案和参考代码。</p></div>
-                  <span>{{ availableVisionModels.length }} 个可用</span>
-                </div>
-                <div class="vision-model-options">
-                  <button
-                    v-for="model in availableVisionModels"
-                    :key="model.value"
-                    type="button"
-                    class="vision-model-card"
-                    :class="{ active: form.visionModelKey === model.value }"
-                    @click="form.visionModelKey = model.value"
+              <a-form-item label="题目类型" class="question-type-selector">
+                <a-select v-model="form.questionType">
+                  <a-option value="TEXT">传统文本编程题</a-option>
+                  <a-option value="IMAGE_OBJECT_COUNT">图像目标计数题</a-option>
+                  <a-option value="IMAGE_CLASSIFICATION">图像分类题</a-option>
+                  <a-option value="IMAGE_OBJECT_DETECTION">目标检测框题</a-option>
+                  <a-option value="IMAGE_OCR">OCR 文字识别题</a-option>
+                  <a-option value="IMAGE_ANALYSIS">图像属性分析题</a-option>
+                </a-select>
+                <p class="question-type-selector__hint">
+                  <span v-if="form.questionType === 'TEXT'"
+                    >选择传统文本题后，可使用拍照录题或 AI 一键命题。</span
                   >
-                    <span class="vision-model-card__icon">{{ model.value === 'YOLO_HELMET' ? '⛑' : model.value.startsWith('YOLO') ? '◎' : model.value.startsWith('EASYOCR') ? '文' : '◐' }}</span>
-                    <span><strong>{{ model.label }}</strong><small>{{ model.description }}</small></span>
-                    <i>{{ form.visionModelKey === model.value ? '✓' : '→' }}</i>
-                  </button>
-                </div>
-              </div>
-              <a-form-item label="题图">
-                <div class="vision-field-stack">
-                <div class="vision-generator">
-                  <div class="vision-generator__head">
-                    <div><strong>题图来源</strong><p>生图模型负责生成素材；上方识别模型负责标注和判题依据。</p></div>
+                  <span v-else>图像题将使用下方的模型选择、题图上传和自动标注工具。</span>
+                </p>
+              </a-form-item>
+              <Transition name="form-reveal">
+                <section v-if="form.questionType === 'TEXT'" class="smart-import-card">
+                  <AiModelPicker :disabled="smartImportRunning || aiGenerating" />
+                  <div class="smart-import-card__intro">
+                    <span class="smart-import-card__icon">AI</span>
+                    <div>
+                      <strong>传统题目 · AI 拍照录题</strong>
+                      <p>
+                        上传试卷、书本或题目截图，自动完成 OCR、题目结构化、难度分类和表单填充。
+                      </p>
+                    </div>
                   </div>
-                  <div class="generation-source-options">
-                    <button type="button" :disabled="imageGenerating || hiddenGenerationBusy" :class="{ active: imageSource === 'UPLOAD' }" @click="selectImageSource('UPLOAD')">上传图片</button>
-                    <button type="button" :disabled="imageGenerating || hiddenGenerationBusy" :class="{ active: imageSource === 'LOCAL_COMFYUI' }" @click="selectImageSource('LOCAL_COMFYUI')">本地 GPU</button>
-                    <button type="button" :disabled="imageGenerating || hiddenGenerationBusy" :class="{ active: imageSource === 'DASHSCOPE' }" @click="selectImageSource('DASHSCOPE')">百炼云端生图</button>
+                  <div class="smart-import-card__flow">
+                    <span>① 上传题图</span><i>→</i><span>② OCR 识别</span><i>→</i
+                    ><span>③ AI 结构化</span><i>→</i><span>④ 自动填充</span>
                   </div>
-                  <div v-if="imageSource !== 'UPLOAD'" class="generation-model-row">
-                    <label for="generation-model">生图模型</label>
-                    <select id="generation-model" v-model="generationModel">
-                      <option v-for="name in imageSource === 'DASHSCOPE' ? generationModels.cloud : generationModels.local" :key="name" :value="name">{{ name }}</option>
-                    </select>
-                    <small v-if="imageSource === 'LOCAL_COMFYUI' && !generationModels.local.length">未检测到允许使用的本地模型，请检查 ComfyUI</small>
-                    <small v-if="imageSource === 'DASHSCOPE'">使用账号设置中的个人百炼 Key；云端生图可能按张计费。</small>
+                  <div class="smart-import-card__actions">
+                    <label class="smart-import-upload">
+                      {{
+                        smartImportUploading
+                          ? '上传中…'
+                          : smartImportImageUrl
+                            ? '重新上传题目'
+                            : '上传题目照片'
+                      }}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        :disabled="smartImportUploading || smartImportRunning"
+                        @change="uploadTraditionalProblemPhoto"
+                      />
+                    </label>
+                    <a-button
+                      type="primary"
+                      :loading="smartImportRunning"
+                      :disabled="!smartImportImageUrl"
+                      @click="runSmartProblemImport"
+                    >
+                      {{ smartImportRunning ? 'OCR 与 AI 正在处理…' : '✦ 开始 AI 智能录题' }}
+                    </a-button>
+                    <span v-if="smartImportImageUrl" class="smart-import-ready">✓ 图片已就绪</span>
                   </div>
-                  <div v-if="imageSource !== 'UPLOAD'" class="vision-generator__input">
-                    <a-textarea v-model="imageGeneratePrompt" :auto-size="{ minRows: 2, maxRows: 4 }" placeholder="例如：a realistic street photo with one bus and three people, full objects, daylight" />
-                    <a-button type="primary" status="success" :loading="imageGenerating" :disabled="!imageGeneratePrompt.trim() || !generationModel || hiddenGenerationBusy" @click="generateVisionProblemImage">
-                      {{ imageGenerating ? '生成预览中…' : '生成一张预览图' }}
+                  <div class="smart-import-divider"><span>或者让 AI 直接命题</span></div>
+                  <div class="smart-generate-row">
+                    <a-textarea
+                      v-model="aiGeneratePrompt"
+                      :auto-size="{ minRows: 2, maxRows: 4 }"
+                      placeholder="例如：生成一道适合大一学生的简单数组题，考查双指针，数据范围 1≤n≤10^5"
+                    />
+                    <a-button
+                      type="primary"
+                      status="success"
+                      :loading="aiGenerating"
+                      :disabled="!aiGeneratePrompt.trim()"
+                      @click="runAiProblemGenerate"
+                    >
+                      {{ aiGenerating ? 'AI 正在命题…' : '✦ AI 一键出题' }}
                     </a-button>
                   </div>
-                  <div v-if="generatedPreview" class="generation-preview">
-                    <img :src="generatedPreview.url" alt="待确认的生图预览" />
-                    <div><strong>这张题图可以使用吗？</strong><p>确认后才会识别题图并生成两张隐藏图片。云端模式下这两张图片也可能产生费用。</p>
-                      <a-button type="primary" :loading="hiddenGenerationBusy" @click="acceptGeneratedPreview">采用并补齐隐藏用例</a-button>
-                      <a-button :disabled="hiddenGenerationBusy" @click="discardGeneratedPreview">放弃预览</a-button>
+                  <div
+                    v-if="smartImportPreview || smartImportOcrText"
+                    class="smart-import-card__result"
+                  >
+                    <img
+                      v-if="smartImportPreview"
+                      :src="smartImportPreview"
+                      alt="传统题目图片预览"
+                    />
+                    <div>
+                      <strong>{{
+                        smartImportOcrText ? 'OCR 原文（可用于核对）' : '图片预览'
+                      }}</strong>
+                      <p v-if="smartImportOcrText">{{ smartImportOcrText }}</p>
+                      <p v-else>点击“开始 AI 智能录题”后，将自动识别并填写下方全部字段。</p>
                     </div>
                   </div>
-                  <p v-if="generatedCasesReady && imageGenerationSource" class="vision-generator__tip">已生成公开题图和两张隐藏用例；使用 {{ imageGenerationSource === 'DASHSCOPE' ? '百炼云端' : '本地 GPU' }} · {{ imageGenerationModel }}。发布前请验题并复核标注。</p>
-                  <div v-if="imageGenerateError" class="smart-import-error" role="alert">
-                    <span>!</span><div><strong>题图生成失败</strong><p>{{ imageGenerateError }}</p></div>
-                    <button type="button" aria-label="关闭错误提示" @click="imageGenerateError = ''">×</button>
-                  </div>
-                  <p class="vision-generator__tip">AI 无法保证精确数量，标准答案以 YOLO/OCR 实际识别结果为准，发布前请人工复核。</p>
-                </div>
-                <div v-if="imageSource === 'UPLOAD'" class="vision-upload">
-                  <a-input v-model="form.imageUrl" readonly allow-clear placeholder="请上传图片，系统将统一保存到 MinIO" />
-                  <label class="vision-upload__button">
-                    {{ imageUploading ? '上传中…' : '上传图片' }}
-                    <input type="file" accept="image/*" :disabled="imageUploading" @change="uploadQuestionImage" />
-                  </label>
-                </div>
-                <div v-if="form.imageUrl" class="vision-preview-shell">
-                  <img :src="form.imageUrl" class="vision-preview" alt="图像题题图预览" />
-                  <div class="vision-overlay" aria-label="YOLO 检测框">
-                    <div
-                      v-for="(box, boxIndex) in visionAnnotation?.boxes || []"
-                      :key="`${box.label}-${boxIndex}`"
-                      class="vision-box"
-                      :style="boxStyle(box)"
-                    >
-                      <span>{{ box.label }} {{ Math.round(box.confidence * 100) }}%</span>
+                  <div v-if="aiOperationError" class="smart-import-error" role="alert">
+                    <span>!</span>
+                    <div>
+                      <strong>AI 功能暂时不可用</strong>
+                      <p>{{ aiOperationError }}</p>
                     </div>
-                  </div>
-                </div>
-                <div v-if="form.imageUrl" class="vision-ai-actions">
-                  <label><span>统一评测参数：置信度 0.25 · IoU 0.70</span></label>
-                  <a-button type="primary" :loading="visionDetecting" @click="detectObjects">
-                    {{ visionDetecting ? '正在识别并生成题目…' : '✦ 一键识别并生成题目' }}
-                  </a-button>
-                </div>
-                <div v-if="visionAnnotation" class="vision-result">
-                  <div class="vision-result__meta">
-                    <span>模型 {{ visionAnnotation.model }}</span>
-                    <span>{{ visionAnnotation.boxes?.length || 0 }} 个目标</span>
-                    <span>{{ visionAnnotation.inferenceMs ?? '-' }} ms</span>
-                  </div>
-                  <div class="vision-result__chips">
-                    <span v-for="(count, label) in visionAnnotation.counts || {}" :key="label">
-                      {{ label }} × {{ count }}
-                    </span>
-                    <span v-if="!Object.keys(visionAnnotation.counts || {}).length">未检测到目标</span>
-                  </div>
-                  <p v-if="visionAnnotation.ocr_text"><strong>OCR：</strong>{{ visionAnnotation.ocr_text }}</p>
-                  <div v-if="visionAnnotation.image_analysis" class="vision-result__chips">
-                    <span v-for="(value, key) in visionAnnotation.image_analysis" :key="key">{{ key }}: {{ value }}</span>
-                  </div>
-                  <div class="vision-autofill-list">
-                    <span>✓ 题目标题</span><span>✓ 题型与分类</span><span>✓ 完整题面</span>
-                    <span>✓ 参考答案</span><span>✓ 标准输出</span><span>✓ 评测限制</span>
-                  </div>
-                  <p>所有出题字段已自动生成。发布前请核对检测框和目标数量，必要时可直接修改。</p>
-                </div>
-                <div v-if="visionAnnotation" class="hidden-case-uploader">
-                  <div>
-                    <strong>隐藏评测图片</strong>
-                    <p>至少再上传 1 张不同图片。系统会自动识别标准答案，学生端只知道图片数量，不会看到图片和输出。</p>
-                  </div>
-                  <label class="vision-upload__button hidden-case-uploader__button">
-                    {{ hiddenImagesUploading ? '上传并识别中…' : '批量添加隐藏题图' }}
-                    <input type="file" accept="image/*" multiple :disabled="hiddenImagesUploading" @change="uploadHiddenImages" />
-                  </label>
-                </div>
-                </div>
-              </a-form-item>
-              <a-form-item :label="form.questionType === 'IMAGE_OBJECT_DETECTION' ? '检测框 IoU 阈值（百分比）' : form.questionType === 'IMAGE_OCR' ? '允许字符编辑距离' : '结果允许误差'">
-                <a-input-number v-model="form.countTolerance" :min="0" :max="100" />
-                <p class="vision-help">计数题表示数量误差；检测题表示 IoU 百分比；OCR 表示允许不同的字符数；属性题表示数值绝对误差。</p>
-              </a-form-item>
-            </div>
-
-            <a-form-item label="OJ 分类">
-              <div class="taxonomy-editor">
-                <div class="taxonomy-group">
-                  <div class="taxonomy-group__head"><strong>难度等级</strong><span>单选，便于学生按难度练习</span></div>
-                  <div class="taxonomy-options">
-                    <button
-                      v-for="option in PROBLEM_DIFFICULTIES"
-                      :key="option"
-                      type="button"
-                      class="taxonomy-chip taxonomy-chip--difficulty"
-                      :class="{ active: hasTag(option) }"
-                      @click="selectDifficulty(option)"
-                    >{{ option }}</button>
-                  </div>
-                </div>
-                <div class="taxonomy-group">
-                  <div class="taxonomy-group__head"><strong>知识点</strong><span>可多选，建议选择 1～3 个核心知识点</span></div>
-                  <div class="taxonomy-options">
-                    <button
-                      v-for="option in PROBLEM_KNOWLEDGE_TAGS"
-                      :key="option"
-                      type="button"
-                      class="taxonomy-chip"
-                      :class="{ active: hasTag(option) }"
-                      @click="toggleKnowledgeTag(option)"
-                    >{{ option }}</button>
-                  </div>
-                </div>
-              </div>
-            </a-form-item>
-
-            <a-form-item label="自定义标签">
-              <div class="tag-field">
-                <div class="tag-editor">
-                  <a-input
-                    v-model="tagInput"
-                    allow-clear
-                    placeholder="预设分类没有时再添加，例如：蓝桥杯"
-                    @press-enter="addTag"
-                  />
-                  <a-button type="outline" @click="addTag">添加</a-button>
-                </div>
-                <div class="tag-list">
-                  <span v-for="tag in customTags" :key="tag" class="tag-pill">
-                    <span class="tag-pill__dot" aria-hidden="true" />
-                    <span class="tag-pill__text">{{ tag }}</span>
-                    <button type="button" class="tag-pill__close" :aria-label="`删除标签 ${tag}`" @click="removeTagValue(tag)">
+                    <button type="button" aria-label="关闭错误提示" @click="aiOperationError = ''">
                       ×
                     </button>
-                  </span>
-                </div>
-              </div>
-            </a-form-item>
-          </div>
+                  </div>
+                  <p class="smart-import-warning">
+                    AI 可能误识别数字、符号和公式，发布前必须人工核对输入输出约束与样例。
+                  </p>
+                </section>
+              </Transition>
+              <a-form-item label="题目标题">
+                <a-input v-model="form.title" allow-clear placeholder="例如：两数之和" />
+              </a-form-item>
 
-          <div id="section-content" class="form-section">
-            <div class="form-section__head">
-              <strong>题面编辑</strong>
-              <span>建议按「描述-输入-输出-样例-提示」结构填写</span>
+              <div v-if="form.questionType?.startsWith('IMAGE_')" class="vision-fields">
+                <div class="vision-model-picker">
+                  <div class="vision-model-picker__head">
+                    <div>
+                      <strong>选择识别模型</strong>
+                      <p>系统会自动使用对应模型生成标准答案和参考代码。</p>
+                    </div>
+                    <span>{{ availableVisionModels.length }} 个可用</span>
+                  </div>
+                  <div class="vision-model-options">
+                    <button
+                      v-for="model in availableVisionModels"
+                      :key="model.value"
+                      type="button"
+                      class="vision-model-card"
+                      :class="{ active: form.visionModelKey === model.value }"
+                      @click="form.visionModelKey = model.value"
+                    >
+                      <span class="vision-model-card__icon">{{
+                        model.value === 'YOLO_HELMET'
+                          ? '⛑'
+                          : model.value.startsWith('YOLO')
+                            ? '◎'
+                            : model.value.startsWith('EASYOCR')
+                              ? '文'
+                              : '◐'
+                      }}</span>
+                      <span
+                        ><strong>{{ model.label }}</strong
+                        ><small>{{ model.description }}</small></span
+                      >
+                      <i>{{ form.visionModelKey === model.value ? '✓' : '→' }}</i>
+                    </button>
+                  </div>
+                </div>
+                <a-form-item label="题图">
+                  <div class="vision-field-stack">
+                    <div class="vision-generator">
+                      <div class="vision-generator__head">
+                        <div>
+                          <strong>题图来源</strong>
+                          <p>生图模型负责生成素材；上方识别模型负责标注和判题依据。</p>
+                        </div>
+                      </div>
+                      <div class="generation-source-options">
+                        <button
+                          type="button"
+                          :disabled="imageGenerating || hiddenGenerationBusy"
+                          :class="{ active: imageSource === 'UPLOAD' }"
+                          @click="selectImageSource('UPLOAD')"
+                        >
+                          上传图片
+                        </button>
+                        <button
+                          type="button"
+                          :disabled="imageGenerating || hiddenGenerationBusy"
+                          :class="{ active: imageSource === 'LOCAL_COMFYUI' }"
+                          @click="selectImageSource('LOCAL_COMFYUI')"
+                        >
+                          本地 GPU
+                        </button>
+                        <button
+                          v-for="provider in generationModels.providers"
+                          :key="provider.code"
+                          type="button"
+                          :disabled="imageGenerating || hiddenGenerationBusy"
+                          :class="{ active: imageSource === provider.code }"
+                          @click="selectImageSource(provider.code as ImageSource)"
+                        >
+                          <img
+                            v-if="
+                              imageProviderIcons[provider.code] &&
+                              !failedImageProviderIcons.includes(provider.code)
+                            "
+                            :src="imageProviderIcons[provider.code]"
+                            :alt="`${provider.name}图标`"
+                            @error="failedImageProviderIcons.push(provider.code)"
+                          />
+                          <b v-else class="generation-source-fallback">{{ provider.shortName }}</b>
+                          <span
+                            >{{ provider.name
+                            }}<small>{{
+                              provider.configured ? '已配置' : '需配置密钥'
+                            }}</small></span
+                          >
+                        </button>
+                      </div>
+                      <div v-if="imageSource !== 'UPLOAD'" class="generation-model-row">
+                        <label for="generation-model">生图模型</label>
+                        <select id="generation-model" v-model="generationModel">
+                          <option
+                            v-if="
+                              generationModel &&
+                              !selectedGenerationModels.some(
+                                (model) => model.id === generationModel,
+                              )
+                            "
+                            :value="generationModel"
+                          >
+                            {{ generationModel }}（历史模型）
+                          </option>
+                          <option
+                            v-for="model in selectedGenerationModels"
+                            :key="model.id"
+                            :value="model.id"
+                          >
+                            {{ model.name }}
+                          </option>
+                        </select>
+                        <small
+                          v-if="imageSource === 'LOCAL_COMFYUI' && !generationModels.local.length"
+                          >未检测到允许使用的本地模型，请检查 ComfyUI</small
+                        >
+                        <small v-if="selectedImageProvider && !selectedImageProvider.configured"
+                          >请先配置该厂商密钥。<button
+                            type="button"
+                            class="generation-settings-link"
+                            @click="router.push('/account/settings?tab=ai&modelType=image')"
+                          >
+                            打开图片模型设置
+                          </button></small
+                        >
+                        <small v-else-if="selectedImageProvider"
+                          >使用个人
+                          {{
+                            selectedImageProvider.name
+                          }}
+                          Key；完整出题需生成三张图片，可能产生三次费用。</small
+                        >
+                      </div>
+                      <div v-if="imageSource !== 'UPLOAD'" class="vision-generator__input">
+                        <a-textarea
+                          v-model="imageGeneratePrompt"
+                          :auto-size="{ minRows: 2, maxRows: 4 }"
+                          placeholder="例如：a realistic street photo with one bus and three people, full objects, daylight"
+                        />
+                        <a-button
+                          type="primary"
+                          status="success"
+                          :loading="imageGenerating"
+                          :disabled="
+                            !imageGeneratePrompt.trim() ||
+                            !generationModel ||
+                            hiddenGenerationBusy ||
+                            (imageSource !== 'LOCAL_COMFYUI' && !selectedImageProvider?.configured)
+                          "
+                          @click="generateVisionProblemImage"
+                        >
+                          {{ imageGenerating ? '生成预览中…' : '生成一张预览图' }}
+                        </a-button>
+                      </div>
+                      <div v-if="generatedPreview" class="generation-preview">
+                        <img :src="generatedPreview.url" alt="待确认的生图预览" />
+                        <div>
+                          <strong>这张题图可以使用吗？</strong>
+                          <p>
+                            确认后才会识别题图并生成两张隐藏图片。云端模式下这两张图片也可能产生费用。
+                          </p>
+                          <a-button
+                            type="primary"
+                            :loading="hiddenGenerationBusy"
+                            @click="acceptGeneratedPreview"
+                            >采用并补齐隐藏用例</a-button
+                          >
+                          <a-button
+                            :disabled="hiddenGenerationBusy"
+                            @click="discardGeneratedPreview"
+                            >放弃预览</a-button
+                          >
+                        </div>
+                      </div>
+                      <p
+                        v-if="generatedCasesReady && imageGenerationSource"
+                        class="vision-generator__tip"
+                      >
+                        已生成公开题图和两张隐藏用例；使用
+                        {{ imageProviderName(imageGenerationSource) }} ·
+                        {{ imageGenerationModel }}。发布前请验题并复核标注。
+                      </p>
+                      <div v-if="imageGenerateError" class="smart-import-error" role="alert">
+                        <span>!</span>
+                        <div>
+                          <strong>题图生成失败</strong>
+                          <p>{{ imageGenerateError }}</p>
+                        </div>
+                        <button
+                          type="button"
+                          aria-label="关闭错误提示"
+                          @click="imageGenerateError = ''"
+                        >
+                          ×
+                        </button>
+                      </div>
+                      <p class="vision-generator__tip">
+                        AI 无法保证精确数量，标准答案以 YOLO/OCR
+                        实际识别结果为准，发布前请人工复核。
+                      </p>
+                    </div>
+                    <div v-if="imageSource === 'UPLOAD'" class="vision-upload">
+                      <a-input
+                        v-model="form.imageUrl"
+                        readonly
+                        allow-clear
+                        placeholder="请上传图片，系统将统一保存到 MinIO"
+                      />
+                      <label class="vision-upload__button">
+                        {{ imageUploading ? '上传中…' : '上传图片' }}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          :disabled="imageUploading"
+                          @change="uploadQuestionImage"
+                        />
+                      </label>
+                    </div>
+                    <div v-if="form.imageUrl" class="vision-preview-shell">
+                      <img :src="form.imageUrl" class="vision-preview" alt="图像题题图预览" />
+                      <div class="vision-overlay" aria-label="YOLO 检测框">
+                        <div
+                          v-for="(box, boxIndex) in visionAnnotation?.boxes || []"
+                          :key="`${box.label}-${boxIndex}`"
+                          class="vision-box"
+                          :style="boxStyle(box)"
+                        >
+                          <span>{{ box.label }} {{ Math.round(box.confidence * 100) }}%</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div v-if="form.imageUrl" class="vision-ai-actions">
+                      <label><span>统一评测参数：置信度 0.25 · IoU 0.70</span></label>
+                      <a-button type="primary" :loading="visionDetecting" @click="detectObjects">
+                        {{ visionDetecting ? '正在识别并生成题目…' : '✦ 一键识别并生成题目' }}
+                      </a-button>
+                    </div>
+                    <div v-if="visionAnnotation" class="vision-result">
+                      <div class="vision-result__meta">
+                        <span>模型 {{ visionAnnotation.model }}</span>
+                        <span>{{ visionAnnotation.boxes?.length || 0 }} 个目标</span>
+                        <span>{{ visionAnnotation.inferenceMs ?? '-' }} ms</span>
+                      </div>
+                      <div class="vision-result__chips">
+                        <span v-for="(count, label) in visionAnnotation.counts || {}" :key="label">
+                          {{ label }} × {{ count }}
+                        </span>
+                        <span v-if="!Object.keys(visionAnnotation.counts || {}).length"
+                          >未检测到目标</span
+                        >
+                      </div>
+                      <p v-if="visionAnnotation.ocr_text">
+                        <strong>OCR：</strong>{{ visionAnnotation.ocr_text }}
+                      </p>
+                      <div v-if="visionAnnotation.image_analysis" class="vision-result__chips">
+                        <span v-for="(value, key) in visionAnnotation.image_analysis" :key="key"
+                          >{{ key }}: {{ value }}</span
+                        >
+                      </div>
+                      <div class="vision-autofill-list">
+                        <span>✓ 题目标题</span><span>✓ 题型与分类</span><span>✓ 完整题面</span>
+                        <span>✓ 参考答案</span><span>✓ 标准输出</span><span>✓ 评测限制</span>
+                      </div>
+                      <p>
+                        所有出题字段已自动生成。发布前请核对检测框和目标数量，必要时可直接修改。
+                      </p>
+                    </div>
+                    <div v-if="visionAnnotation" class="hidden-case-uploader">
+                      <div>
+                        <strong>隐藏评测图片</strong>
+                        <p>
+                          至少再上传 1
+                          张不同图片。系统会自动识别标准答案，学生端只知道图片数量，不会看到图片和输出。
+                        </p>
+                      </div>
+                      <label class="vision-upload__button hidden-case-uploader__button">
+                        {{ hiddenImagesUploading ? '上传并识别中…' : '批量添加隐藏题图' }}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          :disabled="hiddenImagesUploading"
+                          @change="uploadHiddenImages"
+                        />
+                      </label>
+                    </div>
+                  </div>
+                </a-form-item>
+                <a-form-item
+                  :label="
+                    form.questionType === 'IMAGE_OBJECT_DETECTION'
+                      ? '检测框 IoU 阈值（百分比）'
+                      : form.questionType === 'IMAGE_OCR'
+                        ? '允许字符编辑距离'
+                        : '结果允许误差'
+                  "
+                >
+                  <a-input-number v-model="form.countTolerance" :min="0" :max="100" />
+                  <p class="vision-help">
+                    计数题表示数量误差；检测题表示 IoU 百分比；OCR
+                    表示允许不同的字符数；属性题表示数值绝对误差。
+                  </p>
+                </a-form-item>
+              </div>
+
+              <a-form-item label="OJ 分类">
+                <div class="taxonomy-editor">
+                  <div class="taxonomy-group">
+                    <div class="taxonomy-group__head">
+                      <strong>难度等级</strong><span>单选，便于学生按难度练习</span>
+                    </div>
+                    <div class="taxonomy-options">
+                      <button
+                        v-for="option in PROBLEM_DIFFICULTIES"
+                        :key="option"
+                        type="button"
+                        class="taxonomy-chip taxonomy-chip--difficulty"
+                        :class="{ active: hasTag(option) }"
+                        @click="selectDifficulty(option)"
+                      >
+                        {{ option }}
+                      </button>
+                    </div>
+                  </div>
+                  <div class="taxonomy-group">
+                    <div class="taxonomy-group__head">
+                      <strong>知识点</strong><span>可多选，建议选择 1～3 个核心知识点</span>
+                    </div>
+                    <div class="taxonomy-options">
+                      <button
+                        v-for="option in PROBLEM_KNOWLEDGE_TAGS"
+                        :key="option"
+                        type="button"
+                        class="taxonomy-chip"
+                        :class="{ active: hasTag(option) }"
+                        @click="toggleKnowledgeTag(option)"
+                      >
+                        {{ option }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </a-form-item>
+
+              <a-form-item label="自定义标签">
+                <div class="tag-field">
+                  <div class="tag-editor">
+                    <a-input
+                      v-model="tagInput"
+                      allow-clear
+                      placeholder="预设分类没有时再添加，例如：蓝桥杯"
+                      @press-enter="addTag"
+                    />
+                    <a-button type="outline" @click="addTag">添加</a-button>
+                  </div>
+                  <div class="tag-list">
+                    <span v-for="tag in customTags" :key="tag" class="tag-pill">
+                      <span class="tag-pill__dot" aria-hidden="true" />
+                      <span class="tag-pill__text">{{ tag }}</span>
+                      <button
+                        type="button"
+                        class="tag-pill__close"
+                        :aria-label="`删除标签 ${tag}`"
+                        @click="removeTagValue(tag)"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              </a-form-item>
             </div>
-            <a-form-item label="题目描述（支持 Markdown）" class="editor-form-item editor-form-item--markdown">
-            <div class="md-editor">
-              <div class="md-editor__bar">
-                <span class="md-editor__title">题面编辑区</span>
-                <span class="md-editor__tips">支持 # 标题、```代码块、- 列表、**加粗**</span>
+
+            <div id="section-content" class="form-section">
+              <div class="form-section__head">
+                <strong>题面编辑</strong>
+                <span>按学生阅读顺序填写，发布前先看预览</span>
               </div>
-              <div class="md-toolbar">
-                <div class="md-toolbar__group">
-                  <button type="button" class="md-tool-btn" @click="applyMdTemplate('h2')">H2</button>
-                  <button type="button" class="md-tool-btn" @click="applyMdTemplate('bold')"><strong>B</strong></button>
-                  <button type="button" class="md-tool-btn" @click="applyMdTemplate('code')">{ }</button>
-                  <button type="button" class="md-tool-btn" @click="applyMdTemplate('list')">List</button>
-                  <button type="button" class="md-tool-btn" @click="applyMdTemplate('sample')">样例模板</button>
-                </div>
-                <div class="md-toolbar__group">
-                  <button type="button" class="md-view-btn" :class="{ active: mdMode === 'edit' }" @click="mdMode = 'edit'">编辑</button>
-                  <button type="button" class="md-view-btn" :class="{ active: mdMode === 'split' }" @click="mdMode = 'split'">分栏</button>
-                  <button type="button" class="md-view-btn" :class="{ active: mdMode === 'preview' }" @click="mdMode = 'preview'">预览</button>
-                </div>
+              <div class="statement-guide">
+                <strong>给学生看的题目，请写清三件事</strong>
+                <span
+                  >要完成什么任务 · 输入什么数据 ·
+                  应输出什么结果。样例输入和输出请各占一块，并确认能对应上。</span
+                >
               </div>
-              <div class="md-main" :class="`md-main--${mdMode}`">
-                <a-textarea
-                  v-show="mdMode !== 'preview'"
-                  v-model="form.content"
-                  :auto-size="{ minRows: 14, maxRows: 22 }"
-                  class="md-editor__textarea"
-                  placeholder="请按 OJ 常见格式填写：题目描述、输入格式、输出格式、样例、提示"
+              <div v-if="statementNeedsCleanup" class="statement-format-alert">
+                <span>检测到可能直接显示给学生的公式符号。整理后请核对数字范围与题意。</span>
+                <button type="button" @click="tidyStatement">整理常见公式</button>
+              </div>
+              <a-form-item
+                label="题目描述（支持 Markdown）"
+                class="editor-form-item editor-form-item--markdown"
+              >
+                <div class="md-editor">
+                  <div class="md-editor__bar">
+                    <span class="md-editor__title">题面编辑区</span>
+                    <span class="md-editor__tips">直接写内容即可；下方按钮可插入常用格式</span>
+                  </div>
+                  <div class="md-toolbar">
+                    <div class="md-toolbar__group">
+                      <button type="button" class="md-tool-btn" @click="applyMdTemplate('h2')">
+                        小节标题
+                      </button>
+                      <button type="button" class="md-tool-btn" @click="applyMdTemplate('bold')">
+                        重点
+                      </button>
+                      <button type="button" class="md-tool-btn" @click="applyMdTemplate('code')">
+                        代码块
+                      </button>
+                      <button type="button" class="md-tool-btn" @click="applyMdTemplate('list')">
+                        列表
+                      </button>
+                      <button type="button" class="md-tool-btn" @click="applyMdTemplate('sample')">
+                        样例模板
+                      </button>
+                    </div>
+                    <div class="md-toolbar__group">
+                      <button
+                        type="button"
+                        class="md-view-btn"
+                        :class="{ active: mdMode === 'edit' }"
+                        @click="mdMode = 'edit'"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        type="button"
+                        class="md-view-btn"
+                        :class="{ active: mdMode === 'split' }"
+                        @click="mdMode = 'split'"
+                      >
+                        分栏
+                      </button>
+                      <button
+                        type="button"
+                        class="md-view-btn"
+                        :class="{ active: mdMode === 'preview' }"
+                        @click="mdMode = 'preview'"
+                      >
+                        预览
+                      </button>
+                    </div>
+                  </div>
+                  <div class="md-main" :class="`md-main--${mdMode}`">
+                    <a-textarea
+                      v-show="mdMode !== 'preview'"
+                      v-model="form.content"
+                      :auto-size="{ minRows: 14, maxRows: 22 }"
+                      class="md-editor__textarea"
+                      placeholder="请按 OJ 常见格式填写：题目描述、输入格式、输出格式、样例、提示"
+                    />
+                    <div
+                      v-show="mdMode !== 'edit'"
+                      class="md-preview"
+                      v-html="markdownPreviewHtml"
+                    />
+                  </div>
+                </div>
+              </a-form-item>
+            </div>
+
+            <div id="section-answer" class="form-section">
+              <div class="form-section__head">
+                <strong>参考答案</strong>
+                <span>用于教师复核和讲解，不对学生端直接暴露</span>
+              </div>
+              <a-form-item label="参考答案" class="editor-form-item">
+                <div class="answer-editor" :style="{ '--answer-zoom': answerZoom / 100 }">
+                  <div class="answer-editor__bar">
+                    <span>建议填写解题思路和关键代码片段</span>
+                    <div class="answer-editor__tools">
+                      <button
+                        type="button"
+                        class="answer-tool-btn"
+                        @click="setAnswerZoom(answerZoom - 5)"
+                      >
+                        A-
+                      </button>
+                      <span class="answer-tool-value">{{ answerZoom }}%</span>
+                      <button type="button" class="answer-tool-btn" @click="setAnswerZoom(100)">
+                        默认
+                      </button>
+                      <button
+                        type="button"
+                        class="answer-tool-btn"
+                        @click="setAnswerZoom(answerZoom + 5)"
+                      >
+                        A+
+                      </button>
+                    </div>
+                  </div>
+                  <a-textarea
+                    v-model="form.answer"
+                    :auto-size="{ minRows: 7, maxRows: 16 }"
+                    class="answer-editor__textarea"
+                    placeholder="例如：先排序 + 双指针，时间复杂度 O(n log n)；你也可以拖动右下角拉伸编辑区"
+                  />
+                </div>
+              </a-form-item>
+            </div>
+          </a-form>
+        </article>
+
+        <aside id="section-judge" class="workspace-aside panel">
+          <div class="aside-box aside-box--accent">
+            <span>判题配置</span>
+            <div class="config-grid">
+              <label>
+                <small>时间限制(ms)</small>
+                <a-input-number
+                  v-model="form.judgeConfig!.timeLimit"
+                  :min="1"
+                  :step="100"
+                  hide-button
                 />
-                <div v-show="mdMode !== 'edit'" class="md-preview" v-html="markdownPreviewHtml" />
-              </div>
+              </label>
+              <label>
+                <small>内存限制(KB)</small>
+                <a-input-number
+                  v-model="form.judgeConfig!.memoryLimit"
+                  :min="1"
+                  :step="1024"
+                  hide-button
+                />
+              </label>
+              <label>
+                <small>栈限制(KB)</small>
+                <a-input-number
+                  v-model="form.judgeConfig!.stackLimit"
+                  :min="1"
+                  :step="1024"
+                  hide-button
+                />
+              </label>
             </div>
-            </a-form-item>
           </div>
 
-          <div id="section-answer" class="form-section">
-            <div class="form-section__head">
-              <strong>参考答案</strong>
-              <span>用于教师复核和讲解，不对学生端直接暴露</span>
-            </div>
-            <a-form-item label="参考答案" class="editor-form-item">
-            <div class="answer-editor" :style="{ '--answer-zoom': answerZoom / 100 }">
-              <div class="answer-editor__bar">
-                <span>建议填写解题思路和关键代码片段</span>
-                <div class="answer-editor__tools">
-                  <button type="button" class="answer-tool-btn" @click="setAnswerZoom(answerZoom - 5)">A-</button>
-                  <span class="answer-tool-value">{{ answerZoom }}%</span>
-                  <button type="button" class="answer-tool-btn" @click="setAnswerZoom(100)">默认</button>
-                  <button type="button" class="answer-tool-btn" @click="setAnswerZoom(answerZoom + 5)">A+</button>
+          <div class="aside-box">
+            <span>测试用例</span>
+            <div class="case-list">
+              <div v-for="(item, idx) in form.judgeCase" :key="idx" class="case-item">
+                <div class="case-item__head">
+                  <strong>Case {{ idx + 1 }}</strong>
+                  <label class="case-visibility">
+                    <input v-model="item.sample" type="checkbox" />
+                    <span>{{ item.sample ? '公开样例' : '隐藏用例' }}</span>
+                  </label>
+                  <a-button type="text" status="danger" size="mini" @click="removeJudgeCase(idx)"
+                    >删除</a-button
+                  >
                 </div>
+                <a-textarea
+                  v-model="item.input"
+                  :auto-size="{ minRows: 2, maxRows: 5 }"
+                  :placeholder="
+                    form.questionType?.startsWith('IMAGE_')
+                      ? '题图 URL（提交时自动转为沙箱路径）'
+                      : '输入'
+                  "
+                />
+                <a-textarea
+                  v-model="item.output"
+                  :auto-size="{ minRows: 2, maxRows: 5 }"
+                  :placeholder="
+                    form.questionType?.startsWith('IMAGE_')
+                      ? '识别生成的标准输出，可人工复核修改'
+                      : '输出'
+                  "
+                />
               </div>
-              <a-textarea
-                v-model="form.answer"
-                :auto-size="{ minRows: 7, maxRows: 16 }"
-                class="answer-editor__textarea"
-                placeholder="例如：先排序 + 双指针，时间复杂度 O(n log n)；你也可以拖动右下角拉伸编辑区"
-              />
             </div>
-            </a-form-item>
+            <a-button long type="outline" @click="addJudgeCase">新增一组用例</a-button>
           </div>
-        </a-form>
-      </article>
-
-      <aside id="section-judge" class="workspace-aside panel">
-        <div class="aside-box aside-box--accent">
-          <span>判题配置</span>
-          <div class="config-grid">
-            <label>
-              <small>时间限制(ms)</small>
-              <a-input-number v-model="form.judgeConfig!.timeLimit" :min="1" :step="100" hide-button />
-            </label>
-            <label>
-              <small>内存限制(KB)</small>
-              <a-input-number v-model="form.judgeConfig!.memoryLimit" :min="1" :step="1024" hide-button />
-            </label>
-            <label>
-              <small>栈限制(KB)</small>
-              <a-input-number v-model="form.judgeConfig!.stackLimit" :min="1" :step="1024" hide-button />
-            </label>
-          </div>
-        </div>
-
-        <div class="aside-box">
-          <span>测试用例</span>
-          <div class="case-list">
-            <div v-for="(item, idx) in form.judgeCase" :key="idx" class="case-item">
-              <div class="case-item__head">
-                <strong>Case {{ idx + 1 }}</strong>
-                <label class="case-visibility">
-                  <input v-model="item.sample" type="checkbox" />
-                  <span>{{ item.sample ? '公开样例' : '隐藏用例' }}</span>
-                </label>
-                <a-button type="text" status="danger" size="mini" @click="removeJudgeCase(idx)">删除</a-button>
-              </div>
-              <a-textarea v-model="item.input" :auto-size="{ minRows: 2, maxRows: 5 }" :placeholder="form.questionType?.startsWith('IMAGE_') ? '题图 URL（提交时自动转为沙箱路径）' : '输入'" />
-              <a-textarea v-model="item.output" :auto-size="{ minRows: 2, maxRows: 5 }" :placeholder="form.questionType?.startsWith('IMAGE_') ? '识别生成的标准输出，可人工复核修改' : '输出'" />
-            </div>
-          </div>
-          <a-button long type="outline" @click="addJudgeCase">新增一组用例</a-button>
-        </div>
-      </aside>
+        </aside>
       </div>
     </section>
 
-    <section v-if="visiblePreflight || preflightError" class="preflight-panel panel" aria-live="polite">
+    <section
+      v-if="visiblePreflight || preflightError"
+      class="preflight-panel panel"
+      aria-live="polite"
+    >
       <strong>{{ visiblePreflight?.ready ? '验题通过' : '验题需要处理' }}</strong>
       <p v-if="preflightError">{{ preflightError }}</p>
-      <ul v-if="visiblePreflight"><li v-for="item in visiblePreflight.checks" :key="item.name" :class="item.passed ? 'preflight-ok' : 'preflight-fail'">{{ item.passed ? '✓' : '!' }} {{ item.name }}：{{ item.detail }}</li></ul>
+      <ul v-if="visiblePreflight">
+        <li
+          v-for="item in visiblePreflight.checks"
+          :key="item.name"
+          :class="item.passed ? 'preflight-ok' : 'preflight-fail'"
+        >
+          {{ item.passed ? '✓' : '!' }} {{ item.name }}：{{ item.detail }}
+        </li>
+      </ul>
     </section>
     <div class="action-row panel" role="group" aria-label="题目操作">
       <div class="action-row__glow" aria-hidden="true" />
-      <a-button size="large" class="action-btn action-btn--ghost" :loading="preflightBusy" :disabled="submitting" @click="runPreflight">先验题</a-button>
+      <a-button
+        size="large"
+        class="action-btn action-btn--ghost"
+        :loading="preflightBusy"
+        :disabled="submitting"
+        @click="runPreflight"
+        >先验题</a-button
+      >
       <a-button
         type="primary"
         size="large"
@@ -1569,7 +2201,7 @@ watch(
         size="large"
         class="action-btn action-btn--ghost"
         aria-label="返回题目列表"
-        @click="router.push({ name: 'admin-problems' })"
+        @click="router.push({ name: 'manage-problems' })"
       >
         <span class="action-btn__icon" aria-hidden="true">←</span>
         返回列表
@@ -1579,6 +2211,58 @@ watch(
 </template>
 
 <style scoped>
+.statement-guide {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--app-border, rgba(15, 23, 42, 0.12));
+  border-radius: 12px;
+  background: var(--app-surface, rgba(15, 23, 42, 0.03));
+  color: var(--app-text-main);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.statement-guide strong {
+  font-size: 14px;
+}
+.statement-guide span {
+  color: var(--app-text-muted);
+}
+.statement-format-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(217, 119, 6, 0.25);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--app-text-main);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.statement-format-alert button {
+  flex: none;
+  padding: 6px 10px;
+  border: 1px solid rgba(217, 119, 6, 0.35);
+  border-radius: 8px;
+  background: var(--app-surface-strong, #fff);
+  color: #92400e;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+.statement-format-alert button:hover {
+  background: rgba(245, 158, 11, 0.12);
+}
+@media (max-width: 600px) {
+  .statement-format-alert {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
 .editor-page {
   max-width: var(--app-page-width);
   margin: 0 auto;
@@ -1872,8 +2556,6 @@ watch(
     inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 
-
-
 .md-editor__bar,
 .answer-editor__bar {
   display: flex;
@@ -2037,8 +2719,7 @@ watch(
   line-height: 1.7;
   color: var(--app-text);
   background:
-    linear-gradient(180deg, rgba(15, 23, 42, 0.02), transparent 32%),
-    var(--app-surface-soft);
+    linear-gradient(180deg, rgba(15, 23, 42, 0.02), transparent 32%), var(--app-surface-soft);
 }
 
 .md-preview :deep(h1),
@@ -2059,6 +2740,24 @@ watch(
   background: rgba(15, 140, 122, 0.12);
   font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
   font-size: 12px;
+}
+
+.md-preview :deep(pre) {
+  margin: 12px 0;
+  padding: 12px 14px;
+  overflow-x: auto;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  background: var(--app-surface);
+  white-space: pre;
+}
+
+.md-preview :deep(pre code) {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  white-space: inherit;
 }
 
 .md-preview :deep(ul) {
@@ -2089,43 +2788,237 @@ watch(
   padding: 18px;
   border: 1px solid color-mix(in srgb, #8b5cf6 30%, var(--app-border));
   border-radius: 18px;
-  background: linear-gradient(135deg, color-mix(in srgb, #8b5cf6 9%, var(--app-surface)), color-mix(in srgb, #06b6d4 7%, var(--app-surface)));
-  box-shadow: 0 14px 35px rgba(109, 40, 217, .08);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, #8b5cf6 9%, var(--app-surface)),
+    color-mix(in srgb, #06b6d4 7%, var(--app-surface))
+  );
+  box-shadow: 0 14px 35px rgba(109, 40, 217, 0.08);
 }
-.question-type-selector { margin-bottom: 14px; }
-.question-type-selector :deep(.arco-select-view) { min-height: 46px; border-radius: 13px; border-color: color-mix(in srgb, #8b5cf6 35%, var(--app-border)); background: linear-gradient(135deg, color-mix(in srgb, #8b5cf6 8%, var(--app-surface)), var(--app-surface)); }
-.question-type-selector__hint { display: flex; align-items: center; min-height: 28px; margin: 7px 0 0; padding: 0 10px; border-left: 3px solid #8b5cf6; color: var(--app-text-subtle); font-size: 12px; line-height: 1.55; }
-.form-reveal-enter-active, .form-reveal-leave-active { transition: opacity .22s ease, transform .22s ease; }
-.form-reveal-enter-from, .form-reveal-leave-to { opacity: 0; transform: translateY(-8px); }
-.smart-import-card__intro { display: flex; align-items: center; gap: 12px; }
-.smart-import-card__intro p, .smart-import-warning { margin: 3px 0 0; color: var(--app-text-subtle); font-size: 12px; line-height: 1.6; }
-.smart-import-card__icon { display: grid; place-items: center; width: 42px; height: 42px; flex: 0 0 auto; border-radius: 14px; background: linear-gradient(135deg, #8b5cf6, #0891b2); color: #fff; font-size: 12px; font-weight: 900; box-shadow: 0 8px 20px rgba(124, 58, 237, .24); }
-.smart-import-card__flow { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 9px 11px; border-radius: 12px; background: color-mix(in srgb, var(--app-surface) 76%, transparent); color: var(--app-text-muted); font-size: 11px; font-weight: 700; }
-.smart-import-card__flow i { color: #8b5cf6; font-style: normal; }
-.smart-import-card__actions { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-.smart-import-divider { display: flex; align-items: center; gap: 10px; color: var(--app-text-subtle); font-size: 11px; }
-.smart-import-divider::before, .smart-import-divider::after { content: ''; height: 1px; flex: 1; background: var(--app-border); }
-.smart-generate-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
-.smart-import-upload { position: relative; display: inline-flex; align-items: center; min-height: 40px; padding: 0 15px; border: 1px solid color-mix(in srgb, #8b5cf6 38%, var(--app-border)); border-radius: 11px; background: var(--app-surface); color: #7c3aed; font-size: 12px; font-weight: 800; cursor: pointer; }
-.smart-import-upload input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.smart-import-ready { color: #059669; font-size: 11px; font-weight: 800; }
-.smart-import-card__result { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; max-height: 190px; padding: 10px; border: 1px solid var(--app-border); border-radius: 13px; background: color-mix(in srgb, var(--app-surface) 88%, #fff 12%); overflow: hidden; }
-.smart-import-card__result img { width: 110px; height: 120px; border-radius: 9px; object-fit: contain; background: #111827; }
-.smart-import-card__result div { min-width: 0; overflow: auto; }
-.smart-import-card__result p { margin: 6px 0 0; white-space: pre-wrap; color: var(--app-text-muted); font-size: 11px; line-height: 1.55; }
-.smart-import-warning { color: #b45309; }
-.smart-import-error { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 11px 12px; border: 1px solid rgba(244, 63, 94, .25); border-radius: 12px; background: rgba(244, 63, 94, .08); color: #be123c; }
-.smart-import-error > span { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: #e11d48; color: #fff; font-weight: 900; }
-.smart-import-error strong { font-size: 12px; }
-.smart-import-error p { margin: 3px 0 0; color: color-mix(in srgb, #be123c 72%, var(--app-text-muted)); font-size: 11px; line-height: 1.55; }
-.smart-import-error button { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 18px; }
+.question-type-selector {
+  margin-bottom: 14px;
+}
+.question-type-selector :deep(.arco-select-view) {
+  min-height: 46px;
+  border-radius: 13px;
+  border-color: color-mix(in srgb, #8b5cf6 35%, var(--app-border));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, #8b5cf6 8%, var(--app-surface)),
+    var(--app-surface)
+  );
+}
+.question-type-selector__hint {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin: 7px 0 0;
+  padding: 0 10px;
+  border-left: 3px solid #8b5cf6;
+  color: var(--app-text-subtle);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.form-reveal-enter-active,
+.form-reveal-leave-active {
+  transition:
+    opacity 0.22s ease,
+    transform 0.22s ease;
+}
+.form-reveal-enter-from,
+.form-reveal-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+.smart-import-card__intro {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.smart-import-card__intro p,
+.smart-import-warning {
+  margin: 3px 0 0;
+  color: var(--app-text-subtle);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.smart-import-card__icon {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #8b5cf6, #0891b2);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+  box-shadow: 0 8px 20px rgba(124, 58, 237, 0.24);
+}
+.smart-import-card__flow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--app-surface) 76%, transparent);
+  color: var(--app-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.smart-import-card__flow i {
+  color: #8b5cf6;
+  font-style: normal;
+}
+.smart-import-card__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.smart-import-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--app-text-subtle);
+  font-size: 11px;
+}
+.smart-import-divider::before,
+.smart-import-divider::after {
+  content: '';
+  height: 1px;
+  flex: 1;
+  background: var(--app-border);
+}
+.smart-generate-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+.smart-import-upload {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 15px;
+  border: 1px solid color-mix(in srgb, #8b5cf6 38%, var(--app-border));
+  border-radius: 11px;
+  background: var(--app-surface);
+  color: #7c3aed;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.smart-import-upload input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+.smart-import-ready {
+  color: #059669;
+  font-size: 11px;
+  font-weight: 800;
+}
+.smart-import-card__result {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+  max-height: 190px;
+  padding: 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--app-surface) 88%, #fff 12%);
+  overflow: hidden;
+}
+.smart-import-card__result img {
+  width: 110px;
+  height: 120px;
+  border-radius: 9px;
+  object-fit: contain;
+  background: #111827;
+}
+.smart-import-card__result div {
+  min-width: 0;
+  overflow: auto;
+}
+.smart-import-card__result p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  color: var(--app-text-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+.smart-import-warning {
+  color: #b45309;
+}
+.smart-import-error {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid rgba(244, 63, 94, 0.25);
+  border-radius: 12px;
+  background: rgba(244, 63, 94, 0.08);
+  color: #be123c;
+}
+.smart-import-error > span {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #e11d48;
+  color: #fff;
+  font-weight: 900;
+}
+.smart-import-error strong {
+  font-size: 12px;
+}
+.smart-import-error p {
+  margin: 3px 0 0;
+  color: color-mix(in srgb, #be123c 72%, var(--app-text-muted));
+  font-size: 11px;
+  line-height: 1.55;
+}
+.smart-import-error button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-size: 18px;
+}
 
-.taxonomy-group { display: grid; gap: 9px; }
-.taxonomy-group + .taxonomy-group { padding-top: 13px; border-top: 1px dashed var(--app-border); }
-.taxonomy-group__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-.taxonomy-group__head strong { color: var(--app-text-main); font-size: 13px; }
-.taxonomy-group__head span { color: var(--app-text-subtle); font-size: 11px; }
-.taxonomy-options { display: flex; flex-wrap: wrap; gap: 8px; }
+.taxonomy-group {
+  display: grid;
+  gap: 9px;
+}
+.taxonomy-group + .taxonomy-group {
+  padding-top: 13px;
+  border-top: 1px dashed var(--app-border);
+}
+.taxonomy-group__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.taxonomy-group__head strong {
+  color: var(--app-text-main);
+  font-size: 13px;
+}
+.taxonomy-group__head span {
+  color: var(--app-text-subtle);
+  font-size: 11px;
+}
+.taxonomy-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
 .taxonomy-chip {
   appearance: none;
   padding: 7px 11px;
@@ -2136,17 +3029,26 @@ watch(
   font: inherit;
   font-size: 12px;
   cursor: pointer;
-  transition: .18s ease;
+  transition: 0.18s ease;
 }
-.taxonomy-chip:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--app-accent) 50%, var(--app-border)); }
+.taxonomy-chip:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--app-accent) 50%, var(--app-border));
+}
 .taxonomy-chip.active {
   border-color: color-mix(in srgb, var(--app-accent) 65%, #38bdf8);
-  background: linear-gradient(135deg, color-mix(in srgb, var(--app-accent) 16%, var(--app-surface)), color-mix(in srgb, #38bdf8 11%, var(--app-surface)));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--app-accent) 16%, var(--app-surface)),
+    color-mix(in srgb, #38bdf8 11%, var(--app-surface))
+  );
   color: var(--app-accent);
   font-weight: 700;
   box-shadow: 0 5px 14px color-mix(in srgb, var(--app-accent) 12%, transparent);
 }
-.taxonomy-chip--difficulty.active::before { content: '✓ '; }
+.taxonomy-chip--difficulty.active::before {
+  content: '✓ ';
+}
 
 .vision-fields {
   width: 100%;
@@ -2170,23 +3072,87 @@ watch(
   border-radius: 15px;
   background: color-mix(in srgb, var(--app-surface) 92%, #0ea5e9);
 }
-.vision-model-picker__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.vision-model-picker__head strong { color: var(--app-text); font-size: 15px; }
-.vision-model-picker__head p { margin: 4px 0 0; color: var(--app-text-muted); font-size: 12px; }
-.vision-model-picker__head > span { padding: 4px 9px; border-radius: 999px; color: var(--app-accent); background: color-mix(in srgb, var(--app-accent) 12%, transparent); font-size: 12px; }
-.vision-model-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.vision-model-card {
-  display: grid; grid-template-columns: 38px minmax(0, 1fr) 20px; align-items: center; gap: 10px;
-  width: 100%; padding: 12px; border: 1px solid var(--app-border); border-radius: 12px;
-  color: var(--app-text); background: var(--app-surface); text-align: left; cursor: pointer; transition: .18s ease;
+.vision-model-picker__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
 }
-.vision-model-card:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--app-accent) 55%, var(--app-border)); }
-.vision-model-card.active { border-color: var(--app-accent); background: color-mix(in srgb, var(--app-accent) 9%, var(--app-surface)); box-shadow: 0 7px 18px color-mix(in srgb, var(--app-accent) 10%, transparent); }
-.vision-model-card__icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; color: #fff; background: linear-gradient(135deg, #0ea5e9, #10b981); font-weight: 800; }
-.vision-model-card strong, .vision-model-card small { display: block; }
-.vision-model-card small { margin-top: 3px; color: var(--app-text-muted); font-size: 11px; }
-.vision-model-card i { color: var(--app-accent); font-style: normal; font-weight: 800; }
-@media (max-width: 720px) { .vision-model-options { grid-template-columns: 1fr; } }
+.vision-model-picker__head strong {
+  color: var(--app-text);
+  font-size: 15px;
+}
+.vision-model-picker__head p {
+  margin: 4px 0 0;
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+.vision-model-picker__head > span {
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 12%, transparent);
+  font-size: 12px;
+}
+.vision-model-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.vision-model-card {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 20px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+  color: var(--app-text);
+  background: var(--app-surface);
+  text-align: left;
+  cursor: pointer;
+  transition: 0.18s ease;
+}
+.vision-model-card:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--app-accent) 55%, var(--app-border));
+}
+.vision-model-card.active {
+  border-color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 9%, var(--app-surface));
+  box-shadow: 0 7px 18px color-mix(in srgb, var(--app-accent) 10%, transparent);
+}
+.vision-model-card__icon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: #fff;
+  background: linear-gradient(135deg, #0ea5e9, #10b981);
+  font-weight: 800;
+}
+.vision-model-card strong,
+.vision-model-card small {
+  display: block;
+}
+.vision-model-card small {
+  margin-top: 3px;
+  color: var(--app-text-muted);
+  font-size: 11px;
+}
+.vision-model-card i {
+  color: var(--app-accent);
+  font-style: normal;
+  font-weight: 800;
+}
+@media (max-width: 720px) {
+  .vision-model-options {
+    grid-template-columns: 1fr;
+  }
+}
 .vision-field-stack {
   display: grid;
   gap: 14px;
@@ -2194,31 +3160,193 @@ watch(
   min-width: 0;
 }
 .vision-generator {
-  width: 100%; box-sizing: border-box; padding: 18px; border: 1px solid rgba(16, 185, 129, .28);
-  border-radius: 16px; background: linear-gradient(135deg, color-mix(in srgb, #10b981 10%, var(--app-surface)), color-mix(in srgb, #3b82f6 8%, var(--app-surface)));
+  width: 100%;
+  box-sizing: border-box;
+  padding: 18px;
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  border-radius: 16px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, #10b981 10%, var(--app-surface)),
+    color-mix(in srgb, #3b82f6 8%, var(--app-surface))
+  );
 }
-.vision-generator__head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 12px; }
-.vision-generator__head > div { min-width: 0; }
-.vision-generator__head strong { color: var(--app-text); font-size: 15px; }
-.vision-generator__head p, .vision-generator__tip { margin: 4px 0 0; color: var(--app-text-muted); line-height: 1.65; }
-.vision-generator__head > span { flex: none; padding: 4px 9px; border-radius: 999px; color: #047857; background: rgba(16, 185, 129, .14); font-size: 12px; }
-.vision-generator__input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
-.generation-source-options { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-.generation-source-options button { border: 1px solid var(--app-border); border-radius: 10px; padding: 8px 12px; background: var(--app-surface); color: var(--app-text); cursor: pointer; }
-.generation-source-options button.active { border-color: var(--app-accent); background: color-mix(in srgb, var(--app-accent) 14%, var(--app-surface)); color: var(--app-text); font-weight: 700; }
-.generation-source-options button:disabled { cursor: wait; opacity: .65; }
-.generation-model-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; color: var(--app-text); }
-.generation-model-row select { min-width: 210px; max-width: 100%; padding: 8px; border: 1px solid var(--app-border); border-radius: 9px; background: var(--app-surface); color: var(--app-text); }
-.generation-model-row small { color: var(--app-text-muted); }
-.generation-preview { display: grid; grid-template-columns: minmax(120px, 210px) 1fr; gap: 14px; align-items: center; margin-top: 14px; padding: 12px; border: 1px solid rgba(15,157,139,.28); border-radius: 12px; background: var(--app-surface); }
-.generation-preview img { display: block; width: 100%; max-height: 210px; object-fit: contain; border-radius: 8px; }
-.generation-preview p { color: var(--app-text-muted); line-height: 1.6; }
-.generation-preview button { margin: 4px 8px 4px 0; }
-@media (max-width: 600px) { .generation-preview { grid-template-columns: 1fr; } }
-.vision-generator__tip { font-size: 12px; }
-.vision-source-divider { display: flex; align-items: center; gap: 10px; margin: 2px 0; color: var(--app-text-muted); font-size: 12px; }
-.vision-source-divider::before, .vision-source-divider::after { content: ''; flex: 1; height: 1px; background: var(--color-border-2); }
-@media (max-width: 720px) { .vision-generator__input { grid-template-columns: 1fr; } .vision-generator__head { flex-direction: column; } }
+.vision-generator__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.vision-generator__head > div {
+  min-width: 0;
+}
+.vision-generator__head strong {
+  color: var(--app-text);
+  font-size: 15px;
+}
+.vision-generator__head p,
+.vision-generator__tip {
+  margin: 4px 0 0;
+  color: var(--app-text-muted);
+  line-height: 1.65;
+}
+.vision-generator__head > span {
+  flex: none;
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: #047857;
+  background: rgba(16, 185, 129, 0.14);
+  font-size: 12px;
+}
+.vision-generator__input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+.generation-source-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.generation-source-options button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  cursor: pointer;
+  text-align: left;
+}
+.generation-source-options button img {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  object-fit: contain;
+  background: #fff;
+  flex: none;
+}
+.generation-source-fallback {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  border-radius: 6px;
+  background: var(--app-accent);
+  color: #fff;
+  font-size: 9px;
+}
+.generation-source-options button span {
+  display: grid;
+  gap: 1px;
+}
+.generation-source-options button small {
+  font-size: 10px;
+  color: var(--app-text-muted);
+}
+.generation-source-options button.active {
+  border-color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 14%, var(--app-surface));
+  color: var(--app-text);
+  font-weight: 700;
+}
+.generation-source-options button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+.generation-model-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--app-text);
+}
+.generation-model-row select {
+  min-width: 210px;
+  max-width: 100%;
+  padding: 8px;
+  border: 1px solid var(--app-border);
+  border-radius: 9px;
+  background: var(--app-surface);
+  color: var(--app-text);
+}
+.generation-model-row small {
+  color: var(--app-text-muted);
+}
+.generation-settings-link {
+  border: 0;
+  padding: 0 2px;
+  background: transparent;
+  color: var(--app-accent);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.generation-preview {
+  display: grid;
+  grid-template-columns: minmax(120px, 210px) 1fr;
+  gap: 14px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(15, 157, 139, 0.28);
+  border-radius: 12px;
+  background: var(--app-surface);
+}
+.generation-preview img {
+  display: block;
+  width: 100%;
+  max-height: 210px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.generation-preview p {
+  color: var(--app-text-muted);
+  line-height: 1.6;
+}
+.generation-preview button {
+  margin: 4px 8px 4px 0;
+}
+@media (max-width: 600px) {
+  .generation-preview {
+    grid-template-columns: 1fr;
+  }
+}
+.vision-generator__tip {
+  font-size: 12px;
+}
+.vision-source-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 2px 0;
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
+.vision-source-divider::before,
+.vision-source-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--color-border-2);
+}
+@media (max-width: 720px) {
+  .vision-generator__input {
+    grid-template-columns: 1fr;
+  }
+  .vision-generator__head {
+    flex-direction: column;
+  }
+}
 
 .vision-upload {
   display: grid;
@@ -2241,15 +3369,40 @@ watch(
   display: none;
 }
 .hidden-case-uploader {
-  display: flex; align-items: center; justify-content: space-between; gap: 16px;
-  padding: 14px 16px; border: 1px dashed color-mix(in srgb, #8b5cf6 48%, var(--app-border));
-  border-radius: 14px; background: color-mix(in srgb, #8b5cf6 7%, var(--app-surface));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px dashed color-mix(in srgb, #8b5cf6 48%, var(--app-border));
+  border-radius: 14px;
+  background: color-mix(in srgb, #8b5cf6 7%, var(--app-surface));
 }
-.hidden-case-uploader strong { color: var(--app-text); }
-.hidden-case-uploader p { margin: 4px 0 0; color: var(--app-text-muted); font-size: 12px; line-height: 1.55; }
-.hidden-case-uploader__button { white-space: nowrap; background: linear-gradient(135deg, #7c3aed, #2563eb); }
-.case-visibility { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; color: var(--app-text-muted); font-size: 12px; cursor: pointer; }
-.case-visibility input { accent-color: var(--app-accent); }
+.hidden-case-uploader strong {
+  color: var(--app-text);
+}
+.hidden-case-uploader p {
+  margin: 4px 0 0;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+.hidden-case-uploader__button {
+  white-space: nowrap;
+  background: linear-gradient(135deg, #7c3aed, #2563eb);
+}
+.case-visibility {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: var(--app-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.case-visibility input {
+  accent-color: var(--app-accent);
+}
 
 .vision-preview {
   display: block;
@@ -2268,7 +3421,7 @@ watch(
   box-sizing: border-box;
   border: 1px solid var(--app-border);
   border-radius: 14px;
-  background: rgba(15, 23, 42, .88);
+  background: rgba(15, 23, 42, 0.88);
   line-height: 0;
   overflow: hidden;
 }
@@ -2360,9 +3513,9 @@ watch(
 
 .vision-autofill-list span {
   padding: 7px 8px;
-  border: 1px solid rgba(16, 185, 129, .18);
+  border: 1px solid rgba(16, 185, 129, 0.18);
   border-radius: 9px;
-  background: rgba(16, 185, 129, .07);
+  background: rgba(16, 185, 129, 0.07);
   color: #047857;
   font-size: 11px;
   font-weight: 700;
@@ -2370,12 +3523,25 @@ watch(
 }
 
 @media (max-width: 720px) {
-  .vision-fields { padding: 12px; }
-  .vision-generator { padding: 14px; }
-  .vision-upload { grid-template-columns: 1fr; }
-  .vision-upload__button { text-align: center; }
-  .vision-ai-actions { align-items: stretch; flex-direction: column; }
-  .vision-autofill-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vision-fields {
+    padding: 12px;
+  }
+  .vision-generator {
+    padding: 14px;
+  }
+  .vision-upload {
+    grid-template-columns: 1fr;
+  }
+  .vision-upload__button {
+    text-align: center;
+  }
+  .vision-ai-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .vision-autofill-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .vision-help {
@@ -2551,13 +3717,38 @@ watch(
   padding: 14px 16px;
   border-radius: 20px;
   background:
-    linear-gradient(120deg, rgba(15, 140, 122, 0.12), rgba(59, 130, 246, 0.08) 42%, rgba(255, 138, 61, 0.1)),
+    linear-gradient(
+      120deg,
+      rgba(15, 140, 122, 0.12),
+      rgba(59, 130, 246, 0.08) 42%,
+      rgba(255, 138, 61, 0.1)
+    ),
     var(--app-surface);
 }
-.preflight-panel { margin-top: 16px; padding: 16px 20px; color: var(--app-text); }
-.preflight-panel p { margin: 8px 0 0; color: #b45309; }
-.preflight-panel ul { margin: 10px 0 0; padding-left: 0; list-style: none; display: grid; gap: 7px; font-size: 13px; line-height: 1.5; }
-.preflight-ok { color: #0f8c7a; }.preflight-fail { color: #b45309; }
+.preflight-panel {
+  margin-top: 16px;
+  padding: 16px 20px;
+  color: var(--app-text);
+}
+.preflight-panel p {
+  margin: 8px 0 0;
+  color: #b45309;
+}
+.preflight-panel ul {
+  margin: 10px 0 0;
+  padding-left: 0;
+  list-style: none;
+  display: grid;
+  gap: 7px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.preflight-ok {
+  color: #0f8c7a;
+}
+.preflight-fail {
+  color: #b45309;
+}
 
 .action-row__glow {
   position: absolute;
@@ -2817,7 +4008,12 @@ watch(
 
 .editor-page:not(.editor-page--light) .action-row {
   background:
-    linear-gradient(120deg, rgba(15, 118, 110, 0.22), rgba(30, 64, 175, 0.18) 42%, rgba(14, 116, 144, 0.18)),
+    linear-gradient(
+      120deg,
+      rgba(15, 118, 110, 0.22),
+      rgba(30, 64, 175, 0.18) 42%,
+      rgba(14, 116, 144, 0.18)
+    ),
     rgba(15, 23, 42, 0.82);
   border-color: rgba(100, 116, 139, 0.28);
 }

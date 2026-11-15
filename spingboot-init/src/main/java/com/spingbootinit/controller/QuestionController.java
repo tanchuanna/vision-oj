@@ -6,21 +6,13 @@ import com.spingbootinit.common.result.Result;
 import com.spingbootinit.common.result.ResultCode;
 import com.spingbootinit.context.UserContext.IsAdminRoleString;
 import com.spingbootinit.context.UserContext.UserContext;
-import com.spingbootinit.model.dto.question.QuestionAddRequest;
-import com.spingbootinit.model.dto.question.QuestionBatchDeleteRequest;
-import com.spingbootinit.model.dto.question.QuestionQueryRequest;
-import com.spingbootinit.model.dto.question.QuestionRunRequest;
-import com.spingbootinit.model.dto.question.QuestionUpdateRequest;
+import com.spingbootinit.model.dto.question.*;
 import com.spingbootinit.model.entity.User;
 import com.spingbootinit.model.vo.questionvo.QuestionAdminListItemVO;
 import com.spingbootinit.model.vo.questionvo.QuestionPublicDetailVO;
 import com.spingbootinit.model.vo.questionvo.QuestionRunVO;
-import com.spingbootinit.service.QuestionRunService;
-import com.spingbootinit.service.QuestionService;
-import com.spingbootinit.service.StudyRecommendationEngine;
-import com.spingbootinit.service.StudyRecommendationService;
-import com.spingbootinit.service.QuestionPreflightService;
-import com.spingbootinit.service.UserService;
+import com.spingbootinit.service.*;
+import com.spingbootinit.service.impl.QuestionAuthorizationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
@@ -52,6 +44,9 @@ public class QuestionController {
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private QuestionAuthorizationService questionAuthorizationService;
 
     /**
      * 判断是否是管理员
@@ -95,6 +90,13 @@ public class QuestionController {
         return Result.success(voPage);
     }
 
+    @Operation(summary = "命题人分页查询题目", description = "老师只能查看自己的题目，管理员可查看全部")
+    @PostMapping("/manage/page")
+    public Result<Page<QuestionAdminListItemVO>> managePageQuestions(@RequestBody QuestionQueryRequest queryRequest) {
+        Long currentUserId = requireCurrentUserId();
+        return Result.success(questionService.pageSelectManaged(queryRequest, currentUserId));
+    }
+
     @Operation(summary = "公开分页查询题目", description = "题库分页列表（无需管理员）")
     @PostMapping("/page")
     public Result<Page<QuestionAdminListItemVO>> pageQuestions(@RequestBody QuestionQueryRequest queryRequest) {
@@ -130,6 +132,14 @@ public class QuestionController {
         return Result.success(questionPreflightService.check(request));
     }
 
+    @Operation(summary = "命题人保存前验题")
+    @PostMapping("/manage/preflight")
+    public Result<QuestionPreflightService.PreflightResult> managePreflight(@Valid @RequestBody QuestionAddRequest request) {
+        Long userId = requireCurrentUserId();
+        questionAuthorizationService.requireAuthor(userId);
+        return Result.success(questionPreflightService.check(request));
+    }
+
     @Operation(summary = "运行代码（样例）", description = "调用沙箱执行当前代码与题目公开样例（最多 3 组），不入库、不计榜")
     @PostMapping("/run")
     public Result<QuestionRunVO> runQuestionSample(@Valid @RequestBody QuestionRunRequest request) {
@@ -157,6 +167,14 @@ public class QuestionController {
         return Result.success("更新成功");
     }
 
+    @Operation(summary = "命题人更新题目")
+    @PostMapping("/manage/update")
+    public Result<String> manageUpdateQuestion(@Valid @RequestBody QuestionUpdateRequest request) {
+        Long currentUserId = requireCurrentUserId();
+        questionService.updateByIdQuestion(request, currentUserId);
+        return Result.success("更新成功");
+    }
+
     @Operation(summary = "管理员批量删除题目", description = "支持单个与批量删除")
     @PostMapping("/admin/delete/batch")
     public Result<Boolean> adminBatchDeleteQuestions(@Valid @RequestBody QuestionBatchDeleteRequest request) {
@@ -171,6 +189,20 @@ public class QuestionController {
         // 批量删除题目的逻辑
         questionService.removeBatchByIdsQuestion(request);
         return Result.success(true);
+    }
+
+    @Operation(summary = "命题人批量删除题目")
+    @PostMapping("/manage/delete/batch")
+    public Result<Boolean> manageBatchDeleteQuestions(@Valid @RequestBody QuestionBatchDeleteRequest request) {
+        Long currentUserId = requireCurrentUserId();
+        questionService.removeBatchByIdsQuestion(request, currentUserId);
+        return Result.success(true);
+    }
+
+    private Long requireCurrentUserId() {
+        Long currentUserId = UserContext.getCurrentUserId();
+        if (currentUserId == null) throw new BusinessException(ResultCode.NOT_LOGIN_ERROR);
+        return currentUserId;
     }
 
 
