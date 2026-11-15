@@ -2309,7 +2309,7 @@ watch(
                     type="button"
                     role="menuitem"
                     @click="
-                      resetSplit()
+                      resetSplit();
                       editorSettingsOpen = false
                     "
                   >
@@ -2320,7 +2320,7 @@ watch(
                     role="menuitem"
                     class="editor-settings-popover__danger"
                     @click="
-                      clearCode()
+                      clearCode();
                       editorSettingsOpen = false
                     "
                   >

@@ -123,11 +123,15 @@ public class QuestionSubmitController {
         query.setManaged(access.managed());
         query.setAllManagedUsers(access.allManagedUsers());
         query.setManagedUserIds(access.managedUserIds());
-        // 仅管理员或有权限的老师可按 userId 过滤；非管理员必须在其可管理的学生范围内
         if (userId != null) {
-            if (access.allManagedUsers() || access.managedUserIds().contains(userId)) {
-                query.setUserId(userId);
+            if (userId <= 0) {
+                throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "用户 ID 必须为正整数");
             }
+            if (!access.managed()
+                    || (!access.allManagedUsers() && !access.managedUserIds().contains(userId))) {
+                throw new BusinessException(ResultCode.NO_AUTH_ERROR.getCode(), "无权查看该学生的提交记录");
+            }
+            query.setUserId(userId);
         }
         query.setQuestionKeyword(questionKeyword);
         query.setUserKeyword(userKeyword);

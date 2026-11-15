@@ -32,6 +32,10 @@ use([
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const routeQueryText = (value: unknown) => Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '')
+const requestedScope = routeQueryText(route.query.scope).trim().toUpperCase()
+const initialScope: SubmissionScope = requestedScope === 'MANAGED' ? 'MANAGED' : 'SELF'
+const requestedStudentId = routeQueryText(route.query.userId).trim()
 const loading = ref(false)
 const overviewLoading = ref(false)
 const detailLoading = ref(false)
@@ -42,8 +46,9 @@ const total = ref(0)
 const current = ref(1)
 const pageSize = ref(15)
 const rangeDays = ref<7 | 30 | 90>(30)
-const scope = ref<SubmissionScope>('SELF')
-const selectedUserId = ref<string>('')
+const scope = ref<SubmissionScope>(initialScope)
+const selectedUserId = ref(initialScope === 'MANAGED' && /^\d+$/.test(requestedStudentId) ? requestedStudentId : '')
+const selectedStudentName = ref(routeQueryText(route.query.studentName).trim())
 const questionKeyword = ref('')
 const userKeyword = ref('')
 const verdict = ref('')
@@ -79,7 +84,9 @@ const verdictMeta: Record<string, { label: string; abbr: string; tone: string; i
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 const canManage = computed(() => auth.isAdmin === true || auth.isTeacher === true)
-const managedScopeLabel = computed(() => (auth.isAdmin ? '全站管理' : '学生提交'))
+const managedScopeLabel = computed(() => selectedUserId.value
+  ? selectedStudentName.value || `学生 ${selectedUserId.value}`
+  : (auth.isAdmin ? '全部学生' : '我的学生'))
 const hasPending = computed(() => rows.value.some((row) => row.status === 0 || row.status === 1))
 const metricCards = computed(() => {
   const data = overview.value
@@ -307,6 +314,17 @@ function resetFilters() {
   applyFilters()
 }
 
+async function clearSelectedStudent() {
+  selectedUserId.value = ''
+  selectedStudentName.value = ''
+  const query = { ...route.query }
+  delete query.userId
+  delete query.studentName
+  await router.replace({ query: { ...query, scope: 'MANAGED' } })
+  current.value = 1
+  await refreshAll()
+}
+
 async function openDetail(row: SubmissionListItem) {
   detailOpen.value = true
   detail.value = null
@@ -429,8 +447,10 @@ function scheduleRefresh() {
 
 watch(scope, () => {
   current.value = 1
-  // 切换范围时清空指定用户过滤
-  selectedUserId.value = ''
+  if (scope.value !== 'MANAGED') {
+    selectedUserId.value = ''
+    selectedStudentName.value = ''
+  }
   void refreshAll()
 })
 watch(rangeDays, () => void loadOverview())
@@ -443,15 +463,6 @@ onMounted(async () => {
   if (!auth.token) {
     Message.warning('请先登录后查看提交记录')
     return
-  }
-  // 从路由读取数据范围（老师端跳转带 scope=MANAGED）
-  const routeScope = String(route.query.scope || '').toUpperCase()
-  if (routeScope === 'MANAGED' || routeScope === 'SELF') {
-    scope.value = routeScope as SubmissionScope
-  }
-  // 老师从学生管理页跳转时带 userId，仅在 MANAGED 范围下生效
-  if (scope.value === 'MANAGED') {
-    selectedUserId.value = String(route.query.userId || '')
   }
   await refreshAll()
   scheduleRefresh()
@@ -476,9 +487,7 @@ onBeforeUnmount(() => {
           {{
             scope === 'SELF'
               ? '回顾每次尝试，找到下一步改进方向。'
-              : auth.isAdmin
-                ? '查看全站评测状态与异常提交。'
-                : '查看学生的评测记录与解题情况。'
+              : `正在查看${managedScopeLabel}的评测记录与解题情况。`
           }}
         </p>
       </div>
@@ -502,6 +511,11 @@ onBeforeUnmount(() => {
       <button :class="{ active: scope === 'MANAGED' }" type="button" @click="scope = 'MANAGED'">
         {{ managedScopeLabel }}
       </button>
+    </div>
+
+    <div v-if="scope === 'MANAGED' && selectedUserId" class="student-scope-banner">
+      <div><span>当前查看</span><strong>{{ managedScopeLabel }}</strong><small>ID：{{ selectedUserId }}</small></div>
+      <button type="button" @click="clearSelectedStudent">查看{{ auth.isAdmin ? '全部学生' : '我的全部学生' }}</button>
     </div>
 
     <section class="metrics-grid" :aria-busy="overviewLoading">
@@ -551,7 +565,7 @@ onBeforeUnmount(() => {
     <section class="records-panel">
       <div class="records-heading">
         <div>
-          <h2>{{ scope === 'SELF' ? '我的提交' : auth.isAdmin ? '全站提交' : '学生提交' }}</h2>
+          <h2>{{ scope === 'SELF' ? '我的提交' : `${managedScopeLabel}的提交` }}</h2>
           <span>共 {{ total }} 条</span>
         </div>
         <button class="mobile-filter-button" type="button" @click="filterOpen = true">筛选</button>
@@ -565,7 +579,7 @@ onBeforeUnmount(() => {
           ><span>题目</span
           ><input v-model="questionKeyword" placeholder="名称或 ID" @keyup.enter="applyFilters"
         /></label>
-        <label v-if="scope === 'MANAGED'"
+        <label v-if="scope === 'MANAGED' && !selectedUserId"
           ><span>用户</span
           ><input v-model="userKeyword" placeholder="昵称、用户名或 ID" @keyup.enter="applyFilters"
         /></label>
@@ -699,7 +713,7 @@ onBeforeUnmount(() => {
             type="button"
             :disabled="current <= 1"
             @click="
-              current--
+              current--;
               loadPage()
             "
           >
@@ -709,7 +723,7 @@ onBeforeUnmount(() => {
             type="button"
             :disabled="current >= totalPages"
             @click="
-              current++
+              current++;
               loadPage()
             "
           >
@@ -897,6 +911,23 @@ onBeforeUnmount(() => {
   font-weight: 700;
   box-shadow: 0 1px 3px #1f332214;
 }
+.student-scope-banner {
+  max-width: 1600px;
+  margin: 12px auto 0;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid #bfe0da;
+  border-radius: 13px;
+  background: #eef8f6;
+  color: #31504b;
+}
+.student-scope-banner > div { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
+.student-scope-banner span,.student-scope-banner small { color: #6c7d79; font-size: 12px; }
+.student-scope-banner strong { overflow: hidden; color: #0a756a; text-overflow: ellipsis; white-space: nowrap; }
+.student-scope-banner button { min-height: 36px; padding: 0 13px; border: 1px solid #9bcfc6; border-radius: 9px; background: #fff; color: #087b6e; font-weight: 700; cursor: pointer; }
 .metrics-grid {
   max-width: 1600px;
   margin: 16px auto;
