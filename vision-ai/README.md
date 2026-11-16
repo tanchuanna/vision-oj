@@ -9,6 +9,7 @@ Supported authoring modes:
 - object detection boxes
 - Chinese/English OCR
 - basic image feature analysis
+- OpenCV image quality hints (brightness, sharpness and small image warnings)
 
 ```powershell
 cd vision-ai
@@ -65,7 +66,11 @@ the EasyOCR Chinese/English models. Model routing keys are:
 - `YOLO_GENERAL`: COCO general detection (`VISION_MODEL_GENERAL`)
 - `YOLO_HELMET`: trained campus hard-hat detection (`VISION_MODEL_HELMET`)
 - `EASYOCR_ZH_EN`: Chinese/English OCR
-- `OPENCV_ANALYSIS`: image size, grayscale mean and edge strength
+- `OPENCV_ANALYSIS`: historical routing key; image attributes are calculated with Pillow and NumPy. OpenCV supplies advisory quality hints in the `quality` response field.
 
 `POST /detect` accepts `modelKey`. The default custom model is
 `models/hard-hat-best.pt`.
+
+The response also includes `quality` with OpenCV brightness, Laplacian sharpness
+and advisory warnings. These heuristics do not change the teacher-confirmed
+standard answer or automatically reject a question.

@@ -7,6 +7,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ImageOutputJudgeStrategyTest {
     @Test
+    void newAnalysisRuleRequiresExactDimensionsAndCompleteFields() {
+        com.spingbootinit.model.dto.question.JudgeConfig config = new com.spingbootinit.model.dto.question.JudgeConfig();
+        config.setAnalysisVersion(2);
+        String expected = "{\"width\":100,\"height\":80,\"mode\":\"RGB\",\"mean_gray\":120.5,\"edge_strength\":10.0}";
+        assertTrue(ImageOutputJudgeStrategy.outputsMatch("IMAGE_ANALYSIS", expected,
+                "{\"height\":80,\"width\":100,\"mode\":\"RGB\",\"mean_gray\":120.9,\"edge_strength\":10.8}", 2, config));
+        assertFalse(ImageOutputJudgeStrategy.outputsMatch("IMAGE_ANALYSIS", expected, expected.replace("\"width\":100", "\"width\":101"), 2, config));
+        assertFalse(ImageOutputJudgeStrategy.outputsMatch("IMAGE_ANALYSIS", expected, "{\"width\":100}", 2, config));
+    }
+    @Test
     void classificationIgnoresCaseAndQuotes() {
         assertTrue(ImageOutputJudgeStrategy.outputsMatch("IMAGE_CLASSIFICATION", "car", "\"CAR\"", 0));
         assertFalse(ImageOutputJudgeStrategy.outputsMatch("IMAGE_CLASSIFICATION", "car", "bus", 0));

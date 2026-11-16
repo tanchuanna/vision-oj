@@ -6,5 +6,6 @@ export type JudgeConfig = {
     timeLimit: number;
     memoryLimit: number;
     stackLimit: number;
+    analysisVersion?: number;
 };
 

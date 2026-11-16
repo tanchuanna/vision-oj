@@ -26,6 +26,7 @@ public class QuestionAdminListItemVO {
     private String generationModel;
     private String visionModelKey;
     private Integer countTolerance;
+    private java.util.Map<String, Object> qualityReview;
     private List<String> tags;
     private String answer;
     private Integer submitNum;

@@ -333,7 +333,7 @@ function imagePythonTemplate(): string {
   if (type === 'IMAGE_OCR')
     return `import easyocr\n\nimage_path = input().strip()\nreader = easyocr.Reader(["ch_sim", "en"], gpu=False)\nlines = reader.readtext(image_path, detail=0, paragraph=True)\nprint(" ".join(lines))\n`
   if (type === 'IMAGE_ANALYSIS')
-    return `from PIL import Image\nimport numpy as np\nimport json\n\nimage_path = input().strip()\nimage = Image.open(image_path).convert("RGB")\ngray = np.asarray(image.convert("L"), dtype=np.float32)\ngx = abs(np.diff(gray, axis=1)).mean() if image.width > 1 else 0\ngy = abs(np.diff(gray, axis=0)).mean() if image.height > 1 else 0\nresult = {"width": image.width, "height": image.height, "mode": "RGB", "mean_gray": round(float(gray.mean()), 2), "edge_strength": round(float(gx + gy), 2)}\nprint(json.dumps(result, sort_keys=True))\n`
+    return `from PIL import Image\nimport numpy as np\nimport json\n\nimage_path = input().strip()\nimage = Image.open(image_path).convert("RGB")\n# TODO: 计算 width、height、mode、mean_gray、edge_strength\n# 提示：将图像转为灰度；边缘强度为水平与垂直相邻像素差的均值之和。\nresult = {}\nprint(json.dumps(result, sort_keys=True))\n`
   if (type === 'IMAGE_CLASSIFICATION')
     return `from ultralytics import YOLO\n\nimage_path = input().strip()\nresult = YOLO("${visionModelPath.value}").predict(image_path, verbose=False)[0]\nif result.boxes is None or len(result.boxes) == 0:\n    print("unknown")\nelse:\n    best = int(result.boxes.conf.argmax())\n    print(result.names[int(result.boxes.cls[best])])\n`
   if (type === 'IMAGE_OBJECT_DETECTION')
@@ -2309,7 +2309,7 @@ watch(
                     type="button"
                     role="menuitem"
                     @click="
-                      resetSplit();
+                      resetSplit()
                       editorSettingsOpen = false
                     "
                   >
@@ -2320,7 +2320,7 @@ watch(
                     role="menuitem"
                     class="editor-settings-popover__danger"
                     @click="
-                      clearCode();
+                      clearCode()
                       editorSettingsOpen = false
                     "
                   >

@@ -131,6 +131,17 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
             }
         }
         if (IMAGE_TYPES.contains(questionType)) {
+            Map<String, Object> review = question.getQualityReview();
+            if (review != null && review.get("reports") instanceof Map<?, ?> reports) {
+                boolean hasWarning = judgeCases.stream().map(JudgeCase::getInput).anyMatch(url -> {
+                    Object report = reports.get(url);
+                    return report instanceof Map<?, ?> detail && detail.get("warnings") instanceof List<?> warnings && !warnings.isEmpty();
+                });
+                if (hasWarning && (!Boolean.TRUE.equals(review.get("accepted"))
+                        || StringUtils.isBlank(Objects.toString(review.get("reason"), "")))) {
+                    throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "图片质量有提醒，请教师确认并填写原因");
+                }
+            }
             long uniqueImages = judgeCases.stream().map(JudgeCase::getInput).filter(Objects::nonNull)
                     .map(String::trim).distinct().count();
             long publicCases = judgeCases.stream().filter(c -> Boolean.TRUE.equals(c.getSample())).count();
@@ -232,6 +243,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         BeanUtils.copyProperties(questionAddRequest, question);
         this.validQuestion(question, true);
         question.setUserId(currentUserId);
+        stampQualityReview(question, currentUserId);
         question.setFavourNum(0);
         question.setThumbNum(0);
         boolean result = this.save(question);
@@ -382,6 +394,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
             // 公共题库列表绝不能泄露参考答案和完整（含隐藏）判题用例。
             vo.setAnswer(null);
             vo.setJudgeCase(null);
+            vo.setQualityReview(null);
             vo.setUserNickname(nicknameMap.getOrDefault(question.getUserId(), "-"));
             return vo;
         }).toList();
@@ -451,8 +464,17 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         Question question = new Question();
         BeanUtils.copyProperties(request, question);
         this.validQuestion(question, false);
+        stampQualityReview(question, com.spingbootinit.context.UserContext.UserContext.getCurrentUserId());
         boolean updated = this.updateById(question);
         ThrowUtils.throwIf(!updated, ResultCode.OPERATION_ERROR);
+    }
+
+    private void stampQualityReview(Question question, Long reviewerId) {
+        if (question.getQualityReview() == null || question.getQualityReview().isEmpty()) return;
+        Map<String, Object> review = new LinkedHashMap<>(question.getQualityReview());
+        review.put("reviewerId", reviewerId);
+        review.put("reviewedAt", java.time.Instant.now().toString());
+        question.setQualityReview(review);
     }
 
     /**

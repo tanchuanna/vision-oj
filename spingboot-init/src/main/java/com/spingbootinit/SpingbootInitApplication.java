@@ -12,8 +12,6 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 @EnableAsync
 public class SpingbootInitApplication {
 
-
-
     public static void main(String[] args) {
 
         SpringApplication.run(SpingbootInitApplication.class, args);

@@ -2,6 +2,7 @@ FROM mayue-oj-python-vision:1.0
 
 # The existing sandbox image already contains PyTorch, YOLO, EasyOCR and the
 # bundled model weights. Add only the HTTP service dependencies here.
+
 RUN python -m pip install --no-cache-dir --retries 5 --timeout 120 \
     -i https://pypi.tuna.tsinghua.edu.cn/simple \
     fastapi==0.116.1 uvicorn==0.35.0 httpx==0.28.1 python-multipart==0.0.20

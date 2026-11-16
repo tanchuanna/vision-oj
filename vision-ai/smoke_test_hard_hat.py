@@ -1,8 +1,7 @@
-from pathlib import Path
-
+# 用少量数据训练一轮，检查 GPU、数据集和训练环境
 import torch
+from pathlib import Path
 from ultralytics import YOLO
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATASET_YAML = PROJECT_ROOT.parent / "datasets" / "hard-hat-workers-ready" / "data.yaml"

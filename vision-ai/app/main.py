@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import cv2
+import httpx
 import io
+import numpy as np
 import os
+from PIL import Image, UnidentifiedImageError
 from collections import Counter
+from fastapi import FastAPI, HTTPException
 from functools import lru_cache
 from ipaddress import ip_address
-from urllib.parse import urlparse
-
-import httpx
-from fastapi import FastAPI, HTTPException
-from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 from ultralytics import YOLO
-import numpy as np
-
+from urllib.parse import urlparse
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_REGISTRY = {
@@ -58,6 +57,31 @@ class DetectionResponse(BaseModel):
     inference_ms: float
     ocr_text: str | None = None
     image_analysis: dict[str, int | float | str] | None = None
+    quality: dict[str, object] | None = None
+
+
+def assess_quality(image: Image.Image) -> dict[str, object]:
+    """Advisory checks only; teachers decide whether a difficult image is intentional."""
+    width, height = image.size
+    rgb = np.asarray(image)
+    if max(width, height) > 512:
+        scale = 512 / max(width, height)
+        rgb = cv2.resize(rgb, (max(1, round(width * scale)), max(1, round(height * scale))),
+                         interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    brightness = round(float(gray.mean()), 2)
+    sharpness = round(float(cv2.Laplacian(gray, cv2.CV_64F).var()), 2)
+    warnings = []
+    if min(width, height) < 256:
+        warnings.append("图片尺寸较小，识别结果可能不稳定")
+    if brightness < 40:
+        warnings.append("图片过暗")
+    elif brightness > 215:
+        warnings.append("图片过亮")
+    if sharpness < 80:
+        warnings.append("图片可能模糊或缺少清晰边缘")
+    return {"version": "opencv-quality-v1", "brightness": brightness,
+            "sharpness": sharpness, "warnings": warnings}
 
 
 @lru_cache(maxsize=4)
@@ -160,7 +184,7 @@ def infer(image: Image.Image, confidence: float, iou: float, task_type: str, mod
     }
     return DetectionResponse(
         model=("easyocr-zh-en" if normalized_task == "IMAGE_OCR" else
-               "opencv-pillow" if normalized_task == "IMAGE_ANALYSIS" else model_key),
+               "pillow-numpy" if normalized_task == "IMAGE_ANALYSIS" else model_key),
         width=width,
         height=height,
         counts=dict(sorted(counts.items())),
@@ -168,12 +192,19 @@ def infer(image: Image.Image, confidence: float, iou: float, task_type: str, mod
         inference_ms=round(float(sum(result.speed.values())), 2) if result is not None else 0.0,
         ocr_text=ocr_text,
         image_analysis=analysis,
+        quality=assess_quality(image),
     )
 
 
 @app.get("/health")
 def health() -> dict[str, object]:
     return {"status": "ok", "models": MODEL_REGISTRY}
+
+
+@app.post("/quality")
+async def quality(request: DetectionRequest) -> dict[str, object]:
+    image = await download_image(str(request.image_url))
+    return await asyncio.to_thread(assess_quality, image)
 
 
 @app.post("/detect", response_model=DetectionResponse)

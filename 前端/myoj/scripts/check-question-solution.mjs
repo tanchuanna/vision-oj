@@ -26,7 +26,7 @@ if (!panel.includes("selected.accessLevel === 'FULL'"))
 if (!panel.includes('class="solution-reader"')) throw new Error('题解详情缺少独立阅读容器')
 if (!panel.includes('class="solution-detail__hero"'))
   throw new Error('题解详情缺少清晰的标题与作者信息区')
-if (!panel.includes('.solution-detail{') || !panel.includes('background:var(--app-bg)')) {
+if (!/\.solution-detail\s*\{[^}]*background:\s*var\(--app-bg\)/s.test(panel)) {
   throw new Error('题解详情必须使用不透明背景，避免列表内容透出叠字')
 }
 if (panel.includes('题解标题<input') || panel.includes('列表摘要<input')) {

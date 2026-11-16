@@ -1,7 +1,7 @@
 package com.spingbootinit.service.impl;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.spingbootinit.common.exception.BusinessException;
 import com.spingbootinit.common.result.ResultCode;
 import com.spingbootinit.config.VisionAiProperties;
@@ -32,6 +32,28 @@ public class VisionAnnotationService {
             .version(HttpClient.Version.HTTP_1_1)
             .connectTimeout(Duration.ofSeconds(5))
             .build();
+
+    public Map<String, Object> quality(VisionAnnotateRequest request) {
+        if (!properties.isEnabled()) throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图像质量服务未启用");
+        try {
+            String baseUrl = properties.getBaseUrl().replaceAll("/+$", "");
+            String body = objectMapper.writeValueAsString(Map.of("imageUrl", request.getImageUrl()));
+            HttpRequest httpRequest = HttpRequest.newBuilder().uri(URI.create(baseUrl + "/quality"))
+                    .timeout(Duration.ofSeconds(25)).header("Content-Type", "application/json; charset=UTF-8")
+                    .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8)).build();
+            HttpResponse<String> response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() < 200 || response.statusCode() >= 300)
+                throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片质量检查失败：" + extractErrorMessage(response.body(), String.valueOf(response.statusCode())));
+            return objectMapper.readValue(response.body(), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+        } catch (BusinessException e) {
+            throw e;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图片质量检查已中断");
+        } catch (Exception e) {
+            throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "图像质量服务不可用");
+        }
+    }
 
     public VisionAnnotationVO annotate(VisionAnnotateRequest request) {
         if (!properties.isEnabled()) {

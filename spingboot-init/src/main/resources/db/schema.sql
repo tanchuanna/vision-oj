@@ -110,6 +110,7 @@ CREATE TABLE IF NOT EXISTS `question` (
     `generation_source` VARCHAR(32) DEFAULT NULL COMMENT '题图来源',
     `generation_model` VARCHAR(128) DEFAULT NULL COMMENT '生图模型标识',
     `count_tolerance` INT NOT NULL DEFAULT 0 COMMENT '目标计数单类允许误差',
+    `quality_review` JSON DEFAULT NULL COMMENT '教师图像质量确认记录',
     `tags` JSON DEFAULT NULL COMMENT '标签 JSON 数组',
     `answer` MEDIUMTEXT COMMENT '参考实现或题解',
     `submit_num` INT NOT NULL DEFAULT 0 COMMENT '提交数',
@@ -468,6 +469,8 @@ CALL `mayue_add_column_if_missing`('question', 'generation_model',
     '`generation_model` VARCHAR(128) DEFAULT NULL COMMENT ''生图模型标识'' AFTER `generation_source`');
 CALL `mayue_add_column_if_missing`('question', 'count_tolerance',
     '`count_tolerance` INT NOT NULL DEFAULT 0 COMMENT ''目标计数单类允许误差'' AFTER `vision_model_key`');
+CALL `mayue_add_column_if_missing`('question', 'quality_review',
+    '`quality_review` JSON DEFAULT NULL COMMENT ''教师图像质量确认记录'' AFTER `count_tolerance`');
 CALL `mayue_add_column_if_missing`('question_submit', 'verdict',
     '`verdict` VARCHAR(32) GENERATED ALWAYS AS (IF(JSON_VALID(`judge_info`), JSON_UNQUOTE(JSON_EXTRACT(`judge_info`, ''$.message'')), NULL)) STORED COMMENT ''判题结果生成列'' AFTER `judge_info`');
 CALL `mayue_add_column_if_missing`('question_submit', 'runtime_ms',

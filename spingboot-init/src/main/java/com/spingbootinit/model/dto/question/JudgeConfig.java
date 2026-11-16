@@ -30,4 +30,7 @@ public class JudgeConfig {
     @NotNull(message = "堆栈限制不能为空")
     @Positive(message = "堆栈限制必须大于 0")
     private Long stackLimit;
+
+    /** 新图像属性题使用字段级比较；缺省时兼容旧题的统一整数容差。 */
+    private Integer analysisVersion;
 }

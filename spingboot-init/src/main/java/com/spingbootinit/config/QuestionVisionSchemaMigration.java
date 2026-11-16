@@ -31,6 +31,7 @@ public class QuestionVisionSchemaMigration implements ApplicationRunner {
         }
         addColumnIfMissing("generation_source", "ALTER TABLE question ADD COLUMN generation_source VARCHAR(32) DEFAULT NULL AFTER vision_model_key");
         addColumnIfMissing("generation_model", "ALTER TABLE question ADD COLUMN generation_model VARCHAR(128) DEFAULT NULL AFTER generation_source");
+        addColumnIfMissing("quality_review", "ALTER TABLE question ADD COLUMN quality_review JSON DEFAULT NULL AFTER count_tolerance");
     }
 
     private void addColumnIfMissing(String name, String ddl) {

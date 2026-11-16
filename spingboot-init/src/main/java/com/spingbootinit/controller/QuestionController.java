@@ -18,6 +18,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.annotation.Resource;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.BeanUtils;
 import org.springframework.web.bind.annotation.*;
 
 
@@ -67,6 +68,7 @@ public class QuestionController {
         if (currentUserId == null) {
             throw new BusinessException(ResultCode.NOT_LOGIN_ERROR);
         }
+        requireImagePreflight(questionAddRequest);
         // 创建题目的逻辑
         long newQuestionId = questionService.createQuestion(questionAddRequest, currentUserId);
         return Result.success(String.valueOf(newQuestionId));
@@ -162,9 +164,27 @@ public class QuestionController {
         if (currentUser == null || !isAdminRole.isAdminRoleString(currentUser.getUserRole())) {
             throw new BusinessException(ResultCode.NO_AUTH_ERROR);
         }
+        QuestionAddRequest candidate = new QuestionAddRequest();
+        BeanUtils.copyProperties(request, candidate);
+        requireImagePreflight(candidate);
         // 更新题目的逻辑
         questionService.updateByIdQuestion(request);
         return Result.success("更新成功");
+    }
+
+    private void requireImagePreflight(QuestionAddRequest request) {
+        if (request.getQuestionType() == null || !request.getQuestionType().startsWith("IMAGE_")) return;
+        Long userId = UserContext.getCurrentUserId();
+        User user = userId == null ? null : userService.getById(userId);
+        if (user == null || !isAdminRole.isAdminRoleString(user.getUserRole())) {
+            throw new BusinessException(ResultCode.NO_AUTH_ERROR);
+        }
+        QuestionPreflightService.PreflightResult result = questionPreflightService.check(request);
+        if (!result.ready()) {
+            String reason = result.checks().stream().filter(check -> !check.passed())
+                    .map(QuestionPreflightService.Check::detail).findFirst().orElse("请先完成图像题验题");
+            throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "图像题发布前验题未通过：" + reason);
+        }
     }
 
     @Operation(summary = "命题人更新题目")

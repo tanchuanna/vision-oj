@@ -19,4 +19,5 @@ public class VisionAnnotationVO {
     private String ocrText;
     @JsonProperty("image_analysis")
     private Map<String, Object> imageAnalysis;
+    private Map<String, Object> quality;
 }

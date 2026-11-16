@@ -41,6 +41,7 @@ public class QuestionAddRequest implements Serializable {
     private String generationModel;
 
     private Integer countTolerance = 0;
+    private java.util.Map<String, Object> qualityReview;
 
     /**
      * 标签列表

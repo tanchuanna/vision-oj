@@ -1,6 +1,9 @@
 package com.spingbootinit.model.entity;
 
-import com.baomidou.mybatisplus.annotation.*;
+import com.baomidou.mybatisplus.annotation.IdType;
+import com.baomidou.mybatisplus.annotation.TableField;
+import com.baomidou.mybatisplus.annotation.TableId;
+import com.baomidou.mybatisplus.annotation.TableName;
 import com.baomidou.mybatisplus.extension.handlers.JacksonTypeHandler;
 import com.spingbootinit.model.dto.question.JudgeCase;
 import com.spingbootinit.model.dto.question.JudgeConfig;
@@ -56,6 +59,10 @@ public class Question extends BaseEntity implements Serializable {
      * 目标计数判题时允许的单类数量误差
      */
     private Integer countTolerance;
+
+    /** 教师对图像质量提醒的确认记录；仅管理员可见。 */
+    @TableField(typeHandler = JacksonTypeHandler.class)
+    private java.util.Map<String, Object> qualityReview;
 
     /**
      * 标签列表（json 数组）

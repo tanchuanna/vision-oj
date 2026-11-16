@@ -1,7 +1,8 @@
 spring:
   config:
-    # Load ignored, machine-specific credentials when running from the module directory.
-    import: optional:file:./application-local.yml
+    # Load ignored, machine-specific credentials whether the JVM working directory
+    # is the module directory (spingboot-init) or the repository root.
+    import: optional:file:./application-local.yml,optional:file:./spingboot-init/application-local.yml
   datasource:
     url: ${MYSQL_URL:jdbc:mysql://127.0.0.1:3306/test?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
     username: ${MYSQL_USER:root}

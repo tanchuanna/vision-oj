@@ -111,6 +111,7 @@ type VisionAnnotation = {
   boxes?: VisionBox[]
   inferenceMs?: number
   ocr_text?: string
+  quality?: { version: string; brightness: number; sharpness: number; warnings: string[] }
   image_analysis?: Record<string, number | string>
 }
 type StructuredProblem = {
@@ -179,11 +180,43 @@ const VISION_MODELS = [
   {
     value: 'OPENCV_ANALYSIS',
     label: '图像属性分析',
-    description: 'OpenCV + Pillow',
+    description: 'Pillow + NumPy；OpenCV 检查图片质量',
     tasks: ['IMAGE_ANALYSIS'],
   },
 ] as const
 const visionAnnotation = ref<VisionAnnotation | null>(null)
+const qualityReports = ref<Record<string, NonNullable<VisionAnnotation['quality']>>>({})
+const qualityAccepted = ref(false)
+const qualityNote = ref('')
+const activeQualityWarnings = computed(() =>
+  (form.value.judgeCase || []).flatMap(
+    (item) => qualityReports.value[item.input || '']?.warnings || [],
+  ),
+)
+function rememberQuality(url: string, annotation: VisionAnnotation) {
+  if (!annotation.quality) return
+  qualityReports.value[url] = annotation.quality
+  if (annotation.quality.warnings.length) qualityAccepted.value = false
+}
+async function inspectQuality(url: string) {
+  try {
+    const token = getToken()
+    const response = await axios.post<{
+      code?: number
+      data?: NonNullable<VisionAnnotation['quality']>
+    }>(
+      `${API_BASE_URL}/vision/quality`,
+      { imageUrl: url },
+      { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+    )
+    if (isResultSuccess(response.data.code) && response.data.data) {
+      rememberQuality(url, { quality: response.data.data })
+      visionAnnotation.value = { quality: response.data.data }
+    }
+  } catch (error) {
+    Message.warning(getBackendErrorMessage(error, '图片已上传，但质量检查暂不可用'))
+  }
+}
 const tagInput = ref('')
 const tags = ref<string[]>([])
 const activeStep = ref<'basic' | 'content' | 'answer' | 'judge'>('basic')
@@ -335,6 +368,9 @@ function validate(): boolean {
   if (form.value.questionType?.startsWith('IMAGE_') && !form.value.imageUrl?.trim()) {
     return (Message.warning('请上传或填写图像题题图'), false)
   }
+  if (activeQualityWarnings.value.length && (!qualityAccepted.value || !qualityNote.value.trim())) {
+    return (Message.warning('图片质量有提醒，请确认并填写继续使用的原因'), false)
+  }
   if (form.value.questionType?.startsWith('IMAGE_')) {
     const cases = form.value.judgeCase || []
     const uniqueImages = new Set(cases.map((item) => item.input?.trim()).filter(Boolean))
@@ -396,6 +432,11 @@ async function uploadQuestionImage(event: Event) {
       return
     }
     form.value.imageUrl = res.data.data
+    form.value.qualityReview = undefined
+    qualityReports.value = {}
+    qualityAccepted.value = false
+    qualityNote.value = ''
+    await inspectQuality(res.data.data)
     form.value.judgeCase = []
     generatedPreview.value = null
     generationPending.value = false
@@ -442,6 +483,7 @@ async function annotateImage(imageUrl: string): Promise<VisionAnnotation> {
   )
   if (!isResultSuccess(res.data.code) || !res.data.data)
     throw new Error(res.data.message || '图片识别失败')
+  rememberQuality(imageUrl, res.data.data)
   return res.data.data
 }
 
@@ -647,6 +689,7 @@ async function detectObjects() {
       return
     }
     visionAnnotation.value = res.data.data
+    rememberQuality(imageUrl, res.data.data)
     const counts = res.data.data.counts || {}
     const hiddenUrls = (form.value.judgeCase || [])
       .filter((item) => item.sample !== true && item.input?.trim() !== imageUrl)
@@ -708,6 +751,7 @@ async function generateVisionProblemImage() {
       throw new Error('请先在账户设置的图片模型页配置该厂商密钥')
     const url = await requestGeneratedImage(prompt, source, modelId)
     generatedPreview.value = { url, prompt, source, modelId }
+    await inspectQuality(url)
     Message.success('预览图已生成，确认满意后再生成隐藏用例')
   } catch (error) {
     const message = getBackendErrorMessage(
@@ -1004,6 +1048,7 @@ function fillVisionProblem(annotation: VisionAnnotation, imageUrl: string) {
     timeLimit: 60_000,
     memoryLimit: 1_572_864,
     stackLimit: 65_536,
+    analysisVersion: type === 'IMAGE_ANALYSIS' ? 2 : undefined,
   }
   tags.value = tags.value.filter(
     (tag) => !(PROBLEM_DIFFICULTIES as readonly string[]).includes(tag),
@@ -1020,19 +1065,73 @@ function buildGenericVisionStatement(task: string, output: string): string {
 function buildClassificationAnswer(): string {
   const path =
     form.value.visionModelKey === 'YOLO_HELMET' ? '/models/hard-hat-best.pt' : '/models/yolov8n.pt'
-  return `读取图片后使用 \`${path}\` 推理，选择置信度最高检测框对应的英文类别并输出。`
+  return `选择置信度最高目标的英文类别；没有目标时输出 unknown。\n\n\`\`\`python
+import contextlib
+import io
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    from ultralytics import YOLO
+image_path = input().strip()
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    result = YOLO("${path}").predict(image_path, conf=0.25, iou=0.7, verbose=False)[0]
+if result.boxes is None or len(result.boxes) == 0:
+    print("unknown")
+else:
+    best = int(result.boxes.conf.argmax())
+    print(str(result.names[int(result.boxes.cls[best])]).lower())
+\`\`\``
 }
 
 function buildDetectionAnswer(): string {
-  return '使用 YOLOv8 获取 `boxes.xyxy` 与类别，分别除以图片宽高转换为归一化坐标，按 JSON 数组输出。判题使用类别匹配和 IoU。'
+  const path =
+    form.value.visionModelKey === 'YOLO_HELMET' ? '/models/hard-hat-best.pt' : '/models/yolov8n.pt'
+  return `使用 YOLOv8 输出归一化检测框。\n\n\`\`\`python
+import contextlib
+import io
+import json
+from PIL import Image
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    from ultralytics import YOLO
+image_path = input().strip()
+width, height = Image.open(image_path).size
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    result = YOLO("${path}").predict(image_path, conf=0.25, iou=0.7, verbose=False)[0]
+boxes = []
+if result.boxes is not None:
+    for xyxy, class_id in zip(result.boxes.xyxy.tolist(), result.boxes.cls.tolist()):
+        x1, y1, x2, y2 = xyxy
+        boxes.append({"label": str(result.names[int(class_id)]).lower(), "x1": round(x1 / width, 6), "y1": round(y1 / height, 6), "x2": round(x2 / width, 6), "y2": round(y2 / height, 6)})
+print(json.dumps(boxes))
+\`\`\``
 }
 
 function buildOcrAnswer(): string {
-  return '使用 EasyOCR 的中英文模型读取图片，按阅读顺序合并识别文本后输出。判题忽略空白和标点，并允许少量编辑距离。'
+  return `使用 EasyOCR 中英文模型识别并合并文本。\n\n\`\`\`python
+import contextlib
+import io
+import numpy as np
+from PIL import Image
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    import easyocr
+image_path = input().strip()
+with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+    reader = easyocr.Reader(["ch_sim", "en"], gpu=False)
+    lines = reader.readtext(np.asarray(Image.open(image_path).convert("RGB")), detail=0, paragraph=True)
+print(" ".join(str(line).strip() for line in lines if str(line).strip()) or "未识别到文字")
+\`\`\``
 }
 
 function buildAnalysisAnswer(): string {
-  return '使用 Pillow 读取宽高与颜色模式，转灰度后通过 NumPy 计算平均灰度；相邻像素梯度绝对值均值之和作为边缘强度。'
+  return `用 Pillow 与 NumPy 计算与识别服务一致的属性。\n\n\`\`\`python
+from PIL import Image
+import numpy as np
+import json
+image = Image.open(input().strip()).convert("RGB")
+width, height = image.size
+gray = np.asarray(image.convert("L"), dtype=np.float32)
+gx = np.abs(np.diff(gray, axis=1)).mean() if width > 1 else 0.0
+gy = np.abs(np.diff(gray, axis=0)).mean() if height > 1 else 0.0
+print(json.dumps({"width": width, "height": height, "mode": "RGB", "mean_gray": round(float(gray.mean()), 2), "edge_strength": round(float(gx + gy), 2)}))
+\`\`\``
 }
 
 function boxStyle(box: VisionBox) {
@@ -1073,6 +1172,7 @@ async function loadQuestionForEdit() {
       imageUrl: item.imageUrl || '',
       visionModelKey: item.visionModelKey || 'YOLO_GENERAL',
       countTolerance: item.countTolerance ?? 0,
+      qualityReview: item.qualityReview,
       judgeCase: item.judgeCase?.length
         ? item.judgeCase.map((c: Record<string, unknown>, index: number) => ({
             ...c,
@@ -1083,6 +1183,8 @@ async function loadQuestionForEdit() {
       tags: item.tags || [],
     }
     tags.value = Array.isArray(item.tags) ? item.tags : []
+    qualityAccepted.value = Boolean(item.qualityReview?.accepted)
+    qualityNote.value = String(item.qualityReview?.reason || '')
     const generation = item as typeof item & { generationSource?: string; generationModel?: string }
     imageGenerationSource.value = generation.generationSource || ''
     imageGenerationModel.value = generation.generationModel || ''
@@ -1117,6 +1219,21 @@ function buildProblemPayload(): QuestionAddRequest & {
     content: normalizeOjStatement(form.value.content || '').trim(),
     answer: form.value.answer?.trim(),
     tags: [...tags.value],
+    qualityReview:
+      form.value.questionType?.startsWith('IMAGE_') && Object.keys(qualityReports.value).length
+        ? {
+            version: 'opencv-quality-v1',
+            reports: Object.fromEntries(
+              (form.value.judgeCase || [])
+                .filter((item) => Boolean(qualityReports.value[item.input || '']))
+                .map((item) => [item.input, qualityReports.value[item.input || '']]),
+            ),
+            accepted: qualityAccepted.value,
+            reason: qualityNote.value.trim(),
+          }
+        : form.value.questionType?.startsWith('IMAGE_')
+          ? form.value.qualityReview
+          : undefined,
     judgeCase: (form.value.judgeCase || []).map((c) => ({
       input: c.input?.trim() || '',
       output: c.output?.trim() || '',
@@ -1191,6 +1308,7 @@ async function submitProblem() {
         generationModel: (payload as QuestionAddRequest & { generationModel?: string })
           .generationModel,
         countTolerance: payload.countTolerance ?? 0,
+        qualityReview: payload.qualityReview,
         tags: payload.tags ?? [],
         judgeCase: payload.judgeCase ?? [],
         judgeConfig: payload.judgeConfig ?? {
@@ -1708,9 +1826,7 @@ watch(
                         >
                         <small v-else-if="selectedImageProvider"
                           >使用个人
-                          {{
-                            selectedImageProvider.name
-                          }}
+                          {{ selectedImageProvider.name }}
                           Key；完整出题需生成三张图片，可能产生三次费用。</small
                         >
                       </div>
@@ -1839,6 +1955,31 @@ watch(
                         <span v-for="(value, key) in visionAnnotation.image_analysis" :key="key"
                           >{{ key }}: {{ value }}</span
                         >
+                      </div>
+                      <p v-if="visionAnnotation.quality">
+                        <strong>OpenCV 图片质量：</strong>亮度
+                        {{ visionAnnotation.quality.brightness }}，清晰度
+                        {{ visionAnnotation.quality.sharpness }}。
+                        {{
+                          visionAnnotation.quality.warnings.length
+                            ? visionAnnotation.quality.warnings.join('；') +
+                              '。请人工核对后再发布。'
+                            : '未发现明显质量问题，仍需人工核对。'
+                        }}
+                      </p>
+                      <div v-if="activeQualityWarnings.length" class="quality-review">
+                        <strong>图片质量提醒</strong>
+                        <p>{{ [...new Set(activeQualityWarnings)].join('；') }}</p>
+                        <label
+                          ><input v-model="qualityAccepted" type="checkbox" />
+                          我已核对公开图与隐藏图，确认继续使用</label
+                        >
+                        <textarea
+                          v-model="qualityNote"
+                          rows="2"
+                          maxlength="200"
+                          placeholder="填写继续使用的原因，例如：低光场景是本题刻意设计的条件"
+                        />
                       </div>
                       <div class="vision-autofill-list">
                         <span>✓ 题目标题</span><span>✓ 题型与分类</span><span>✓ 完整题面</span>
@@ -3495,6 +3636,28 @@ watch(
 
 .vision-result__chips {
   margin-top: 8px;
+}
+.quality-review {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, #f59e0b 50%, var(--app-border));
+  border-radius: 12px;
+  background: color-mix(in srgb, #f59e0b 8%, var(--app-surface));
+}
+.quality-review label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px 0;
+}
+.quality-review textarea {
+  width: 100%;
+  padding: 9px;
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  resize: vertical;
 }
 
 .vision-result p {

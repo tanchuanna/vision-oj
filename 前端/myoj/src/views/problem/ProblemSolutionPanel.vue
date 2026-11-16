@@ -873,7 +873,7 @@ onMounted(load)
   inset: 0;
   overflow: auto;
   padding: 20px;
-  background: var(--app-surface);
+  background: var(--app-bg);
 }
 .solution-detail > header {
   justify-content: space-between;

@@ -50,6 +50,13 @@ public class VisionAnnotationController {
         return Result.success(imageGenerationService.generate(request, userId));
     }
 
+    @PostMapping("/quality")
+    @Operation(summary = "使用 OpenCV 检查题图清晰度和曝光")
+    public Result<java.util.Map<String, Object>> quality(@Valid @RequestBody VisionAnnotateRequest request) {
+        requireAuthor();
+        return Result.success(visionAnnotationService.quality(request));
+    }
+
     @GetMapping("/generation-models")
     public Result<java.util.Map<String, Object>> generationModels() {
         requireAuthor();

@@ -2,8 +2,9 @@
 /* istanbul ignore file */
 /* tslint:disable */
 /* eslint-disable */
-import type { JudgeCase } from './JudgeCase';
-import type { JudgeConfig } from './JudgeConfig';
+import type { JudgeCase } from './JudgeCase'
+import type { JudgeConfig } from './JudgeConfig'
+
 export type QuestionUpdateRequest = {
     id: string;
     title: string;
@@ -12,6 +13,7 @@ export type QuestionUpdateRequest = {
     imageUrl?: string;
     visionModelKey?: string;
     countTolerance?: number;
+    qualityReview?: Record<string, unknown>;
     tags: Array<string>;
     answer: string;
     judgeCase: Array<JudgeCase>;

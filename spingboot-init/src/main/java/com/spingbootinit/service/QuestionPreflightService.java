@@ -7,8 +7,8 @@ import com.spingbootinit.judo.codesandbox.CodeSandboxFactory;
 import com.spingbootinit.judo.codesandbox.CodeSandboxProxy;
 import com.spingbootinit.judo.codesandbox.model.ExecuteCodeRequest;
 import com.spingbootinit.judo.codesandbox.model.ExecuteCodeResponse;
-import com.spingbootinit.judo.strategy.ObjectCountJudgeStrategy;
 import com.spingbootinit.judo.strategy.ImageOutputJudgeStrategy;
+import com.spingbootinit.judo.strategy.ObjectCountJudgeStrategy;
 import com.spingbootinit.model.dto.question.JudgeCase;
 import com.spingbootinit.model.dto.question.QuestionAddRequest;
 import com.spingbootinit.model.entity.Question;
@@ -79,7 +79,7 @@ public class QuestionPreflightService {
                 int mismatch = -1;
                 for (int i = 0; i < cases.size(); i++) {
                     if (!matchesReference(question.getQuestionType(), cases.get(i).getOutput(), outputs.get(i),
-                            question.getCountTolerance() == null ? 0 : question.getCountTolerance())) {
+                            question.getCountTolerance() == null ? 0 : question.getCountTolerance(), question.getJudgeConfig())) {
                         mismatch = i + 1;
                         break;
                     }
@@ -95,9 +95,13 @@ public class QuestionPreflightService {
     }
 
     static boolean matchesReference(String type, String expected, String actual, int tolerance) {
+        return matchesReference(type, expected, actual, tolerance, null);
+    }
+
+    static boolean matchesReference(String type, String expected, String actual, int tolerance, com.spingbootinit.model.dto.question.JudgeConfig config) {
         return "IMAGE_OBJECT_COUNT".equals(type)
                 ? ObjectCountJudgeStrategy.outputsMatch(expected, actual, tolerance)
-                : ImageOutputJudgeStrategy.outputsMatch(type, expected, actual, tolerance);
+                : ImageOutputJudgeStrategy.outputsMatch(type, expected, actual, tolerance, config);
     }
 
     static boolean hasDifferentCountAnswer(List<JudgeCase> cases) {

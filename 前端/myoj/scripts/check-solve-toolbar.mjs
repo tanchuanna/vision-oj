@@ -3,6 +3,7 @@ import path from 'node:path'
 
 const file = path.resolve('src/views/problem/ProblemSolveView.vue')
 const source = fs.readFileSync(file, 'utf8')
+const normalizedSource = source.replace(/>\s+/g, '>').replace(/\s+<\/button>/g, '</button>')
 const appSource = fs.readFileSync(path.resolve('src/App.vue'), 'utf8')
 const layoutSource = fs.readFileSync(path.resolve('src/layouts/AppLayout.vue'), 'utf8')
 
@@ -19,7 +20,7 @@ const checks = [
 ]
 
 for (const [name, marker] of checks) {
-  if (!source.includes(marker)) throw new Error(`做题页编辑器设置缺少：${name}`)
+  if (!normalizedSource.includes(marker)) throw new Error(`做题页编辑器设置缺少：${name}`)
 }
 
 if (source.includes('<details class="editor-settings-menu"')) {
@@ -38,7 +39,7 @@ if (!source.includes('height: calc(100dvh - var(--app-header-height))')) {
   throw new Error('做题工作台没有按真实导航高度填满视口')
 }
 
-if (!source.includes('max-height: none;') || !source.includes('.problem-panel, .answer-panel')) {
+if (!source.includes('max-height: none;') || !/\.problem-panel,\s*\.answer-panel/.test(source)) {
   throw new Error('做题工作台仍可能被旧版面板最大高度截短并在底部留空')
 }
 

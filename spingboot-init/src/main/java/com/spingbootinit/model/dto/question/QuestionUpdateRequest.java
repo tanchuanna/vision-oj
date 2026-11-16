@@ -33,6 +33,7 @@ public class QuestionUpdateRequest {
     private String generationModel;
 
     private Integer countTolerance = 0;
+    private java.util.Map<String, Object> qualityReview;
 
     @NotEmpty(message = "标签不能为空")
     private List<@NotBlank(message = "标签不能为空") String> tags;
