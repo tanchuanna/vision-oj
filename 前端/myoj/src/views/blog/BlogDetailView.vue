@@ -2,8 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
-import { Service } from '@generated'
 import type { BlogPostDetailVO } from '@generated'
+import { Service } from '@generated'
 import { mapApiError } from '@/api/mapApiError'
 import { isResultSuccess } from '@/api/result'
 import { useAuthStore } from '@/stores/auth'
@@ -11,10 +11,13 @@ import { resolveMediaUrl } from '@/utils/resolveMediaUrl'
 import BlogCyberShell from '@/components/blog/BlogCyberShell.vue'
 import BlogMarkdown from '@/components/blog/BlogMarkdown.vue'
 import BlogCommentSection from '@/components/blog/BlogCommentSection.vue'
+import { pendingBlogId, pendingBlogTitle } from '@/composables/blogSharedTransition'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
+const transitionPreviewTitle =
+  pendingBlogId.value === String(route.params.id || '') ? pendingBlogTitle.value : ''
 
 const loading = ref(true)
 const post = ref<BlogPostDetailVO | null>(null)
@@ -102,77 +105,84 @@ onMounted(() => {
 <template>
   <BlogCyberShell>
     <div class="blog-read">
-    <div class="blog-read__wrap">
-      <nav class="blog-read__crumb">
-        <RouterLink :to="{ name: 'blog' }" class="blog-read__crumb-link blog-magnetic">博客</RouterLink>
-        <span class="blog-read__crumb-sep">/</span>
-        <span class="blog-read__crumb-current">{{ post?.title || '文章' }}</span>
-      </nav>
+      <div class="blog-read__wrap">
+        <nav class="blog-read__crumb">
+          <RouterLink :to="{ name: 'blog' }" class="blog-read__crumb-link blog-magnetic"
+            >博客</RouterLink
+          >
+          <span class="blog-read__crumb-sep">/</span>
+          <span class="blog-read__crumb-current">{{ post?.title || '文章' }}</span>
+        </nav>
 
-      <div v-if="loading" class="blog-read__panel panel blog-read__loading">
-        <p>载入叙事中…</p>
-      </div>
+        <div v-if="loading" class="blog-read__panel panel blog-read__loading">
+          <h1 v-if="transitionPreviewTitle" class="blog-read__title blog-read__transition-title">
+            {{ transitionPreviewTitle }}
+          </h1>
+          <p>载入叙事中…</p>
+        </div>
 
-      <article v-else-if="post" class="blog-read__panel panel">
-        <header class="blog-read__head">
-          <h1 class="blog-read__title">{{ post.title }}</h1>
-          <div class="blog-read__meta">
-            <div class="blog-read__author">
-              <img
-                v-if="post.authorAvatar && resolveMediaUrl(post.authorAvatar)"
-                :src="resolveMediaUrl(post.authorAvatar)"
-                alt=""
-                class="blog-read__avatar"
-              />
-              <span v-else class="blog-read__avatar blog-read__avatar--letter">{{
-                (post.authorName || 'U').slice(0, 1)
-              }}</span>
-              <div>
-                <p class="blog-read__name">{{ post.authorName || '作者' }}</p>
-                <p class="blog-read__sub">
-                  <time :datetime="post.publishedAt">{{ formatDateTime(post.publishedAt) }}</time>
-                  <span class="blog-read__dot">·</span>
-                  <span>阅读 {{ post.viewCount ?? 0 }}</span>
-                </p>
+        <article v-else-if="post" class="blog-read__panel panel">
+          <header class="blog-read__head">
+            <h1 class="blog-read__title">{{ post.title }}</h1>
+            <div class="blog-read__meta">
+              <div class="blog-read__author">
+                <img
+                  v-if="post.authorAvatar && resolveMediaUrl(post.authorAvatar)"
+                  :src="resolveMediaUrl(post.authorAvatar)"
+                  alt=""
+                  class="blog-read__avatar"
+                />
+                <span v-else class="blog-read__avatar blog-read__avatar--letter">{{
+                  (post.authorName || 'U').slice(0, 1)
+                }}</span>
+                <div>
+                  <p class="blog-read__name">{{ post.authorName || '作者' }}</p>
+                  <p class="blog-read__sub">
+                    <time :datetime="post.publishedAt">{{ formatDateTime(post.publishedAt) }}</time>
+                    <span class="blog-read__dot">·</span>
+                    <span>阅读 {{ post.viewCount ?? 0 }}</span>
+                  </p>
+                </div>
+              </div>
+              <div class="blog-read__actions">
+                <button
+                  type="button"
+                  class="like-btn blog-magnetic"
+                  :class="{ 'like-btn--on': post.liked }"
+                  :disabled="likeBusy"
+                  @click="onToggleLike"
+                >
+                  <span aria-hidden="true">{{ post.liked ? '♥' : '♡' }}</span>
+                  {{ post.liked ? '已赞' : '点赞' }}
+                  <span class="like-btn__cnt">{{ post.likeCount ?? 0 }}</span>
+                </button>
               </div>
             </div>
-            <div class="blog-read__actions">
-              <button
-                type="button"
-                class="like-btn blog-magnetic"
-                :class="{ 'like-btn--on': post.liked }"
-                :disabled="likeBusy"
-                @click="onToggleLike"
-              >
-                <span aria-hidden="true">{{ post.liked ? '♥' : '♡' }}</span>
-                {{ post.liked ? '已赞' : '点赞' }}
-                <span class="like-btn__cnt">{{ post.likeCount ?? 0 }}</span>
-              </button>
+            <div v-if="post.tags?.length" class="blog-read__tags">
+              <span v-for="t in post.tags" :key="t" class="blog-read__tag">{{ t }}</span>
             </div>
+          </header>
+
+          <div v-if="post.coverUrl && resolveMediaUrl(post.coverUrl)" class="blog-read__cover-wrap">
+            <img :src="resolveMediaUrl(post.coverUrl)" alt="" class="blog-read__cover" />
           </div>
-          <div v-if="post.tags?.length" class="blog-read__tags">
-            <span v-for="t in post.tags" :key="t" class="blog-read__tag">{{ t }}</span>
+
+          <p v-if="post.summary" class="blog-read__summary">{{ post.summary }}</p>
+
+          <div class="blog-read__content">
+            <BlogMarkdown :source="post.content ?? ''" />
           </div>
-        </header>
 
-        <div v-if="post.coverUrl && resolveMediaUrl(post.coverUrl)" class="blog-read__cover-wrap">
-          <img :src="resolveMediaUrl(post.coverUrl)" alt="" class="blog-read__cover" />
+          <BlogCommentSection v-if="post.id" :post-id="String(post.id)" />
+        </article>
+
+        <div v-else class="blog-read__panel panel blog-read__empty">
+          <p>未能加载这篇文章。</p>
+          <RouterLink :to="{ name: 'blog' }" class="blog-read__back blog-magnetic"
+            >返回博客首页</RouterLink
+          >
         </div>
-
-        <p v-if="post.summary" class="blog-read__summary">{{ post.summary }}</p>
-
-        <div class="blog-read__content">
-          <BlogMarkdown :source="post.content ?? ''" />
-        </div>
-
-        <BlogCommentSection v-if="post.id" :post-id="String(post.id)" />
-      </article>
-
-      <div v-else class="blog-read__panel panel blog-read__empty">
-        <p>未能加载这篇文章。</p>
-        <RouterLink :to="{ name: 'blog' }" class="blog-read__back blog-magnetic">返回博客首页</RouterLink>
       </div>
-    </div>
     </div>
   </BlogCyberShell>
 </template>

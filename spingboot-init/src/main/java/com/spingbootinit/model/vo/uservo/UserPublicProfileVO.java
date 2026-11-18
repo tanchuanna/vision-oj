@@ -36,4 +36,26 @@ public class UserPublicProfileVO {
     private Integer status;
 
     private String userRole;
+
+    /** 积分（签到等行为累计） */
+    private Integer points;
+
+    /** 累计签到天数 */
+    private Integer checkInCount;
+
+    /** 注册时间 */
+    @JsonFormat(pattern = "yyyy-MM-dd", timezone = "GMT+8")
+    private Date createTime;
+
+    /** 通过（AC）题目数（去重） */
+    private Long solvedCount;
+
+    /** 累计提交次数 */
+    private Long submitCount;
+
+    /** 学生的指导老师昵称列表 */
+    private List<String> teacherNames;
+
+    /** 老师名下的学生数 */
+    private Long studentCount;
 }

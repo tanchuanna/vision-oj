@@ -2,131 +2,210 @@
 import { computed, inject, ref } from 'vue'
 import { LAYOUT_THEME_KEY } from '@/config/theme-injection'
 import { useScrollReveal } from '@/composables/useScrollReveal'
+import HomeIntro from '@/components/home/HomeIntro.vue'
+import { localize as l } from '@/i18n/locale'
 
 /** 首页：首屏 + 快捷入口 + 功能说明；浅色用 .home-landing--light */
 const layoutTheme = inject(LAYOUT_THEME_KEY, null)
-const themeLight = computed(() =>
-  layoutTheme ? layoutTheme.value === 'light' : true,
-)
+const themeLight = computed(() => (layoutTheme ? layoutTheme.value === 'light' : true))
 
-const quickLinks = [
-  { to: '/problems', title: '题库', desc: '按难度、标签筛选', glyph: '◈', tone: 0 },
-  { to: '/contests', title: '比赛', desc: '报名参赛、看榜单', glyph: '◇', tone: 1 },
-  { to: '/rankings', title: '排行榜', desc: '积分与排名', glyph: '▤', tone: 2 },
-  { to: '/submissions', title: '提交记录', desc: '评测结果与耗时', glyph: '▸', tone: 3 },
-] as const
-
-const featurePillars = [
+const quickLinks = computed(() => [
   {
-    tag: '题库',
-    title: '按标签和难度找题',
-    body: '支持筛选、题单；每道题能看到自己的 AC / WA 等状态。',
-    points: ['难度、标签', '题单', '提交状态'],
+    to: '/problems',
+    title: l('题库', 'Problems'),
+    desc: l('按难度、标签筛选', 'Filter by difficulty and tag'),
+    glyph: '◈',
+    tone: 0,
+  },
+  {
+    to: '/contests',
+    title: l('比赛', 'Contests'),
+    desc: l('报名参赛、看榜单', 'Join contests and view standings'),
+    glyph: '◇',
+    tone: 1,
+  },
+  {
+    to: '/rankings',
+    title: l('排行榜', 'Leaderboard'),
+    desc: l('积分与排名', 'Points and rankings'),
+    glyph: '▤',
+    tone: 2,
+  },
+  {
+    to: '/submissions',
+    title: l('提交记录', 'Submissions'),
+    desc: l('评测结果与耗时', 'Results and runtime'),
+    glyph: '▸',
+    tone: 3,
+  },
+])
+
+const featurePillars = computed(() => [
+  {
+    tag: l('题库', 'Problems'),
+    title: l('按标签和难度找题', 'Find problems by tag and difficulty'),
+    body: l(
+      '支持筛选、题单；每道题能看到自己的 AC / WA 等状态。',
+      'Filter problems, follow lists, and see your AC / WA status.',
+    ),
+    points: [
+      l('难度、标签', 'Difficulty and tags'),
+      l('题单', 'Problem lists'),
+      l('提交状态', 'Submission status'),
+    ],
     tone: 'a' as const,
   },
   {
-    tag: '比赛',
-    title: '限时赛与榜单',
-    body: '比赛期间提交计入排名，结束后可回看榜单和题目。',
-    points: ['比赛列表', '实时/赛后榜单', '积分规则'],
+    tag: l('比赛', 'Contests'),
+    title: l('限时赛与榜单', 'Timed contests and standings'),
+    body: l(
+      '比赛期间提交计入排名，结束后可回看榜单和题目。',
+      'Contest submissions affect rankings; review problems and standings afterward.',
+    ),
+    points: [
+      l('比赛列表', 'Contests'),
+      l('实时/赛后榜单', 'Live and final standings'),
+      l('积分规则', 'Scoring rules'),
+    ],
     tone: 'b' as const,
   },
   {
-    tag: '记录',
-    title: '提交与签到',
-    body: '提交历史可查评测详情；签到和积分在站内展示。',
-    points: ['提交记录', '签到日历', '排行榜'],
+    tag: l('记录', 'Progress'),
+    title: l('提交与签到', 'Submissions and check-ins'),
+    body: l(
+      '提交历史可查评测详情；签到和积分在站内展示。',
+      'Review judging details, check-ins and points.',
+    ),
+    points: [
+      l('提交记录', 'Submissions'),
+      l('签到日历', 'Check-in calendar'),
+      l('排行榜', 'Leaderboard'),
+    ],
     tone: 'c' as const,
   },
-] as const
+])
 
-const platformAdvantages = [
+const platformAdvantages = computed(() => [
   {
     icon: '⚡',
-    title: 'Docker 沙箱判题',
-    desc: 'Java / Python / C++ 在容器里编译运行，限制时间与内存。',
+    title: l('Docker 沙箱判题', 'Containerized judging'),
+    desc: l(
+      'Java / Python / C++ 在容器里编译运行，限制时间与内存。',
+      'Java, Python and C++ run in containers with time and memory limits.',
+    ),
   },
   {
     icon: '◆',
-    title: '提交详情',
-    desc: '展示 AC、WA、TLE 等状态，以及耗时、内存。',
+    title: l('提交详情', 'Submission details'),
+    desc: l(
+      '展示 AC、WA、TLE 等状态，以及耗时、内存。',
+      'See AC, WA, TLE, runtime and memory usage.',
+    ),
   },
   {
     icon: '◇',
-    title: '用户与管理员',
-    desc: '普通用户做题、参赛；管理员维护题目和比赛。',
+    title: l('用户与管理员', 'Roles and access'),
+    desc: l(
+      '普通用户做题、参赛；管理员维护题目和比赛。',
+      'Students solve problems; staff manage problems and contests.',
+    ),
   },
   {
     icon: '✦',
-    title: '前后端分离',
-    desc: 'Vue 前端 + Spring Boot API，判题服务单独部署。',
+    title: l('前后端分离', 'Separate services'),
+    desc: l(
+      'Vue 前端 + Spring Boot API，判题服务单独部署。',
+      'Vue frontend, Spring Boot API and a separate judging service.',
+    ),
   },
-] as const
+])
 
-const highlightStats = [
-  { num: '15+', label: '内置示例题', sub: 'schema 初始化自带' },
-  { num: '3', label: '支持语言', sub: 'Java / Python / C++' },
-  { num: 'SSE', label: '站内通知', sub: '提交结果推送' },
-  { num: 'JWT', label: '登录态', sub: 'Redis 会话' },
-] as const
-
-const trainingSteps = [
+const trainingSteps = computed(() => [
   {
     step: '01',
-    title: '选题',
-    body: '在题库按难度或标签找题，也可以跟题单练。',
-    hint: '题库',
+    title: l('选题', 'Choose a problem'),
+    body: l(
+      '在题库按难度或标签找题，也可以跟题单练。',
+      'Filter by difficulty or tags, or follow a problem list.',
+    ),
+    hint: l('题库', 'Problems'),
   },
   {
     step: '02',
-    title: '提交',
-    body: '在线编辑器写代码，样例运行或正式提交，等评测结果。',
-    hint: '做题页',
+    title: l('提交', 'Submit'),
+    body: l(
+      '在线编辑器写代码，样例运行或正式提交，等评测结果。',
+      'Write code, run samples, then submit for judging.',
+    ),
+    hint: l('做题页', 'Workspace'),
   },
   {
     step: '03',
-    title: '比赛',
-    body: '报名参加限时赛，在榜单里看自己和别人的排名。',
-    hint: '比赛',
+    title: l('比赛', 'Compete'),
+    body: l(
+      '报名参加限时赛，在榜单里看自己和别人的排名。',
+      'Join a timed contest and view the standings.',
+    ),
+    hint: l('比赛', 'Contests'),
   },
-] as const
+])
 
-const judgeSteps = [
-  { title: '接收提交', body: '保存代码、语言和时间。' },
-  { title: '编译', body: '在沙箱里编译，受 CPU/内存限制。' },
-  { title: '跑测例', body: '逐个测例运行，比对输出。' },
-  { title: '回写结果', body: '更新 AC/WA/TLE 等状态和耗时。' },
-] as const
+const judgeSteps = computed(() => [
+  {
+    title: l('接收提交', 'Receive'),
+    body: l('保存代码、语言和时间。', 'Save the code, language and time.'),
+  },
+  {
+    title: l('编译', 'Compile'),
+    body: l('在沙箱里编译，受 CPU/内存限制。', 'Compile with CPU and memory limits.'),
+  },
+  {
+    title: l('跑测例', 'Test cases'),
+    body: l('逐个测例运行，比对输出。', 'Run test cases and compare output.'),
+  },
+  {
+    title: l('回写结果', 'Report result'),
+    body: l('更新 AC/WA/TLE 等状态和耗时。', 'Update verdict and runtime.'),
+  },
+])
 
-const useScenarios = [
+const useScenarios = computed(() => [
   {
     icon: '🎓',
-    title: '课程作业',
-    desc: '老师出题、学生在线提交，平台负责判题和统计。',
+    title: l('课程作业', 'Coursework'),
+    desc: l(
+      '老师出题、学生在线提交，平台负责判题和统计。',
+      'Teachers create problems; students submit online.',
+    ),
   },
   {
     icon: '⛺',
-    title: '校赛 / 集训',
-    desc: '按比赛时间开放题目，结束后看榜单。',
+    title: l('校赛 / 集训', 'Campus contests'),
+    desc: l(
+      '按比赛时间开放题目，结束后看榜单。',
+      'Problems open on schedule; review standings afterward.',
+    ),
   },
   {
     icon: '🧑‍💻',
-    title: '个人刷题',
-    desc: '平时练题、看提交记录和排行榜。',
+    title: l('个人刷题', 'Solo practice'),
+    desc: l('平时练题、看提交记录和排行榜。', 'Practice and review submissions and rankings.'),
   },
   {
     icon: '🏢',
-    title: '机试练习',
-    desc: '限时做题，提交记录可回看。',
+    title: l('机试练习', 'Coding tests'),
+    desc: l('限时做题，提交记录可回看。', 'Solve under a time limit and review submissions.'),
   },
-] as const
+])
 
 const landingRef = ref<HTMLElement | null>(null)
+const introReplayKey = ref(0)
 useScrollReveal(landingRef)
 </script>
 
 <template>
   <div ref="landingRef" class="home-landing" :class="{ 'home-landing--light': themeLight }">
+    <HomeIntro :replay-key="introReplayKey" />
     <!-- —— 全宽深色首屏（OJ 站台感） —— -->
     <section class="oj-hero">
       <div class="oj-hero-bg" aria-hidden="true">
@@ -150,37 +229,57 @@ useScrollReveal(landingRef)
         <div class="oj-hero-left">
           <p class="oj-badge hero-in hero-in--1">
             <span class="oj-badge-dot" />
-            在线评测 · 算法练习 · 自动判题
+            {{ l('算法编程 · 图像题 · 在线判题', 'Algorithms · Image problems · Online judging') }}
           </p>
           <p class="oj-slogan oj-slogan--shine hero-in hero-in--3">
-            <span class="oj-slogan__text">在线做题，</span><span class="oj-slogan__accent"
-              >自动判题。</span
-            >
+            <span class="oj-slogan__text">{{
+              l('算法题与图像题，', 'Code and image problems, ')
+            }}</span
+            ><span class="oj-slogan__accent">{{
+              l('都能在线评测。', 'judged in one place.')
+            }}</span>
           </p>
           <p class="oj-lead oj-lead--rich hero-in hero-in--4">
-            题库、比赛、提交记录和排行榜都在这一个站点里，<span class="oj-lead__gradient"
-              >适合平时刷题和校内比赛</span
-            >。
+            {{
+              l(
+                '从公开样例运行到正式提交，普通题和图像题都能在同一工作台完成。',
+                'Run public samples and submit code from the same workspace. ',
+              )
+            }}<span class="oj-lead__gradient">{{
+              l('评测结果与耗时可回看', 'Review verdicts and runtime')
+            }}</span
+            >{{ l('。', '.') }}
           </p>
 
           <div class="oj-cta hero-in hero-in--5">
-            <RouterLink to="/problems" class="oj-btn oj-btn--primary">开始做题</RouterLink>
-            <RouterLink to="/contests" class="oj-btn oj-btn--ghost">进入比赛</RouterLink>
-            <RouterLink to="/rankings" class="oj-btn oj-btn--ghost">查看榜单</RouterLink>
+            <div class="oj-cta-primary-motion">
+              <RouterLink to="/problems" class="oj-btn oj-btn--primary"
+                >{{ l('开始做题', 'Solve problems') }} →</RouterLink
+              >
+            </div>
+            <RouterLink to="/contests" class="oj-btn oj-btn--ghost">{{
+              l('进入比赛', 'Contests')
+            }}</RouterLink>
+            <RouterLink to="/rankings" class="oj-btn oj-btn--ghost">{{
+              l('查看榜单', 'Standings')
+            }}</RouterLink>
+            <button type="button" class="oj-intro-replay" @click="introReplayKey++">
+              ↺ {{ l('重看开场', 'Replay intro') }}
+            </button>
           </div>
 
           <div class="oj-stats hero-in hero-in--6">
             <div class="oj-stat">
-              <strong>评测</strong>
-              <span>自动判题 · 多语言</span>
+              <strong>{{ l('评测', 'Judging') }}</strong>
+              <span>{{ l('自动判题 · 多语言', 'Automatic · Multiple languages') }}</span>
             </div>
             <div class="oj-stat">
-              <strong>训练</strong>
-              <span>专题 · 题单 · 进度</span>
+              <strong>{{ l('训练', 'Practice') }}</strong>
+              <span>{{ l('专题 · 题单 · 进度', 'Topics · Lists · Progress') }}</span>
             </div>
             <div class="oj-stat">
-              <strong>竞技</strong>
-              <span>榜单 · 积分 · 签到</span>
+              <strong>{{ l('竞技', 'Compete') }}</strong>
+              <span>{{ l('榜单 · 积分 · 签到', 'Standings · Points · Check-ins') }}</span>
             </div>
           </div>
         </div>
@@ -190,76 +289,33 @@ useScrollReveal(landingRef)
             <div class="oj-terminal oj-terminal--feature">
               <div class="oj-terminal-bar">
                 <span class="oj-dots" aria-hidden="true" />
-                <span class="oj-terminal-name">main.cpp</span>
+                <span class="oj-terminal-name"
+                  >{{ l('代码与评测示意', 'Code and judging preview') }} · main.cpp</span
+                >
               </div>
               <div class="oj-terminal-mid">
-                <aside class="oj-float-rail" aria-label="训练状态">
-                  <div class="oj-strip-card oj-strip-card--float oj-strip-card--a">
-                    <div class="oj-strip-card__head">
-                      <span class="oj-strip-card__k">今日签到</span>
-                      <span class="oj-strip-card__ico" aria-hidden="true">✓</span>
-                    </div>
-                    <strong class="oj-strip-card__v">+100</strong>
-                    <span class="oj-strip-card__hint">较昨日 +20%</span>
-                    <span class="oj-strip-card__line" aria-hidden="true" />
-                  </div>
-                  <div class="oj-strip-card oj-strip-card--float oj-strip-card--b">
-                    <div class="oj-strip-card__head">
-                      <span class="oj-strip-card__k">连续训练</span>
-                      <span class="oj-strip-card__ico" aria-hidden="true">↗</span>
-                    </div>
-                    <strong class="oj-strip-card__v">4 天</strong>
-                    <span class="oj-strip-card__hint">本周目标 7 天</span>
-                    <div
-                      class="oj-strip-card__meter"
-                      role="progressbar"
-                      aria-label="连续训练进度"
-                      aria-valuemin="0"
-                      aria-valuemax="7"
-                      aria-valuenow="4"
-                    >
-                      <span class="oj-strip-card__meter-fill" />
-                    </div>
-                  </div>
-                </aside>
                 <div class="oj-terminal-code-col">
-                  <pre class="oj-code" tabindex="-1"><code><span class="tok-k">#include</span> <span class="tok-s">&lt;bits/stdc++.h&gt;</span>
+                  <pre
+                    class="oj-code"
+                    tabindex="-1"
+                  ><code><span class="tok-k">#include</span> <span class="tok-s">&lt;bits/stdc++.h&gt;</span>
 <span class="tok-k">using namespace</span> <span class="tok-t">std</span><span class="tok-p">;</span>
 
 <span class="tok-k">int</span> <span class="tok-f">main</span><span class="tok-p">() {</span>
   <span class="tok-t">ios</span><span class="tok-p">::</span><span class="tok-f">sync_with_stdio</span><span class="tok-p">(</span><span class="tok-n">false</span><span class="tok-p">);</span>
   <span class="tok-t">cin</span><span class="tok-p">.</span><span class="tok-f">tie</span><span class="tok-p">(</span><span class="tok-k">nullptr</span><span class="tok-p">);</span>
   <span class="tok-k">int</span> n<span class="tok-p">;</span> <span class="tok-t">cin</span> <span class="tok-p">&gt;&gt;</span> n<span class="tok-p">;</span>
-  <span class="tok-c">// 今日目标：稳定输出 AC</span>
+  <span class="tok-c">// {{ l('读取整数并原样输出', 'Read and print an integer') }}</span>
   <span class="tok-t">cout</span> <span class="tok-p">&lt;&lt;</span> n <span class="tok-p">&lt;&lt;</span> <span class="tok-s">"\n"</span><span class="tok-p">;</span>
   <span class="tok-k">return</span> <span class="tok-m">0</span><span class="tok-p">;</span>
 <span class="tok-p">}</span></code></pre>
                   <div class="oj-run">
                     <span class="oj-ac">✓ Accepted</span>
-                    <span class="oj-meta">92 ms · 8.1 MB</span>
+                    <span class="oj-meta">{{
+                      l('公开样例通过示意', 'Public sample preview')
+                    }}</span>
                   </div>
                 </div>
-              </div>
-            </div>
-
-            <div class="oj-code-minis">
-              <div class="oj-mini-terminal">
-                <div class="oj-terminal-bar oj-terminal-bar--mini">
-                  <span class="oj-dots" aria-hidden="true" />
-                  <span class="oj-terminal-name">run.sh</span>
-                </div>
-                <pre class="oj-code oj-code--mini" tabindex="-1"><code><span class="tok-c">#!/usr/bin/env bash</span>
-<span class="tok-f">g++</span> -std=c++20 -O2 main.c -o a.out
-<span class="tok-f">./a.out</span> <span class="tok-p">&lt;</span> sample.in</code></pre>
-              </div>
-              <div class="oj-mini-terminal oj-mini-terminal--alt">
-                <div class="oj-terminal-bar oj-terminal-bar--mini">
-                  <span class="oj-dots" aria-hidden="true" />
-                  <span class="oj-terminal-name">problem.yaml</span>
-                </div>
-                <pre class="oj-code oj-code--mini" tabindex="-1"><code><span class="tok-t">time_limit_ms</span><span class="tok-p">:</span> <span class="tok-m">1000</span>
-<span class="tok-t">memory_mb</span><span class="tok-p">:</span> <span class="tok-m">256</span>
-<span class="tok-t">checker</span><span class="tok-p">:</span> <span class="tok-s">"ncmp"</span></code></pre>
               </div>
             </div>
           </div>
@@ -270,9 +326,11 @@ useScrollReveal(landingRef)
     <!-- 主体：与全站主题一致 -->
     <div class="home-body">
       <header class="home-section-head" data-scroll-reveal>
-        <p class="home-section-eyebrow">功能入口</p>
-        <h2 class="home-section-title">常用入口</h2>
-        <p class="home-section-lead">做题、参赛、看排名和提交记录。</p>
+        <p class="home-section-eyebrow">{{ l('功能入口', 'Explore') }}</p>
+        <h2 class="home-section-title">{{ l('常用入口', 'Quick links') }}</h2>
+        <p class="home-section-lead">
+          {{ l('做题、参赛、看排名和提交记录。', 'Practice, compete, and review your progress.') }}
+        </p>
       </header>
 
       <section class="oj-quick">
@@ -293,23 +351,9 @@ useScrollReveal(landingRef)
         </RouterLink>
       </section>
 
-      <section class="oj-highlight-strip" aria-label="平台亮点数据">
-        <div
-          v-for="(s, idx) in highlightStats"
-          :key="s.label"
-          class="oj-highlight-card panel"
-          data-scroll-reveal
-          :style="{ '--sr-delay': `${idx * 0.08}s` }"
-        >
-          <strong class="oj-highlight-card__num">{{ s.num }}</strong>
-          <span class="oj-highlight-card__label">{{ s.label }}</span>
-          <span class="oj-highlight-card__sub">{{ s.sub }}</span>
-        </div>
-      </section>
-
       <header class="home-section-head home-section-head--tight" data-scroll-reveal>
-        <p class="home-section-eyebrow">核心特性</p>
-        <h2 class="home-section-title">主要功能</h2>
+        <p class="home-section-eyebrow">{{ l('核心特性', 'Features') }}</p>
+        <h2 class="home-section-title">{{ l('主要功能', 'What you can do') }}</h2>
       </header>
 
       <section class="feature-grid">
@@ -335,10 +379,15 @@ useScrollReveal(landingRef)
         <div class="oj-advantages__bg" aria-hidden="true" />
         <div class="oj-advantages__inner">
           <div class="oj-advantages__intro" data-scroll-reveal>
-            <p class="home-section-eyebrow">平台优势</p>
-            <h2 class="oj-advantages__title">技术说明</h2>
+            <p class="home-section-eyebrow">{{ l('平台优势', 'Platform') }}</p>
+            <h2 class="oj-advantages__title">{{ l('技术说明', 'How it works') }}</h2>
             <p class="oj-advantages__lead">
-              判题走独立 Sandbox 服务，主站负责用户、题目和比赛等业务。
+              {{
+                l(
+                  '判题走独立 Sandbox 服务，主站负责用户、题目和比赛等业务。',
+                  'A separate judging service runs code; the main site handles accounts, problems and contests.',
+                )
+              }}
             </p>
           </div>
           <div class="oj-advantages__grid">
@@ -360,12 +409,19 @@ useScrollReveal(landingRef)
       </section>
 
       <header class="home-section-head home-section-head--tight" data-scroll-reveal>
-        <p class="home-section-eyebrow">训练路径</p>
-        <h2 class="home-section-title">怎么用</h2>
-        <p class="home-section-lead">选题 → 提交 → 参加比赛，三步就够。</p>
+        <p class="home-section-eyebrow">{{ l('训练路径', 'Getting started') }}</p>
+        <h2 class="home-section-title">{{ l('怎么用', 'Three steps') }}</h2>
+        <p class="home-section-lead">
+          {{
+            l(
+              '选题 → 提交 → 参加比赛，三步就够。',
+              'Choose a problem, submit code, then join a contest.',
+            )
+          }}
+        </p>
       </header>
 
-      <section class="oj-path" aria-label="训练路径">
+      <section class="oj-path" :aria-label="l('训练路径', 'Getting started')">
         <article
           v-for="(st, idx) in trainingSteps"
           :key="st.step"
@@ -381,11 +437,13 @@ useScrollReveal(landingRef)
       </section>
 
       <header class="home-section-head home-section-head--tight" data-scroll-reveal>
-        <p class="home-section-eyebrow">判题流水线</p>
-        <h2 class="home-section-title">每一次提交，后台在做什么</h2>
+        <p class="home-section-eyebrow">{{ l('判题流水线', 'Judging pipeline') }}</p>
+        <h2 class="home-section-title">
+          {{ l('每一次提交，后台在做什么', 'What happens after you submit') }}
+        </h2>
       </header>
 
-      <section class="oj-pipeline panel" aria-label="判题流程">
+      <section class="oj-pipeline panel" :aria-label="l('判题流程', 'Judging steps')">
         <div class="oj-pipeline__row">
           <template v-for="(js, idx) in judgeSteps" :key="js.title">
             <div
@@ -399,18 +457,16 @@ useScrollReveal(landingRef)
                 <span>{{ js.body }}</span>
               </div>
             </div>
-            <span
-              v-if="idx < judgeSteps.length - 1"
-              class="oj-pipeline__arrow"
-              aria-hidden="true"
-            >→</span>
+            <span v-if="idx < judgeSteps.length - 1" class="oj-pipeline__arrow" aria-hidden="true"
+              >→</span
+            >
           </template>
         </div>
       </section>
 
       <header class="home-section-head home-section-head--tight" data-scroll-reveal>
-        <p class="home-section-eyebrow">适用场景</p>
-        <h2 class="home-section-title">适用场景</h2>
+        <p class="home-section-eyebrow">{{ l('适用场景', 'Use cases') }}</p>
+        <h2 class="home-section-title">{{ l('适用场景', 'Who it is for') }}</h2>
       </header>
 
       <section class="oj-scenarios">
@@ -426,7 +482,6 @@ useScrollReveal(landingRef)
           <p>{{ sc.desc }}</p>
         </article>
       </section>
-
     </div>
   </div>
 </template>
@@ -454,7 +509,7 @@ useScrollReveal(landingRef)
   width: 100vw;
   max-width: 100%;
   margin-left: calc(50% - 50vw);
-  min-height: min(720px, calc(100dvh - 56px));
+  min-height: min(540px, calc(100dvh - 56px));
   padding: 48px 20px 56px;
   color: var(--oj-text);
   border-bottom: 1px solid rgba(56, 189, 248, 0.12);
@@ -571,7 +626,9 @@ useScrollReveal(landingRef)
     radial-gradient(1px 1px at 95% 72%, rgba(255, 255, 255, 0.28), transparent);
   background-size: 100% 100%;
   opacity: 0.55;
-  animation: ojStarDriftFar 95s linear infinite, ojStarTwinkleA 7s ease-in-out infinite alternate;
+  animation:
+    ojStarDriftFar 95s linear infinite,
+    ojStarTwinkleA 7s ease-in-out infinite alternate;
 }
 
 /* 中景：稍大、闪烁节奏不同 */
@@ -593,8 +650,12 @@ useScrollReveal(landingRef)
     radial-gradient(1.4px 1.4px at 91% 44%, rgba(224, 242, 254, 0.48), transparent);
   background-size: 100% 100%;
   opacity: 0.62;
-  animation: ojStarDriftMid 68s linear infinite reverse, ojStarTwinkleB 5.5s ease-in-out infinite alternate;
-  animation-delay: 0s, -1.2s;
+  animation:
+    ojStarDriftMid 68s linear infinite reverse,
+    ojStarTwinkleB 5.5s ease-in-out infinite alternate;
+  animation-delay:
+    0s,
+    -1.2s;
 }
 
 /* 近景：大亮点 + 青辉 */
@@ -617,8 +678,12 @@ useScrollReveal(landingRef)
     radial-gradient(2.3px 2.3px at 94% 22%, rgba(255, 255, 255, 0.8), transparent);
   background-size: 100% 100%;
   opacity: 0.72;
-  animation: ojStarDriftNear 48s linear infinite, ojStarTwinkleC 4s ease-in-out infinite alternate;
-  animation-delay: 0s, -2.4s;
+  animation:
+    ojStarDriftNear 48s linear infinite,
+    ojStarTwinkleC 4s ease-in-out infinite alternate;
+  animation-delay:
+    0s,
+    -2.4s;
 }
 
 .oj-stars-meteor {
@@ -784,7 +849,9 @@ useScrollReveal(landingRef)
     radial-gradient(1px 1px at 72% 14%, rgba(13, 148, 136, 0.2), transparent),
     radial-gradient(1px 1px at 85% 64%, rgba(160, 100, 50, 0.24), transparent),
     radial-gradient(1px 1px at 6% 38%, rgba(80, 120, 110, 0.22), transparent);
-  animation: ojStarDriftFar 120s linear infinite, ojStarTwinkleA 9s ease-in-out infinite alternate;
+  animation:
+    ojStarDriftFar 120s linear infinite,
+    ojStarTwinkleA 9s ease-in-out infinite alternate;
 }
 
 .home-landing--light .oj-stars-layer--mid {
@@ -803,7 +870,9 @@ useScrollReveal(landingRef)
     radial-gradient(1.5px 1.5px at 62% 48%, rgba(13, 148, 136, 0.34), transparent),
     radial-gradient(1.3px 1.3px at 75% 26%, rgba(120, 80, 45, 0.3), transparent),
     radial-gradient(1.6px 1.6px at 90% 56%, rgba(180, 110, 55, 0.38), transparent);
-  animation: ojStarDriftMid 85s linear infinite reverse, ojStarTwinkleB 6.5s ease-in-out infinite alternate;
+  animation:
+    ojStarDriftMid 85s linear infinite reverse,
+    ojStarTwinkleB 6.5s ease-in-out infinite alternate;
 }
 
 .home-landing--light .oj-stars-layer--near {
@@ -823,7 +892,9 @@ useScrollReveal(landingRef)
     radial-gradient(2px 2px at 60% 10%, rgba(251, 191, 36, 0.38), transparent),
     radial-gradient(2.2px 2.2px at 73% 70%, rgba(255, 250, 244, 0.8), transparent),
     radial-gradient(2px 2px at 85% 38%, rgba(80, 120, 110, 0.44), transparent);
-  animation: ojStarDriftNear 58s linear infinite, ojStarTwinkleC 5s ease-in-out infinite alternate;
+  animation:
+    ojStarDriftNear 58s linear infinite,
+    ojStarTwinkleC 5s ease-in-out infinite alternate;
 }
 
 .home-landing--light .oj-stars-meteor {
@@ -882,13 +953,7 @@ useScrollReveal(landingRef)
 }
 
 .home-landing--light .oj-slogan__accent {
-  background-image: linear-gradient(
-    105deg,
-    #0f766e 0%,
-    #0d9488 28%,
-    #059669 52%,
-    #ca8a04 88%
-  );
+  background-image: linear-gradient(105deg, #0f766e 0%, #0d9488 28%, #059669 52%, #ca8a04 88%);
 }
 
 .home-landing--light .oj-lead--rich {
@@ -929,76 +994,6 @@ useScrollReveal(landingRef)
 
 .home-landing--light .oj-stat span {
   color: #64748b;
-}
-
-.home-landing--light .oj-float-rail {
-  background:
-    linear-gradient(180deg, rgba(255, 250, 244, 0.76), rgba(255, 252, 248, 0.72)),
-    radial-gradient(ellipse at 20% 8%, rgba(15, 118, 110, 0.12), transparent 56%);
-  border-color: rgba(92, 68, 46, 0.12);
-}
-
-.home-landing--light .oj-strip-card {
-  background: rgba(255, 252, 248, 0.96);
-  border-color: rgba(15, 118, 110, 0.22);
-  color: #57534e;
-  box-shadow:
-    0 10px 22px rgba(62, 45, 28, 0.08),
-    inset 0 1px 0 rgba(255, 255, 255, 0.88);
-}
-
-.home-landing--light .oj-strip-card__k {
-  color: #78716c;
-}
-
-.home-landing--light .oj-strip-card__ico {
-  color: #0f766e;
-  border-color: rgba(15, 118, 110, 0.26);
-  background: rgba(240, 253, 250, 0.86);
-}
-
-.home-landing--light .oj-strip-card__v {
-  color: #b45309;
-}
-
-.home-landing--light .oj-strip-card__hint {
-  color: #78716c;
-}
-
-.home-landing--light .oj-strip-card__line {
-  background: linear-gradient(90deg, rgba(15, 118, 110, 0.42), rgba(217, 119, 6, 0.14));
-}
-
-.home-landing--light .oj-strip-card__meter {
-  background: rgba(231, 229, 228, 0.8);
-  border-color: rgba(120, 113, 108, 0.22);
-}
-
-.home-landing--light .oj-strip-card__meter-fill {
-  box-shadow: 0 0 8px rgba(15, 118, 110, 0.25);
-}
-
-.home-landing--light .oj-mini-terminal {
-  background: rgba(255, 250, 244, 0.96);
-  border-color: rgba(15, 118, 110, 0.2);
-  box-shadow: 0 8px 22px rgba(62, 45, 28, 0.07);
-}
-
-.home-landing--light .oj-mini-terminal .oj-terminal-bar.oj-terminal-bar--mini {
-  background: rgba(255, 252, 248, 0.98);
-  border-bottom: 1px solid rgba(92, 68, 46, 0.12);
-}
-
-.home-landing--light .oj-mini-terminal .oj-terminal-name {
-  color: #78716c;
-}
-
-.home-landing--light .oj-mini-terminal:hover {
-  border-color: rgba(13, 148, 136, 0.35);
-}
-
-.home-landing--light .oj-mini-terminal--alt .oj-terminal-bar.oj-terminal-bar--mini {
-  background: linear-gradient(90deg, rgba(15, 118, 110, 0.12), rgba(180, 100, 50, 0.08));
 }
 
 @keyframes ojMesh {
@@ -1217,13 +1212,7 @@ useScrollReveal(landingRef)
 }
 
 .oj-slogan__text {
-  background-image: linear-gradient(
-    118deg,
-    #f8fafc 0%,
-    #cbd5e1 28%,
-    #e0f2fe 52%,
-    #f1f5f9 100%
-  );
+  background-image: linear-gradient(118deg, #f8fafc 0%, #cbd5e1 28%, #e0f2fe 52%, #f1f5f9 100%);
   background-size: 200% auto;
 }
 
@@ -1285,13 +1274,7 @@ useScrollReveal(landingRef)
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  background-image: linear-gradient(
-    92deg,
-    #94a3b8 0%,
-    #5eead4 28%,
-    #2dd4bf 55%,
-    #86efac 88%
-  );
+  background-image: linear-gradient(92deg, #94a3b8 0%, #5eead4 28%, #2dd4bf 55%, #86efac 88%);
   background-size: 180% auto;
 }
 
@@ -1314,8 +1297,38 @@ useScrollReveal(landingRef)
 .oj-cta {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 12px;
   margin-top: 28px;
+}
+
+.oj-intro-replay {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: var(--oj-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  opacity: 0.72;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+.oj-intro-replay:hover,
+.oj-intro-replay:focus-visible {
+  opacity: 1;
+  transform: translateY(-2px);
+}
+.oj-intro-replay:focus-visible {
+  outline: 2px solid #0e8f82;
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+.home-landing--light .oj-intro-replay {
+  color: #0f5f59;
+  opacity: 0.88;
 }
 
 .oj-btn {
@@ -1397,7 +1410,7 @@ useScrollReveal(landingRef)
   line-height: 1.5;
 }
 
-/* 终端装饰：标签在代码区左侧留白列内浮动，不压代码；下方为迷你代码框 */
+/* 首页代码示意区域 */
 .oj-hero-right {
   position: relative;
 }
@@ -1424,23 +1437,9 @@ useScrollReveal(landingRef)
 
 .oj-terminal-mid {
   display: grid;
-  grid-template-columns: minmax(100px, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   align-items: stretch;
   min-height: 0;
-}
-
-.oj-float-rail {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 12px;
-  padding: 14px 12px;
-  background:
-    linear-gradient(180deg, rgba(15, 23, 42, 0.72), rgba(2, 6, 23, 0.78)),
-    radial-gradient(ellipse at 16% 10%, rgba(94, 234, 212, 0.14), transparent 52%);
-  border-right: 1px solid rgba(148, 163, 184, 0.2);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 .oj-terminal-code-col {
@@ -1453,187 +1452,6 @@ useScrollReveal(landingRef)
   flex: 1 1 auto;
 }
 
-.oj-strip-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(2, 6, 23, 0.76);
-  border: 1px solid rgba(148, 163, 184, 0.16);
-  font-size: 11px;
-  color: #cbd5e1;
-  transition:
-    border-color 0.24s ease,
-    box-shadow 0.24s ease,
-    background 0.24s ease;
-}
-
-.oj-strip-card--float {
-  flex-direction: column;
-  align-items: flex-start;
-  justify-content: center;
-  gap: 7px;
-  min-width: 0;
-  width: 100%;
-  position: relative;
-  overflow: hidden;
-  box-shadow:
-    0 12px 24px rgba(0, 0, 0, 0.24),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  will-change: transform;
-}
-
-.oj-strip-card--float::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(135deg, rgba(56, 189, 248, 0.1), transparent 55%, rgba(45, 212, 191, 0.08));
-  pointer-events: none;
-  opacity: 0.85;
-}
-
-.oj-strip-card--float > * {
-  position: relative;
-  z-index: 1;
-}
-
-.oj-strip-card--a {
-  animation: ojFloatRailA 5.2s ease-in-out infinite;
-  border-color: rgba(56, 189, 248, 0.3);
-}
-
-.oj-strip-card--b {
-  animation: ojFloatRailB 5.2s ease-in-out infinite;
-  animation-delay: -2.6s;
-  border-color: rgba(45, 212, 191, 0.3);
-}
-
-.oj-strip-card__head {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.oj-strip-card__k {
-  flex-shrink: 0;
-  line-height: 1.2;
-  letter-spacing: 0.03em;
-  color: #94a3b8;
-}
-
-.oj-strip-card__ico {
-  width: 20px;
-  height: 20px;
-  border-radius: 999px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
-  color: #67e8f9;
-  border: 1px solid rgba(103, 232, 249, 0.35);
-  background: rgba(8, 47, 73, 0.55);
-}
-
-.oj-strip-card__v {
-  font-size: 17px;
-  font-weight: 800;
-  color: var(--oj-amber);
-  font-family: var(--app-font-display);
-  letter-spacing: -0.02em;
-}
-
-.oj-strip-card__hint {
-  font-size: 11px;
-  line-height: 1.2;
-  color: #9ca3af;
-}
-
-.oj-strip-card__line {
-  width: 100%;
-  height: 1px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(56, 189, 248, 0.55), rgba(45, 212, 191, 0.12));
-}
-
-.oj-strip-card__meter {
-  width: 100%;
-  height: 6px;
-  border-radius: 999px;
-  background: rgba(30, 41, 59, 0.8);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-  overflow: hidden;
-}
-
-.oj-strip-card__meter-fill {
-  display: block;
-  width: 57.14%;
-  height: 100%;
-  background: linear-gradient(90deg, #2dd4bf, #67e8f9);
-  box-shadow: 0 0 10px rgba(45, 212, 191, 0.45);
-}
-
-@keyframes ojFloatRailA {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-7px);
-  }
-}
-
-@keyframes ojFloatRailB {
-  0%,
-  100% {
-    transform: translateY(-4px);
-  }
-  50% {
-    transform: translateY(5px);
-  }
-}
-
-.oj-code-minis {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.oj-mini-terminal {
-  border-radius: 12px;
-  overflow: hidden;
-  border: 1px solid rgba(56, 189, 248, 0.16);
-  background: rgba(3, 10, 24, 0.88);
-  box-shadow:
-    0 12px 28px rgba(0, 0, 0, 0.35),
-    0 0 0 1px rgba(255, 255, 255, 0.03) inset;
-  transition:
-    border-color 0.2s ease,
-    box-shadow 0.2s ease;
-}
-
-.oj-mini-terminal:hover {
-  border-color: rgba(56, 189, 248, 0.32);
-  box-shadow:
-    0 16px 36px rgba(0, 0, 0, 0.4),
-    0 0 0 1px rgba(94, 234, 212, 0.08) inset;
-}
-
-.oj-mini-terminal--alt {
-  border-color: rgba(94, 234, 212, 0.14);
-}
-
-.oj-code--mini {
-  padding: 12px 12px 14px;
-  font-size: 11px;
-  line-height: 1.55;
-  min-height: 4.8em;
-}
-
 .oj-terminal-bar {
   display: flex;
   align-items: center;
@@ -1641,18 +1459,6 @@ useScrollReveal(landingRef)
   padding: 10px 14px;
   background: rgba(15, 23, 42, 0.95);
   border-bottom: 1px solid rgba(51, 65, 85, 0.6);
-}
-
-.oj-terminal-bar.oj-terminal-bar--mini {
-  padding: 8px 12px;
-}
-
-.oj-terminal-bar.oj-terminal-bar--mini .oj-dots {
-  width: 8px;
-  height: 8px;
-  box-shadow:
-    11px 0 0 #fbbf24,
-    22px 0 0 #4ade80;
 }
 
 .oj-dots {
@@ -1676,7 +1482,7 @@ useScrollReveal(landingRef)
 .oj-code {
   margin: 0;
   padding: 18px 16px 20px;
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.65;
   overflow-x: auto;
   font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
@@ -1788,22 +1594,14 @@ useScrollReveal(landingRef)
   font-weight: 800;
   letter-spacing: 0.14em;
   color: var(--app-accent);
-  background: linear-gradient(
-    135deg,
-    rgba(15, 140, 122, 0.14) 0%,
-    rgba(15, 140, 122, 0.05) 100%
-  );
+  background: linear-gradient(135deg, rgba(15, 140, 122, 0.14) 0%, rgba(15, 140, 122, 0.05) 100%);
   border: 1px solid rgba(15, 140, 122, 0.28);
   border-radius: 999px;
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.45) inset;
 }
 
 .home-landing:not(.home-landing--light) .home-section-eyebrow {
-  background: linear-gradient(
-    135deg,
-    rgba(83, 219, 194, 0.14) 0%,
-    rgba(83, 219, 194, 0.04) 100%
-  );
+  background: linear-gradient(135deg, rgba(83, 219, 194, 0.14) 0%, rgba(83, 219, 194, 0.04) 100%);
   border-color: rgba(83, 219, 194, 0.28);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
 }
@@ -1930,7 +1728,13 @@ useScrollReveal(landingRef)
 .oj-quick-card__aurora {
   position: absolute;
   inset: -55%;
-  background: conic-gradient(from 120deg at 50% 50%, var(--qc-a), transparent 40%, var(--qc-b), transparent 78%);
+  background: conic-gradient(
+    from 120deg at 50% 50%,
+    var(--qc-a),
+    transparent 40%,
+    var(--qc-b),
+    transparent 78%
+  );
   opacity: 0;
   animation: ojQuickAurora 14s linear infinite;
   pointer-events: none;
@@ -2313,41 +2117,6 @@ useScrollReveal(landingRef)
   will-change: auto;
 }
 
-.oj-highlight-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
-  margin: 28px 0 8px;
-}
-
-.oj-highlight-card {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 20px 18px;
-  border-radius: 18px;
-}
-
-.oj-highlight-card__num {
-  font-size: clamp(26px, 4vw, 34px);
-  font-weight: 800;
-  font-family: var(--app-font-display);
-  line-height: 1;
-  letter-spacing: -0.03em;
-  color: var(--app-accent);
-}
-
-.oj-highlight-card__label {
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.oj-highlight-card__sub {
-  font-size: 12px;
-  color: var(--app-text-muted);
-}
-
 .oj-path {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2577,14 +2346,6 @@ useScrollReveal(landingRef)
     opacity: 0 !important;
   }
 
-  .oj-mini-terminal:hover {
-    transform: none;
-  }
-
-  .oj-strip-card--float {
-    animation: none !important;
-  }
-
   .oj-quick-card__aurora,
   .oj-pillar__bg,
   .oj-advantages__bg {
@@ -2623,15 +2384,7 @@ useScrollReveal(landingRef)
     width: 100%;
   }
 
-  .oj-code-minis {
-    grid-template-columns: 1fr;
-  }
-
   .oj-quick {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .oj-highlight-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2666,39 +2419,6 @@ useScrollReveal(landingRef)
     min-height: auto;
   }
 
-  .oj-terminal-mid {
-    grid-template-columns: 1fr;
-  }
-
-  .oj-float-rail {
-    flex-direction: row;
-    flex-wrap: wrap;
-    justify-content: center;
-    align-items: stretch;
-    border-right: none;
-    border-bottom: 1px solid rgba(51, 65, 85, 0.55);
-    padding: 10px;
-    gap: 8px;
-  }
-
-  .home-landing--light .oj-float-rail {
-    border-bottom-color: rgba(92, 68, 46, 0.12);
-  }
-
-  .oj-strip-card--float {
-    flex: 1 1 140px;
-    max-width: 100%;
-    gap: 6px;
-  }
-
-  .oj-strip-card__head {
-    align-items: center;
-  }
-
-  .oj-strip-card__meter {
-    height: 5px;
-  }
-
   .oj-cta {
     flex-direction: column;
   }
@@ -2715,12 +2435,65 @@ useScrollReveal(landingRef)
     grid-template-columns: 1fr;
   }
 
-  .oj-highlight-strip {
-    grid-template-columns: 1fr;
-  }
-
   .home-body {
     padding: 20px 14px 48px;
+  }
+}
+.oj-cta-primary-motion {
+  display: inline-flex;
+}
+.oj-cta-primary-motion {
+  transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.oj-cta-primary-motion:hover {
+  transform: translateY(-4px) scale(1.035);
+}
+.oj-cta-primary-motion:active {
+  transform: scale(0.97);
+}
+.oj-slogan__accent {
+  position: relative;
+  display: inline-block;
+}
+.oj-slogan__accent::after {
+  content: '';
+  position: absolute;
+  left: 3%;
+  right: 3%;
+  bottom: -0.12em;
+  height: 0.075em;
+  border-radius: 99px;
+  background: currentColor;
+  opacity: 0.65;
+  transform: scaleX(0);
+  transform-origin: left;
+  animation: hero-underline 0.65s 1.05s cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+@keyframes hero-underline {
+  to {
+    transform: scaleX(1);
+  }
+}
+@media (max-width: 640px) {
+  .oj-cta-primary-motion {
+    display: flex;
+    width: 100%;
+  }
+  .oj-cta-primary-motion .oj-btn {
+    width: 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oj-slogan__accent::after {
+    animation: none;
+    transform: scaleX(1);
+  }
+  .oj-cta-primary-motion {
+    transition: none;
+  }
+  .oj-cta-primary-motion:hover,
+  .oj-cta-primary-motion:active {
+    transform: none;
   }
 }
 </style>

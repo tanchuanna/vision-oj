@@ -132,6 +132,12 @@ const router = createRouter({
           meta: { title: '编辑题目', requiresPermission: 'QUESTION_AUTHOR' },
         },
         {
+          path: 'my-practice',
+          name: 'my-practice',
+          component: () => import('@/views/teaching/MyPracticeView.vue'),
+          meta: { title: '我的练习', requiresActiveAccount: true },
+        },
+        {
           path: 'teaching/students',
           name: 'teaching-students',
           component: () => import('@/views/teaching/TeachingStudentsView.vue'),

@@ -56,7 +56,9 @@ public class JavaLanguageJudgeStrategy implements JudgeStrategy {
         for (int i = 0; i < judgeCaseList.size(); i++) {
             String output = normalize(judgeCaseList.get(i).getOutput());
             String actual = normalize(outputList.get(i));
-            if (!Objects.equals(output, actual)) {
+            Double tolerance = question.getJudgeConfig() == null ? null : question.getJudgeConfig().getFloatTolerance();
+            if (tolerance == null ? !Objects.equals(output, actual)
+                    : !TextOutputMatcher.matches(judgeCaseList.get(i).getOutput(), outputList.get(i), tolerance)) {
                 judgeInfoResponse.setMessage(JudgeInfoMessageEnum.WRONG_ANSWER.getValue());
                 return judgeInfoResponse;
             }

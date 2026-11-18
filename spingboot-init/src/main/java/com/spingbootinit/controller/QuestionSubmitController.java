@@ -9,6 +9,7 @@ import com.spingbootinit.context.UserContext.IsAdminRoleString;
 import com.spingbootinit.context.UserContext.UserContext;
 import com.spingbootinit.model.dto.questionsubmit.QuestionSubmitAddRequest;
 import com.spingbootinit.model.dto.questionsubmit.SubmissionDashboardQuery;
+import com.spingbootinit.model.dto.questionsubmit.SubmissionDiagnosisRequest;
 import com.spingbootinit.model.entity.QuestionSubmit;
 import com.spingbootinit.model.entity.User;
 import com.spingbootinit.model.vo.questionsubmitvo.*;
@@ -16,6 +17,8 @@ import com.spingbootinit.service.QuestionSubmitService;
 import com.spingbootinit.service.SubmissionDashboardService;
 import com.spingbootinit.service.UserService;
 import com.spingbootinit.service.impl.SubmissionAccessScopeService;
+import com.spingbootinit.service.impl.SubmissionDiagnosisService;
+import io.swagger.v3.oas.annotations.Operation;
 import jakarta.annotation.Resource;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -46,6 +49,9 @@ public class QuestionSubmitController {
 
     @Resource
     private SubmissionAccessScopeService submissionAccessScopeService;
+
+    @Resource
+    private SubmissionDiagnosisService submissionDiagnosisService;
 
     @GetMapping("/page")
     public Result<Page<SubmissionListItemVO>> pageSubmissions(
@@ -99,6 +105,21 @@ public class QuestionSubmitController {
         var access = submissionAccessScopeService.resolveForDetail(currentUserId);
         return Result.success(submissionDashboardService.getDetail(
                 submissionId, currentUserId, access.allManagedUsers(), access.managedUserIds()));
+    }
+
+    /**
+     * AI 诊断某次已判题提交：定位错因并给出分层提示，不直接提供可提交的完整答案。
+     */
+    @PostMapping("/{submissionId}/ai-diagnose")
+    @Operation(summary = "AI 诊断判题结果", description = "仅提交本人、其指导老师或管理员可调用")
+    public Result<SubmissionDiagnosisVO> diagnoseSubmission(
+            @PathVariable("submissionId") Long submissionId,
+            @RequestBody(required = false) SubmissionDiagnosisRequest request) {
+        long currentUserId = requireLogin();
+        if (submissionId == null || submissionId <= 0) {
+            throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "提交 ID 必须为正整数");
+        }
+        return Result.success("诊断完成", submissionDiagnosisService.diagnose(currentUserId, submissionId, request));
     }
 
     private long requireLogin() {

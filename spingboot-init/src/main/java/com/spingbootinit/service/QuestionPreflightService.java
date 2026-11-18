@@ -7,6 +7,7 @@ import com.spingbootinit.judo.codesandbox.CodeSandboxFactory;
 import com.spingbootinit.judo.codesandbox.CodeSandboxProxy;
 import com.spingbootinit.judo.codesandbox.model.ExecuteCodeRequest;
 import com.spingbootinit.judo.codesandbox.model.ExecuteCodeResponse;
+import com.spingbootinit.judo.strategy.ImageJudgeConfigPolicy;
 import com.spingbootinit.judo.strategy.ImageOutputJudgeStrategy;
 import com.spingbootinit.judo.strategy.ObjectCountJudgeStrategy;
 import com.spingbootinit.model.dto.question.JudgeCase;
@@ -53,12 +54,12 @@ public class QuestionPreflightService {
             return new PreflightResult(true, checks);
         }
         List<JudgeCase> cases = question.getJudgeCase();
-        if ("IMAGE_OBJECT_COUNT".equals(question.getQuestionType())) {
-            boolean diverse = hasDifferentCountAnswer(cases, question.getCountTolerance() == null ? 0 : question.getCountTolerance());
-            checks.add(new Check("隐藏用例区分度", diverse, diverse
-                    ? "至少一组隐藏图片的答案与公开样例不同，固定输出无法通过全部用例"
-                    : "所有图片的计数答案相同，固定输出也可能通过；请加入零目标或多目标图片"));
-        }
+        int legacyTolerance = question.getCountTolerance() == null ? 0 : question.getCountTolerance();
+        boolean diverse = hasDifferentExpectedAnswer(question.getQuestionType(), cases,
+                legacyTolerance, question.getJudgeConfig());
+        checks.add(new Check("多图答案区分度", diverse, diverse
+                ? "公开与隐藏图片的标准输出具有区分度，未发现直接固定输出可同时通过"
+                : "多张图片可被同一固定输出同时通过；请更换图片或复核标准答案与容差"));
         String code = pythonCode(question.getAnswer());
         if (code == null) {
             checks.add(new Check("参考程序", false, "请在参考答案中提供 ```python 代码块，供发布前实际运行"));
@@ -100,8 +101,26 @@ public class QuestionPreflightService {
 
     static boolean matchesReference(String type, String expected, String actual, int tolerance, com.spingbootinit.model.dto.question.JudgeConfig config) {
         return "IMAGE_OBJECT_COUNT".equals(type)
-                ? ObjectCountJudgeStrategy.outputsMatch(expected, actual, tolerance)
+                ? ObjectCountJudgeStrategy.outputsMatch(expected, actual,
+                ImageJudgeConfigPolicy.countTolerance(config, tolerance))
                 : ImageOutputJudgeStrategy.outputsMatch(type, expected, actual, tolerance, config);
+    }
+
+    static boolean hasDifferentExpectedAnswer(String type, List<JudgeCase> cases, int tolerance,
+                                              com.spingbootinit.model.dto.question.JudgeConfig config) {
+        if (cases == null || cases.size() < 2
+                || cases.stream().noneMatch(c -> Boolean.TRUE.equals(c.getSample()))
+                || cases.stream().noneMatch(c -> !Boolean.TRUE.equals(c.getSample()))) return false;
+        if ("IMAGE_OBJECT_COUNT".equals(type)) {
+            return hasDifferentCountAnswer(cases, ImageJudgeConfigPolicy.countTolerance(config, tolerance));
+        }
+        List<String> expected = cases.stream().map(JudgeCase::getOutput).toList();
+        for (String fixedOutput : expected) {
+            boolean passesEveryImage = expected.stream().allMatch(answer ->
+                    matchesReference(type, answer, fixedOutput, tolerance, config));
+            if (passesEveryImage) return false;
+        }
+        return true;
     }
 
     static boolean hasDifferentCountAnswer(List<JudgeCase> cases) {

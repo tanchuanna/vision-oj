@@ -27,10 +27,8 @@ public interface UserMapper extends BaseMapper<User> {
                 GROUP BY qs.user_id
             ) sub ON u.id = sub.uid
             WHERE u.is_delete = 0 AND u.status = 1
-              AND EXISTS (
-                  SELECT 1 FROM contest_user cu
-                  WHERE cu.user_id = u.id AND cu.is_delete = 0
-              )
+              AND u.user_role <> 'admin'
+              AND COALESCE(sub.submit_cnt, 0) > 0
             ORDER BY COALESCE(sub.ac_cnt, 0) DESC,
                      COALESCE(u.points, 0) DESC,
                      COALESCE(sub.submit_cnt, 0) ASC,
@@ -57,10 +55,8 @@ public interface UserMapper extends BaseMapper<User> {
                 GROUP BY qs.user_id
             ) sub ON u.id = sub.uid
             WHERE u.is_delete = 0 AND u.status = 1
-              AND EXISTS (
-                  SELECT 1 FROM contest_user cu
-                  WHERE cu.user_id = u.id AND cu.is_delete = 0
-              )
+              AND u.user_role <> 'admin'
+              AND COALESCE(sub.submit_cnt, 0) > 0
             ORDER BY COALESCE(u.points, 0) DESC,
                      COALESCE(sub.ac_cnt, 0) DESC,
                      COALESCE(sub.submit_cnt, 0) ASC,
@@ -87,10 +83,8 @@ public interface UserMapper extends BaseMapper<User> {
                 GROUP BY qs.user_id
             ) sub ON u.id = sub.uid
             WHERE u.is_delete = 0 AND u.status = 1
-              AND EXISTS (
-                  SELECT 1 FROM contest_user cu
-                  WHERE cu.user_id = u.id AND cu.is_delete = 0
-              )
+              AND u.user_role <> 'admin'
+              AND COALESCE(sub.submit_cnt, 0) > 0
             ORDER BY COALESCE(sub.submit_cnt, 0) DESC,
                      COALESCE(sub.ac_cnt, 0) DESC,
                      COALESCE(u.points, 0) DESC,
@@ -102,9 +96,10 @@ public interface UserMapper extends BaseMapper<User> {
     @Select("""
             SELECT COUNT(*) FROM `user` u
             WHERE u.is_delete = 0 AND u.status = 1
+              AND u.user_role <> 'admin'
               AND EXISTS (
-                  SELECT 1 FROM contest_user cu
-                  WHERE cu.user_id = u.id AND cu.is_delete = 0
+                  SELECT 1 FROM question_submit qs
+                  WHERE qs.user_id = u.id AND qs.is_delete = 0
               )
             """)
     long countLeaderboardUsers();

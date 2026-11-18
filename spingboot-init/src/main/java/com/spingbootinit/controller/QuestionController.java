@@ -11,6 +11,7 @@ import com.spingbootinit.model.entity.User;
 import com.spingbootinit.model.vo.questionvo.QuestionAdminListItemVO;
 import com.spingbootinit.model.vo.questionvo.QuestionPublicDetailVO;
 import com.spingbootinit.model.vo.questionvo.QuestionRunVO;
+import com.spingbootinit.model.vo.questionvo.StudyRecommendationVO;
 import com.spingbootinit.service.*;
 import com.spingbootinit.service.impl.QuestionAuthorizationService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -114,9 +115,9 @@ public class QuestionController {
         return Result.success(vo);
     }
 
-    @Operation(summary = "根据我的提交记录推荐练习题")
+    @Operation(summary = "根据我的提交记录推荐练习题", description = "返回知识点掌握度、今日训练进度与推荐题目")
     @GetMapping("/recommend/my")
-    public Result<java.util.List<StudyRecommendationEngine.Recommendation>> recommendForMe() {
+    public Result<StudyRecommendationVO> recommendForMe() {
         Long userId = UserContext.getCurrentUserId();
         if (userId == null) throw new BusinessException(ResultCode.NOT_LOGIN_ERROR);
         return Result.success(studyRecommendationService.recommend(userId));

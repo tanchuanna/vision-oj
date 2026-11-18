@@ -4,12 +4,12 @@
 
 在宝塔“数据库”页面先备份当前 `tan` 库，并确认备份文件不是 0 KB。
 
-## 2. 升级已有数据库
+## 2. 数据库准备
 
-只需上传并执行：
+题解模块已合并进完整总脚本。新建数据库时只上传并执行 `schema.sql`：
 
 ```bash
-mysql -u root -p tan < /www/wwwroot/20261114_question_solution.sql
+mysql -u root -p tan < /www/wwwroot/schema.sql
 ```
 
 执行后检查：
@@ -20,7 +20,7 @@ SHOW TABLES LIKE 'question_solution%';
 SHOW INDEX FROM question_solution;
 ```
 
-应当看到 `question_solution`、`question_solution_like`、`question_solution_comment` 三张表。确认建表成功后，可删除服务器上的 `/www/wwwroot/20261114_question_solution.sql`；不要删除项目源码中的迁移文件。
+应当看到 `question_solution`、`question_solution_like`、`question_solution_comment` 三张表。总脚本还包含其他业务表与演示题目；已有生产库执行前须备份并评估演示数据，不能把它当作仅包含题解表的增量脚本。
 
 ## 3. 发布顺序
 

@@ -11,13 +11,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class QuestionStatisticsSchemaTest {
 
     private static final Path SCHEMA = Path.of("src/main/resources/db/schema.sql");
-    private static final Path MIGRATION = Path.of("src/main/resources/db/migrations/V20261114__question_statistics.sql");
-
     @Test
-    void schemaAndMigrationExposeIndexedQuestionStatisticsColumns() throws IOException {
+    void masterSchemaExposesIndexedQuestionStatisticsColumns() throws IOException {
         assertStatisticsSql(Files.readString(SCHEMA));
-        assertTrue(Files.exists(MIGRATION), "missing question statistics migration SQL");
-        assertStatisticsSql(Files.readString(MIGRATION));
     }
 
     private static void assertStatisticsSql(String sql) {

@@ -2,12 +2,13 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
-import { ContestControllerService, Service } from '@generated'
 import type { UserLeaderboardRowVO } from '@generated'
+import { ContestControllerService, Service } from '@generated'
 import { isResultSuccess } from '@/api/result'
 import { getBackendErrorMessage } from '@/api/httpError'
 import { mapApiError } from '@/api/mapApiError'
 import { resolveMediaUrl } from '@/utils/resolveMediaUrl'
+import { useAuthStore } from '@/stores/auth'
 
 type Row = UserLeaderboardRowVO
 
@@ -35,6 +36,26 @@ const sideTab = ref<'contests' | 'help'>('contests')
 const rankDimension = ref<'composite' | 'points' | 'submissions'>('composite')
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
+
+const auth = useAuthStore()
+const meId = computed(() => (auth.userId ? String(auth.userId) : ''))
+
+function isMe(rec: Row): boolean {
+  return !!meId.value && String(rec.userId ?? '') === meId.value
+}
+
+const pageSizeOptions = [
+  { label: '20 条', value: 20 },
+  { label: '50 条', value: 50 },
+  { label: '100 条', value: 100 },
+]
+
+/** 当前榜单维度侧重展示的指标 */
+const focusMetric = computed<'solved' | 'points' | 'submit'>(() => {
+  if (rankDimension.value === 'points') return 'points'
+  if (rankDimension.value === 'submissions') return 'submit'
+  return 'solved'
+})
 
 const podiumMetricLabel = computed(() => {
   if (rankDimension.value === 'points') return '积分'
@@ -79,7 +100,11 @@ function avatarSrc(url: string | null | undefined) {
 async function load() {
   loading.value = true
   try {
-    const data = await Service.userLeaderboardPage(current.value, pageSize.value, rankDimension.value)
+    const data = await Service.userLeaderboardPage(
+      current.value,
+      pageSize.value,
+      rankDimension.value,
+    )
     if (!isResultSuccess(data.code)) {
       Message.error(data.message || '加载失败')
       return
@@ -131,6 +156,10 @@ watch(
   { immediate: true },
 )
 
+watch(pageSize, () => {
+  if (current.value !== 1) current.value = 1
+})
+
 function setDimension(d: 'composite' | 'points' | 'submissions') {
   if (rankDimension.value === d) return
   rankDimension.value = d
@@ -166,7 +195,6 @@ function contestHue(id: string): number {
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
   return h % 360
 }
-
 </script>
 
 <template>
@@ -175,20 +203,23 @@ function contestHue(id: string): number {
 
     <header class="lb-masthead">
       <div class="lb-masthead__copy">
-        <p class="lb-masthead__eyebrow">Leaderboard · 全站</p>
+        <p class="lb-masthead__eyebrow">全站排行</p>
         <span class="lb-masthead__rule" aria-hidden="true" />
         <h1 class="lb-masthead__title">排行榜</h1>
         <p v-if="rankDimension === 'composite'" class="lb-masthead__sub">
-          <strong>综合排行</strong>按做题通过数、积分与提交综合排序；<strong>需至少有一次比赛报名记录</strong>才会出现在本榜。单场实时榜请在
+          <strong>综合排行</strong
+          >按做题通过数、积分与提交综合排序；有真实提交记录的选手会出现在本榜。单场实时榜请在
           <RouterLink to="/contests" class="lb-masthead__link">比赛中心</RouterLink>
           查看。
         </p>
         <p v-else-if="rankDimension === 'points'" class="lb-masthead__sub">
-          <strong>积分榜</strong>按账户<strong>累计积分</strong>从高到低排列；积分相同时再比较通过题数与总提交。上榜条件与综合榜相同（须至少报名过一场比赛）。单场榜请至
+          <strong>积分榜</strong
+          >按账户<strong>累计积分</strong>从高到低排列；积分相同时再比较通过题数与总提交。上榜条件与综合榜相同。单场榜请至
           <RouterLink to="/contests" class="lb-masthead__link">比赛中心</RouterLink>。
         </p>
         <p v-else class="lb-masthead__sub">
-          <strong>活跃榜</strong>按<strong>总提交次数</strong>从高到低排列，鼓励多练多交；提交量相同时再比较通过题数与积分。上榜条件与综合榜相同。单场榜请至
+          <strong>活跃榜</strong
+          >按<strong>总提交次数</strong>从高到低排列，鼓励多练多交；提交量相同时再比较通过题数与积分。上榜条件与综合榜相同。单场榜请至
           <RouterLink to="/contests" class="lb-masthead__link">比赛中心</RouterLink>。
         </p>
       </div>
@@ -204,7 +235,9 @@ function contestHue(id: string): number {
         <nav class="lb-tabs" aria-label="榜单类型">
           <button
             type="button"
-            :class="rankDimension === 'composite' ? 'lb-tab lb-tab--active' : 'lb-tab lb-tab--ghost'"
+            :class="
+              rankDimension === 'composite' ? 'lb-tab lb-tab--active' : 'lb-tab lb-tab--ghost'
+            "
             @click="setDimension('composite')"
           >
             综合排行
@@ -218,7 +251,9 @@ function contestHue(id: string): number {
           </button>
           <button
             type="button"
-            :class="rankDimension === 'submissions' ? 'lb-tab lb-tab--active' : 'lb-tab lb-tab--ghost'"
+            :class="
+              rankDimension === 'submissions' ? 'lb-tab lb-tab--active' : 'lb-tab lb-tab--ghost'
+            "
             @click="setDimension('submissions')"
           >
             活跃榜
@@ -230,7 +265,7 @@ function contestHue(id: string): number {
             <div class="lb-empty__icon" aria-hidden="true">◇</div>
             <p class="lb-empty__title">暂无榜单数据</p>
             <p class="lb-empty__desc">
-              可能尚无满足条件的用户，或你尚未上榜：请到比赛中心在<strong>开赛后报名</strong>至少一场比赛，再通过题库做题积累 AC 与积分。
+              暂无选手提交记录。到题库完成一次真实提交后，就会出现在全站榜。
             </p>
           </div>
 
@@ -241,22 +276,44 @@ function contestHue(id: string): number {
                 v-for="{ row, place } in podiumOrder"
                 :key="place"
                 class="lb-podium__slot"
-                :class="`lb-podium__slot--${place}`"
+                :class="[`lb-podium__slot--${place}`, { 'lb-podium__slot--me': isMe(row) }]"
               >
                 <div class="lb-podium__pedestal">
-                  <span class="lb-podium__crown" :class="`lb-podium__crown--${place}`" aria-hidden="true">
+                  <span
+                    class="lb-podium__crown"
+                    :class="`lb-podium__crown--${place}`"
+                    aria-hidden="true"
+                  >
                     {{ place === 1 ? '👑' : place === 2 ? '♔' : '♚' }}
                   </span>
                   <div class="lb-podium__avatar-wrap">
-                    <a-avatar :size="place === 1 ? 72 : 56" shape="circle" class="lb-podium__avatar">
-                      <img v-if="row.avatar" :alt="row.displayName || ''" :src="avatarSrc(row.avatar)" />
-                      <span v-else class="lb-podium__fallback">{{ (row.displayName || '?').slice(0, 1) }}</span>
+                    <a-avatar
+                      :size="place === 1 ? 72 : 56"
+                      shape="circle"
+                      class="lb-podium__avatar"
+                    >
+                      <img
+                        v-if="row.avatar"
+                        :alt="row.displayName || ''"
+                        :src="avatarSrc(row.avatar)"
+                      />
+                      <span v-else class="lb-podium__fallback">{{
+                        (row.displayName || '?').slice(0, 1)
+                      }}</span>
                     </a-avatar>
                   </div>
-                  <p class="lb-podium__name">{{ row.displayName || `用户 ${row.userId}` }}</p>
+                  <p class="lb-podium__name">
+                    {{ row.displayName || `用户 ${row.userId}` }}
+                    <span v-if="isMe(row)" class="lb-me-badge">你</span>
+                  </p>
                   <p class="lb-podium__score">
                     <span class="lb-podium__score-label">{{ podiumMetricLabel }}</span>
                     <span class="lb-podium__score-val">{{ podiumMetricValue(row) }}</span>
+                  </p>
+                  <p class="lb-podium__stats">
+                    <span>通过 {{ row.solvedCount ?? 0 }}</span>
+                    <span>积分 {{ row.points ?? 0 }}</span>
+                    <span>提交 {{ row.submitCount ?? 0 }}</span>
                   </p>
                   <span class="lb-podium__badge-rank">#{{ place }}</span>
                 </div>
@@ -265,39 +322,80 @@ function contestHue(id: string): number {
 
             <!-- 名次卡片列表 -->
             <ul class="lb-row-list">
-              <li v-for="rec in listAfterPodium" :key="rowListKey(rec)" class="lb-row-card">
+              <li
+                v-for="rec in listAfterPodium"
+                :key="rowListKey(rec)"
+                class="lb-row-card"
+                :class="{ 'lb-row-card--me': isMe(rec) }"
+              >
                 <span class="lb-row-card__order">{{ rec.rankOrder }}</span>
                 <a-avatar :size="44" shape="circle" class="lb-row-card__avatar">
-                  <img v-if="rec.avatar" :alt="rec.displayName || ''" :src="avatarSrc(rec.avatar)" />
-                  <span v-else class="lb-row-card__fallback">{{ (rec.displayName || '?').slice(0, 1) }}</span>
+                  <img
+                    v-if="rec.avatar"
+                    :alt="rec.displayName || ''"
+                    :src="avatarSrc(rec.avatar)"
+                  />
+                  <span v-else class="lb-row-card__fallback">{{
+                    (rec.displayName || '?').slice(0, 1)
+                  }}</span>
                 </a-avatar>
                 <div class="lb-row-card__main">
-                  <span class="lb-row-card__name">{{ rec.displayName || `用户 ${rec.userId}` }}</span>
+                  <span class="lb-row-card__name">
+                    {{ rec.displayName || `用户 ${rec.userId}` }}
+                    <span v-if="isMe(rec)" class="lb-me-badge">你</span>
+                  </span>
                   <span class="lb-row-card__id">ID {{ rec.userId }}</span>
                 </div>
                 <dl class="lb-row-card__stats">
                   <div>
                     <dt>通过</dt>
-                    <dd>{{ rec.solvedCount ?? 0 }}</dd>
+                    <dd :class="{ 'lb-stat--focus': focusMetric === 'solved' }">
+                      {{ rec.solvedCount ?? 0 }}
+                    </dd>
                   </div>
                   <div>
                     <dt>积分</dt>
-                    <dd>{{ rec.points ?? 0 }}</dd>
+                    <dd :class="{ 'lb-stat--focus': focusMetric === 'points' }">
+                      {{ rec.points ?? 0 }}
+                    </dd>
                   </div>
                   <div>
                     <dt>提交</dt>
-                    <dd>{{ rec.submitCount ?? 0 }}</dd>
+                    <dd :class="{ 'lb-stat--focus': focusMetric === 'submit' }">
+                      {{ rec.submitCount ?? 0 }}
+                    </dd>
                   </div>
                 </dl>
               </li>
             </ul>
 
             <footer class="lb-pager">
-              <a-button type="outline" size="medium" :disabled="current <= 1 || loading" @click="onPrev">
+              <a-button
+                type="outline"
+                size="medium"
+                :disabled="current <= 1 || loading"
+                @click="onPrev"
+              >
                 上一页
               </a-button>
-              <span class="lb-pager__meta">第 {{ current }} / {{ totalPages }} 页 · 共 {{ total }} 人</span>
-              <a-button type="outline" size="medium" :disabled="current >= totalPages || loading" @click="onNext">
+              <span class="lb-pager__meta"
+                >第 {{ current }} / {{ totalPages }} 页 · 共 {{ total }} 人</span
+              >
+              <label class="lb-pager__size">
+                每页
+                <a-select
+                  v-model="pageSize"
+                  size="small"
+                  :options="pageSizeOptions"
+                  style="width: 88px"
+                />
+              </label>
+              <a-button
+                type="outline"
+                size="medium"
+                :disabled="current >= totalPages || loading"
+                @click="onNext"
+              >
                 下一页
               </a-button>
             </footer>
@@ -328,10 +426,15 @@ function contestHue(id: string): number {
 
         <div v-show="sideTab === 'contests'" class="lb-side-body">
           <a-spin :loading="contestsLoading">
-            <p v-if="!contestsLoading && !contests.length" class="lb-side-empty">暂无比赛，稍后再来看看。</p>
+            <p v-if="!contestsLoading && !contests.length" class="lb-side-empty">
+              暂无比赛，稍后再来看看。
+            </p>
             <ul v-else class="lb-contest-list">
               <li v-for="c in contests" :key="c.id">
-                <RouterLink class="lb-contest-card" :to="{ name: 'contest-rank-detail', params: { contestId: c.id } }">
+                <RouterLink
+                  class="lb-contest-card"
+                  :to="{ name: 'contest-rank-detail', params: { contestId: c.id } }"
+                >
                   <div
                     class="lb-contest-card__thumb"
                     :style="{ '--hue': String(contestHue(c.id)) }"
@@ -354,25 +457,31 @@ function contestHue(id: string): number {
           <div class="lb-help__card">
             <h3 class="lb-help__h">谁会上全站榜？</h3>
             <p class="lb-help__p">
-              全站榜只展示<strong>至少成功报名过一场比赛</strong>的用户（开赛后在比赛详情页点击「报名参赛」即可，与是否得分无关）。在此之后，你在<strong>题库</strong>里产生的 AC 与提交会计入本榜统计。
+              全站榜展示<strong>至少提交过一次代码</strong>的学生和老师。题库中的真实提交与 AC
+              会计入统计；管理员测试账号不参与排名。
             </p>
           </div>
           <div class="lb-help__card">
             <h3 class="lb-help__h">通过题数怎么算？</h3>
             <p class="lb-help__p">
-              统计<strong>至少有一次 Accepted（评测通过）</strong>的<strong>不同题目</strong>数量；同一题多次 AC 仍计 1 题。<strong>提交次数</strong>为未删除记录下的每次递交总和（含未通过）。
+              统计<strong>至少有一次 Accepted（评测通过）</strong
+              >的<strong>不同题目</strong>数量；同一题多次 AC 仍计 1
+              题。<strong>提交次数</strong>为未删除记录下的每次递交总和（含未通过）。
             </p>
           </div>
           <div class="lb-help__card">
             <h3 class="lb-help__h">排序规则（当前榜单）</h3>
             <p v-if="rankDimension === 'composite'" class="lb-help__p">
-              <strong>综合排行：</strong>① 通过题数多者优先；② 题数相同则积分高者优先；③ 仍相同则总提交次数<strong>少</strong>者优先（同样实力下鼓励少无效提交）。
+              <strong>综合排行：</strong>① 通过题数多者优先；② 题数相同则积分高者优先；③
+              仍相同则总提交次数<strong>少</strong>者优先（同样实力下鼓励少无效提交）。
             </p>
             <p v-else-if="rankDimension === 'points'" class="lb-help__p">
-              <strong>积分榜：</strong>① 积分高者优先；② 积分相同则通过题数多者优先；③ 仍相同则总提交次数少者优先。
+              <strong>积分榜：</strong>① 积分高者优先；② 积分相同则通过题数多者优先；③
+              仍相同则总提交次数少者优先。
             </p>
             <p v-else class="lb-help__p">
-              <strong>活跃榜：</strong>① 总提交次数多者优先；② 相同则通过题数多者优先；③ 仍相同则积分高者优先。
+              <strong>活跃榜：</strong>① 总提交次数多者优先；② 相同则通过题数多者优先；③
+              仍相同则积分高者优先。
             </p>
           </div>
           <div class="lb-help__card">
@@ -407,7 +516,11 @@ function contestHue(id: string): number {
   opacity: 0.45;
   background-image:
     linear-gradient(color-mix(in srgb, var(--color-text-1) 6%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--color-text-1) 6%, transparent) 1px, transparent 1px);
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-text-1) 6%, transparent) 1px,
+      transparent 1px
+    );
   background-size: 40px 40px;
   mask-image: radial-gradient(ellipse 70% 65% at 50% 42%, #000 25%, transparent 72%);
   -webkit-mask-image: radial-gradient(ellipse 70% 65% at 50% 42%, #000 25%, transparent 72%);
@@ -550,7 +663,9 @@ function contestHue(id: string): number {
   font-weight: 700;
   background: transparent;
   color: var(--color-text-3);
-  transition: background 0.2s ease, color 0.2s ease;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
 }
 
 .lb-tab--active {
@@ -637,7 +752,11 @@ function contestHue(id: string): number {
   padding: 16px 12px 18px;
   border-radius: var(--lb-radius-lg);
   border: 1px solid var(--color-border-2);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--color-bg-1) 95%, #fff 5%) 0%, var(--color-bg-2) 100%);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-bg-1) 95%, #fff 5%) 0%,
+    var(--color-bg-2) 100%
+  );
   box-shadow: 0 14px 32px color-mix(in srgb, var(--color-text-1) 8%, transparent);
   position: relative;
 }
@@ -884,7 +1003,9 @@ function contestHue(id: string): number {
   font-weight: 700;
   color: var(--color-text-3);
   background: transparent;
-  transition: background 0.2s ease, color 0.2s ease;
+  transition:
+    background 0.2s ease,
+    color 0.2s ease;
 }
 
 .lb-side-tab--on {
@@ -940,13 +1061,12 @@ function contestHue(id: string): number {
   width: 56px;
   height: 56px;
   border-radius: 14px;
-  background:
-    linear-gradient(
-      145deg,
-      hsl(calc(var(--hue) + 18), 72%, 62%) 0%,
-      hsl(var(--hue), 58%, 52%) 45%,
-      hsl(calc(var(--hue) + 40), 45%, 38%) 100%
-    );
+  background: linear-gradient(
+    145deg,
+    hsl(calc(var(--hue) + 18), 72%, 62%) 0%,
+    hsl(var(--hue), 58%, 52%) 45%,
+    hsl(calc(var(--hue) + 40), 45%, 38%) 100%
+  );
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.35),
     0 8px 18px rgba(0, 0, 0, 0.12);
@@ -1037,6 +1157,69 @@ function contestHue(id: string): number {
   font-size: 13px;
   line-height: 1.65;
   color: var(--color-text-2);
+}
+
+/* —— 个人化与信息密度细化 —— */
+.lb-me-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  padding: 0 6px;
+  height: 17px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 800;
+  line-height: 1;
+  color: #fff;
+  background: var(--app-accent);
+  vertical-align: 1px;
+}
+
+.lb-podium__stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 10px;
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--color-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.lb-podium__slot--me .lb-podium__pedestal {
+  outline: 2px solid color-mix(in srgb, var(--app-accent) 55%, transparent);
+  outline-offset: 3px;
+  border-radius: 18px;
+}
+
+.lb-row-card {
+  transition:
+    border-color 0.18s ease,
+    background 0.18s ease,
+    transform 0.18s ease;
+}
+
+.lb-row-card--me {
+  border-color: color-mix(in srgb, var(--app-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--app-accent) 7%, transparent);
+}
+
+.lb-row-card--me .lb-row-card__order {
+  color: var(--app-accent);
+}
+
+.lb-stat--focus {
+  color: var(--app-accent);
+  font-weight: 800;
+}
+
+.lb-pager__size {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--color-text-3);
 }
 
 /* 暗黑：与首页首屏 / 功能入口高亮一致，见 @/styles/oj-spotlight-pages.css */

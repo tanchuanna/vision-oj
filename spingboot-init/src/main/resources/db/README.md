@@ -1,53 +1,56 @@
-# 数据库脚本说明
+# 数据库使用说明
 
-默认数据库名：**`tan`**（与 `application-prod.yml` 的默认连接一致；如设置 `MYSQL_URL`，以实际配置为准）。
+项目只保留一份完整 SQL：[schema.sql](./schema.sql)。它用于新建数据库，也可在备份后为已有数据库补齐脚本中列出的部分结构。**先确定目标库，再执行脚本**；脚本不创建数据库，也不切换数据库。
 
-## 安装
+## 选择数据库
 
-```bash
-mysql -u root -p < schema.sql
-```
+| 环境 | 默认库名 | 配置来源 |
+| --- | --- | --- |
+| 本地开发 | `test` | `application-dev.yml`，可用 `MYSQL_URL` 覆盖 |
+| 服务器生产 | `tan` | `application-prod.yml`，可用 `MYSQL_URL` 覆盖 |
 
-或在支持 `DELIMITER` 的 MySQL 客户端中执行 `schema.sql` 全文。此文件包含完整表结构、管理员账号（`admin`/`123456`）、40 道题和一场示例比赛。`CREATE TABLE IF NOT EXISTS`、缺列检查及 `INSERT IGNORE` 不会覆盖已有记录；导入已有库前仍应先备份并核对实际连接的库名。
+先核对后端实际连接的库名。下文以本地 `test` 为例；初始化新的生产库时，把命令中的 `test` 换为 `tan`。不要在尚未确认目标库时运行脚本。
 
-`schema.sql` 是新建数据库的完整总库，已包含文字模型、图片模型以及题解模块的全部表。`migrations/` 中仅保留线上已有数据库的增量升级脚本，不包含示例数据。线上更新前先备份数据库；不要把完整示例数据导入正在使用的生产库。
+## 新建本地数据库
 
-题解模块升级已有库时，只执行：
+1. 创建 `test` 库：
 
-```bash
-mysql -u root -p tan < migrations/20261114_question_solution.sql
-```
+   ```bash
+   mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS test CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+   ```
 
-题目统计与排行榜升级已有库时，只执行（不会删除提交数据）：
+2. 进入本说明文件所在的 `db` 目录，再执行总脚本：
 
-```bash
-mysql -u root -p tan < migrations/V20261114__question_statistics.sql
-```
+   ```bash
+   mysql -u root -p test < schema.sql
+   ```
 
-该统计结构也已合并进 `schema.sql`，以后全新部署只需执行总库脚本，不必重复执行迁移脚本。
+   上面的重定向命令适用于 Linux/macOS 终端和 Windows CMD。使用 **PowerShell** 时，可以先运行 `mysql -u root -p test`，进入 MySQL 后输入 `SOURCE schema.sql;`；也可以在图形化数据库工具中先选中 `test`，再运行 `schema.sql`。
 
-执行成功后，服务器上单独上传的 SQL 副本可以删除；仓库中的迁移文件建议保留，便于以后重新部署和追溯数据库版本。
+3. 核对结果：
 
-| 项 | 值 |
-|----|-----|
-| 管理员账号 | `admin` |
-| 管理员密码 | `123456` |
+   ```sql
+   SELECT DATABASE();
+   SELECT COUNT(*) AS table_count
+   FROM information_schema.tables
+   WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE';
+   SHOW TABLES LIKE 'question_submit';
+   SHOW TABLES LIKE 'teacher_student_relation';
+   ```
 
-> 仅当 `app.security.pepper` 为空（默认）时密码有效；生产环境请尽快改密。
+   全新库应有 **21 张业务表**。已有库可能还有项目之外的表，不能只凭数量判断是否正确。
 
-配置好数据库连接（`.env` 或 `application-local.yml`）后：
+## 脚本会做什么
 
-1. 在 **Linux + Docker** 机器上启动 **Sandbox**（判题必需，见仓库 [Sandbox/README.md](../../../../../Sandbox/README.md)）
-2. 再启动主服务 `spingboot-init`，即可用 `admin` / `123456` 登录并提交代码
+- 创建缺失的业务表；为 `user`、`question` 和 `question_submit` 补齐脚本明确列出的缺失字段，并为提交统计补齐相关索引。
+- 把已知旧角色值统一为 `user`（学生）、`teacher`（老师）、`admin`（管理员）；未知角色值保持原样。
+- 用 `INSERT IGNORE` 写入缺失的初始管理员、40 道练习题和示例比赛。已有同主键记录不会被覆盖。
+- 不包含删除业务表、清空用户或清空提交记录的语句。脚本中的 `DROP PROCEDURE` 只用于删除执行过程中创建的临时辅助过程。
 
-## 线上已有库
+初始管理员为 `admin` / `123456`，**仅在 `app.security.pepper` 为空时**该密码才与脚本中的密码哈希匹配。生产环境应配置自己的安全参数并妥善设置管理员密码。
 
-如果只需要修复最近登录设备字段，先确认主服务连接的库，再在该库执行 `SHOW COLUMNS FROM user;`，只补缺少的列。不要为了补字段删除数据库或覆盖现有用户、题目和提交记录。
-# 三角色权限迁移（2026-11-15）
+## 已有数据库
 
-上线前先备份数据库，然后执行 `migrations/V20261115__three_role_permissions.sql`。脚本只会规范已知的中文/旧角色值，未知值会保留并在最后的角色统计中显示，请人工确认后再继续上线。
+执行前先备份，并确认后端实际连接的数据库。总脚本包含演示数据，因此不要把它当作“只补一张表”的增量脚本直接导入正在使用的生产库。`CREATE TABLE IF NOT EXISTS` 也不会自动修正已有表的所有历史差异；如果线上结构和总脚本不同，应先比较字段与索引，再决定如何升级。
 
-- `user`：学生
-- `teacher`：老师
-- `admin`：管理员
-- `teacher_student_relation`：管理员分配的多对多师生关系
+此前的独立迁移 SQL 和本地演示账号 SQL 已移除。应用启动时仍可能由代码执行它自身的兼容性补列逻辑；这不属于本目录的第二份 SQL 文件。

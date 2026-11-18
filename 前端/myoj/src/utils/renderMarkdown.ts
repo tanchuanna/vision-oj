@@ -156,9 +156,25 @@ function ensureSanitizeHooks() {
   })
 }
 
+/**
+ * 保护已写好的 Markdown 图片/链接语法，避免裸链接预处理把
+ * `![图片](http://...jpg)` 拆成 `![图片](` + 图片 + `)`。
+ */
+function protectMarkdownMedia(markdown: string, inner: (s: string) => string): string {
+  const tokens: string[] = []
+  const stripped = markdown.replace(/!?\[[^\]]*\]\([^)\n]+\)/g, (m) => {
+    tokens.push(m)
+    return `\uE100${tokens.length - 1}\uE101`
+  })
+  const processed = inner(stripped)
+  return processed.replace(/\uE100(\d+)\uE101/g, (_, i) => tokens[Number(i)] ?? '')
+}
+
 function preprocessMarkdown(markdown: string): string {
   return protectFencedCodeBlocks(markdown, (body) =>
-    preprocessStandaloneImageUrls(preprocessBareImageUrls(body)),
+    protectMarkdownMedia(body, (safe) =>
+      preprocessStandaloneImageUrls(preprocessBareImageUrls(safe)),
+    ),
   )
 }
 

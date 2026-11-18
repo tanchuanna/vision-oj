@@ -31,6 +31,13 @@ export type PublicProfileVO = {
   birthday?: string
   status?: number
   userRole?: string
+  points?: number
+  checkInCount?: number
+  createTime?: string
+  solvedCount?: number
+  submitCount?: number
+  teacherNames?: string[]
+  studentCount?: number
 }
 
 async function getAuthHeaders() {

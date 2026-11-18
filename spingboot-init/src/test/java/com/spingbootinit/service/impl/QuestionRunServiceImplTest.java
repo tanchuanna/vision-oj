@@ -8,6 +8,7 @@ import com.spingbootinit.judo.codesandbox.CodeSandboxFactory;
 import com.spingbootinit.judo.codesandbox.model.ExecuteCodeRequest;
 import com.spingbootinit.judo.codesandbox.model.ExecuteCodeResponse;
 import com.spingbootinit.model.dto.question.JudgeCase;
+import com.spingbootinit.model.dto.question.JudgeConfig;
 import com.spingbootinit.model.dto.question.QuestionRunRequest;
 import com.spingbootinit.model.entity.Question;
 import com.spingbootinit.service.QuestionService;
@@ -118,6 +119,38 @@ class QuestionRunServiceImplTest {
 
         assertTrue(error.getMessage().contains("公开样例"));
         verifyNoInteractions(sandbox, imageJudgeInputService);
+    }
+
+    @Test
+    void imageSampleUsesSameSemanticConfigurationAsFormalJudge() {
+        Question question = textQuestion(sample("http://minio.local/ocr.png", "abcdef", true));
+        question.setQuestionType("IMAGE_OCR");
+        question.setCountTolerance(0);
+        JudgeConfig config = new JudgeConfig();
+        config.setOcrEditDistance(2);
+        question.setJudgeConfig(config);
+        when(questionService.getById(1L)).thenReturn(question);
+        when(imageJudgeInputService.prepare(eq(question), anyList(), eq("python"))).thenReturn(List.of("base64"));
+        when(sandbox.executeCode(any())).thenReturn(success(List.of("abxxef")));
+
+        var result = service.runSample(request("SAMPLE", "print(input())", null));
+
+        assertEquals(Boolean.TRUE, result.getAllSamplePassed());
+    }
+
+    @Test
+    void imageCountSampleUsesDedicatedCountTolerance() {
+        Question question = textQuestion(sample("http://minio.local/count.png", "{\"person\":2}", true));
+        question.setQuestionType("IMAGE_OBJECT_COUNT");
+        question.setCountTolerance(0);
+        JudgeConfig config = new JudgeConfig();
+        config.setCountTolerance(1);
+        question.setJudgeConfig(config);
+        when(questionService.getById(1L)).thenReturn(question);
+        when(imageJudgeInputService.prepare(eq(question), anyList(), eq("python"))).thenReturn(List.of("base64"));
+        when(sandbox.executeCode(any())).thenReturn(success(List.of("{\"person\":3}")));
+
+        assertEquals(Boolean.TRUE, service.runSample(request("SAMPLE", "print(input())", null)).getAllSamplePassed());
     }
 
     private static QuestionRunRequest request(String mode, String code, String input) {

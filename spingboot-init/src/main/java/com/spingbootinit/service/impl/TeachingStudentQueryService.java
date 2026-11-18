@@ -34,7 +34,8 @@ public class TeachingStudentQueryService {
                 .eq(User::getUserRole, "user")
                 .in(!scope.allStudents(), User::getId, scope.studentIds())
                 .and(StringUtils.isNotBlank(keyword), q -> q.like(User::getUsername, keyword.trim())
-                        .or().like(User::getNickname, keyword.trim()));
+                        .or().like(User::getNickname, keyword.trim()))
+                .orderByDesc(User::getId);
         Page<User> users = userService.page(new Page<>(safeCurrent, safeSize), query);
         List<TeachingStudentVO> records = users.getRecords().stream()
                 .map(u -> questionSubmitMapper.selectTeachingStudent(u.getId()))

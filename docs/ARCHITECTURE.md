@@ -659,7 +659,7 @@ flowchart LR
 【判题机】生产环境：Sandbox 单独一台 Linux + Docker（见 Sandbox/README.md）
 
 【本机联调】
-1. 启动 MySQL，执行 db/schema.sql
+1. 启动 MySQL，创建 `test` 库并选中它，再执行 `db/schema.sql`（脚本不切换数据库）
 2. 启动 Redis
 3. 安装并启动 Docker（Windows：Docker Desktop；Linux：Docker Engine）
 4. 启动 Sandbox（必须在能执行 docker 的环境）：

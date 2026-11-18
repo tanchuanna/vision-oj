@@ -152,14 +152,12 @@ const tabHint = computed(() =>
       : '几分钟即可加入社区与比赛',
 )
 
-/** 登录 / 注册面板下方一句引导，减少误操作 */
-const panelLead = computed(() =>
-  tab.value === 'login'
-    ? '先滑块验证，再填写账号与图形码'
-    : tab.value === 'recover'
-      ? '使用注册时绑定的邮箱接收验证码，设置新密码'
-      : '仅用于创建账号，注册后请用同一用户名登录',
-)
+/** 密码框大写锁定提示 */
+const capsLockOn = ref(false)
+
+function syncCapsLock(e: KeyboardEvent) {
+  capsLockOn.value = typeof e.getModifierState === 'function' && e.getModifierState('CapsLock')
+}
 
 function revokeCaptcha() {
   if (captchaObjectUrl) {
@@ -456,7 +454,17 @@ onBeforeUnmount(() => {
           <span aria-hidden="true">×</span>
         </button>
         <div class="auth-hero-inner">
-          <div class="auth-logo-mark auth-anim auth-anim--1" aria-hidden="true">&lt;/&gt;</div>
+          <div class="auth-logo-mark auth-anim auth-anim--1" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path
+                d="M9 7.5 5.2 12 9 16.5M15 7.5 18.8 12 15 16.5"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+          </div>
           <h2 class="auth-hero-title auth-anim auth-anim--2">码跃 OJ</h2>
           <div class="auth-hero-sub-wrap auth-anim auth-anim--sub">
             <Transition name="auth-tab-hint" mode="out-in">
@@ -493,15 +501,11 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div class="auth-body-block auth-body-block--lead">
-          <p class="auth-panel-lead">{{ panelLead }}</p>
-        </div>
-
         <div class="auth-body-block auth-body-block--panel">
           <Transition name="auth-panel" mode="out-in">
             <div v-if="tab === 'login'" key="login" class="auth-panel">
               <a-form layout="vertical" class="auth-form">
-                <a-form-item label="用户名 / QQ 邮箱" hide-asterisk class="auth-field">
+                <a-form-item label="用户名 / 邮箱" hide-asterisk class="auth-field">
                   <a-input
                     v-model="loginForm.username"
                     allow-clear
@@ -509,6 +513,7 @@ onBeforeUnmount(() => {
                     class="auth-input"
                     placeholder="用户名或注册时绑定的邮箱"
                     autocomplete="username"
+                    @keyup.enter="onLogin"
                   >
                     <template #prefix>
                       <span class="input-ico" aria-hidden="true">
@@ -533,12 +538,24 @@ onBeforeUnmount(() => {
                     </template>
                   </a-input>
                 </a-form-item>
-                <a-form-item label="密码" hide-asterisk class="auth-field">
+                <a-form-item hide-asterisk class="auth-field">
+                  <template #label>
+                    <span class="field-label-row">
+                      <span>密码</span>
+                      <button type="button" class="auth-recovery-link" @click="openRecovery">
+                        忘记密码？
+                      </button>
+                    </span>
+                  </template>
                   <a-input-password
                     v-model="loginForm.password"
                     size="large"
                     class="auth-input"
                     placeholder="密码"
+                    @keyup.enter="onLogin"
+                    @keydown="syncCapsLock"
+                    @keyup="syncCapsLock"
+                    @blur="capsLockOn = false"
                   >
                     <template #prefix>
                       <span class="input-ico" aria-hidden="true">
@@ -565,16 +582,12 @@ onBeforeUnmount(() => {
                       </span>
                     </template>
                   </a-input-password>
+                  <p v-if="capsLockOn" class="field-hint field-hint--warn">大写锁定已开启</p>
                 </a-form-item>
-                <div class="auth-recovery-link-row">
-                  <button type="button" class="auth-recovery-link" @click="openRecovery">
-                    忘记密码？
-                  </button>
-                </div>
                 <a-form-item label="验证码" hide-asterisk class="auth-field captcha-form-item">
                   <div v-if="!captchaUnlocked" ref="slideTrackRef" class="slide-unlock">
                     <div class="slide-unlock-bg">
-                      <span class="slide-unlock-text">向右滑到底，加载图形验证码</span>
+                      <span class="slide-unlock-text">拖动滑块完成人机验证</span>
                     </div>
                     <div
                       class="slide-unlock-progress"
@@ -625,6 +638,7 @@ onBeforeUnmount(() => {
                           class="auth-input captcha-input"
                           placeholder="图中字符"
                           :disabled="captchaImageLoading || !captchaUrl"
+                          @keyup.enter="onLogin"
                         />
                         <button
                           type="button"
@@ -657,11 +671,10 @@ onBeforeUnmount(() => {
                   :loading="loginLoading"
                   @click="onLogin"
                 >
-                  进入码跃
+                  {{ loginLoading ? '正在登录…' : '进入码跃' }}
                 </a-button>
                 <p class="auth-legal">
-                  登录时会记录 IP、估算归属地及浏览器提供的设备概况，用于账号管理。
-                  注册或登录即代表您同意
+                  登录即代表您同意
                   <RouterLink
                     to="/legal/terms"
                     class="auth-legal-link"
@@ -696,6 +709,7 @@ onBeforeUnmount(() => {
                     class="auth-input"
                     placeholder="请输入注册时绑定的邮箱"
                     autocomplete="email"
+                    @keyup.enter="sendRecoveryCode"
                   />
                 </a-form-item>
                 <a-form-item label="邮件验证码" hide-asterisk class="auth-field">
@@ -707,6 +721,7 @@ onBeforeUnmount(() => {
                       class="auth-input"
                       placeholder="6 位数字验证码"
                       inputmode="numeric"
+                      @keyup.enter="resetForgottenPassword"
                     />
                     <a-button
                       class="recovery-code-button"
@@ -734,6 +749,7 @@ onBeforeUnmount(() => {
                     class="auth-input"
                     placeholder="6～20 位字母和数字"
                     autocomplete="new-password"
+                    @keyup.enter="resetForgottenPassword"
                   />
                 </a-form-item>
                 <a-form-item label="确认新密码" hide-asterisk class="auth-field">
@@ -743,6 +759,7 @@ onBeforeUnmount(() => {
                     class="auth-input"
                     placeholder="再输入一次新密码"
                     autocomplete="new-password"
+                    @keyup.enter="resetForgottenPassword"
                   />
                 </a-form-item>
                 <a-button
@@ -770,6 +787,7 @@ onBeforeUnmount(() => {
                     size="large"
                     class="auth-input"
                     placeholder="4～16 位字母、数字或下划线"
+                    @keyup.enter="onRegister"
                   >
                     <template #prefix>
                       <span class="input-ico" aria-hidden="true">
@@ -801,6 +819,7 @@ onBeforeUnmount(() => {
                     size="large"
                     class="auth-input"
                     placeholder="建议填写，忘记密码时可用邮箱找回"
+                    @keyup.enter="onRegister"
                   >
                     <template #prefix>
                       <span class="input-ico" aria-hidden="true">
@@ -833,6 +852,10 @@ onBeforeUnmount(() => {
                     size="large"
                     class="auth-input"
                     placeholder="6～20 位，含字母与数字"
+                    @keyup.enter="onRegister"
+                    @keydown="syncCapsLock"
+                    @keyup="syncCapsLock"
+                    @blur="capsLockOn = false"
                   >
                     <template #prefix>
                       <span class="input-ico" aria-hidden="true">
@@ -859,6 +882,7 @@ onBeforeUnmount(() => {
                       </span>
                     </template>
                   </a-input-password>
+                  <p v-if="capsLockOn" class="field-hint field-hint--warn">大写锁定已开启</p>
                 </a-form-item>
                 <a-form-item label="确认密码" hide-asterisk class="auth-field">
                   <a-input-password
@@ -866,6 +890,7 @@ onBeforeUnmount(() => {
                     size="large"
                     class="auth-input"
                     placeholder="再输入一次"
+                    @keyup.enter="onRegister"
                   >
                     <template #prefix>
                       <span class="input-ico" aria-hidden="true">
@@ -904,7 +929,7 @@ onBeforeUnmount(() => {
                   创建账号
                 </a-button>
                 <p class="auth-legal">
-                  注册或登录即代表您同意
+                  注册即代表您同意
                   <RouterLink
                     to="/legal/terms"
                     class="auth-legal-link"
@@ -951,7 +976,7 @@ onBeforeUnmount(() => {
 
 .auth-hero {
   position: relative;
-  padding: 32px 28px 28px;
+  padding: 20px 26px 18px;
   color: #fff;
   overflow: hidden;
 }
@@ -990,8 +1015,8 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 90% 80% at 10% 0%, rgba(255, 255, 255, 0.18), transparent 50%),
-    linear-gradient(135deg, #0c4f4a 0%, #0f766e 38%, #14b8a6 62%, #5eead4 100%);
+    radial-gradient(ellipse 70% 100% at 88% -10%, rgba(94, 234, 212, 0.3), transparent 62%),
+    linear-gradient(135deg, #0b3b39 0%, #0f5f58 52%, #0f766e 100%);
   opacity: 1;
 }
 
@@ -999,22 +1024,18 @@ onBeforeUnmount(() => {
   content: '';
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(ellipse 80% 120% at 100% -20%, rgba(255, 255, 255, 0.38), transparent 55%),
-    repeating-linear-gradient(
-      -12deg,
-      transparent,
-      transparent 12px,
-      rgba(255, 255, 255, 0.04) 12px,
-      rgba(255, 255, 255, 0.04) 13px
-    );
+  background: radial-gradient(
+    ellipse 120% 90% at 0% 110%,
+    rgba(13, 148, 136, 0.35),
+    transparent 60%
+  );
   pointer-events: none;
 }
 
 .auth-hero-noise {
   position: absolute;
   inset: 0;
-  opacity: 0.07;
+  opacity: 0.045;
   background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   pointer-events: none;
   mix-blend-mode: overlay;
@@ -1052,14 +1073,30 @@ onBeforeUnmount(() => {
 }
 
 .auth-hero-sub-wrap {
-  min-height: 2.4em;
+  min-height: 2.2em;
 }
 
 .auth-logo-mark {
-  font-size: 30px;
-  line-height: 1;
-  margin-bottom: 10px;
-  filter: drop-shadow(0 2px 10px rgba(0, 0, 0, 0.18));
+  width: 42px;
+  height: 42px;
+  margin-bottom: 12px;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow:
+    0 8px 20px rgba(0, 0, 0, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+.auth-logo-mark svg {
+  width: 22px;
+  height: 22px;
+  display: block;
 }
 
 .auth-hero-title {
@@ -1072,10 +1109,11 @@ onBeforeUnmount(() => {
 }
 
 .auth-hero-sub {
-  margin: 12px 0 0;
-  font-size: 14px;
-  line-height: 1.55;
+  margin: 10px 0 0;
+  font-size: 13.5px;
+  line-height: 1.5;
   max-width: 24em;
+  opacity: 0.92;
 }
 
 .auth-tab-hint-enter-active,
@@ -1096,8 +1134,8 @@ onBeforeUnmount(() => {
 }
 
 .auth-body {
-  padding: 22px 28px 34px;
-  background: linear-gradient(180deg, #f7faf9 0%, #ffffff 42%, #ffffff 100%);
+  padding: 18px 26px 24px;
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 38%, #ffffff 100%);
 }
 
 .auth-body-block {
@@ -1111,37 +1149,23 @@ onBeforeUnmount(() => {
 .auth-card--revealed .auth-body-block--tabs {
   opacity: 1;
   transform: translateY(0);
-  transition-delay: 0.4s;
-}
-
-.auth-card--revealed .auth-body-block--lead {
-  opacity: 1;
-  transform: translateY(0);
-  transition-delay: 0.5s;
+  transition-delay: 0.32s;
 }
 
 .auth-card--revealed .auth-body-block--panel {
   opacity: 1;
   transform: translateY(0);
-  transition-delay: 0.58s;
-}
-
-.auth-panel-lead {
-  margin: 0 0 16px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: #64748b;
-  letter-spacing: 0.02em;
+  transition-delay: 0.42s;
 }
 
 .segmented {
   position: relative;
   display: flex;
   padding: 4px;
-  margin-bottom: 22px;
-  background: linear-gradient(180deg, #ecfdf5 0%, #f0fdfa 100%);
-  border-radius: 14px;
-  border: 1px solid rgba(13, 148, 136, 0.12);
+  margin-bottom: 18px;
+  background: #f1f5f9;
+  border-radius: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.06);
 }
 
 .segmented-pill {
@@ -1151,8 +1175,8 @@ onBeforeUnmount(() => {
   width: calc(50% - 4px);
   height: calc(100% - 8px);
   background: #fff;
-  border-radius: 11px;
-  box-shadow: 0 4px 14px rgba(13, 148, 136, 0.18);
+  border-radius: 9px;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.1);
   transition: transform 0.32s cubic-bezier(0.34, 1.3, 0.64, 1);
   pointer-events: none;
 }
@@ -1165,14 +1189,14 @@ onBeforeUnmount(() => {
   position: relative;
   z-index: 1;
   flex: 1;
-  padding: 11px 12px;
+  padding: 10px 12px;
   border: none;
   background: transparent;
   font-size: 15px;
   font-weight: 600;
   color: #64748b;
   cursor: pointer;
-  border-radius: 11px;
+  border-radius: 9px;
   transition: color 0.22s ease;
 }
 
@@ -1190,15 +1214,15 @@ onBeforeUnmount(() => {
 }
 
 .auth-form :deep(.arco-form-item) {
-  margin-bottom: 22px;
+  margin-bottom: 18px;
 }
 
 .auth-form :deep(.arco-form-item-label-col) {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  color: #64748b;
-  margin-bottom: 10px !important;
+  letter-spacing: 0.02em;
+  color: #475569;
+  margin-bottom: 8px !important;
 }
 
 /* 滑块轨道内全是 absolute，在 Arco 表单项 flex 里父级宽度会塌成 0，须拉满一行 */
@@ -1222,8 +1246,8 @@ onBeforeUnmount(() => {
 /* —— 输入框：更高、暖灰底、hover/focus 分层清晰 —— */
 .auth-form .auth-field :deep(.arco-input-wrapper),
 .auth-form .auth-field :deep(.arco-input-password) {
-  min-height: 52px;
-  border-radius: 16px !important;
+  min-height: 48px;
+  border-radius: 12px !important;
   border: 1px solid rgba(15, 23, 42, 0.08) !important;
   background: #fafaf8 !important;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04) !important;
@@ -1298,11 +1322,11 @@ onBeforeUnmount(() => {
 }
 
 .captcha-tile {
-  width: 118px;
-  min-height: 52px;
+  width: 112px;
+  min-height: 48px;
   padding: 0;
-  border: 1px dashed rgba(13, 148, 136, 0.4);
-  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 12px;
   overflow: hidden;
   cursor: pointer;
   flex-shrink: 0;
@@ -1444,7 +1468,7 @@ onBeforeUnmount(() => {
   flex: 1 1 0;
   width: 100%;
   min-width: 0;
-  border-radius: 16px;
+  border-radius: 12px;
   background: linear-gradient(180deg, #eef2f6 0%, #e2e8f0 100%);
   overflow: hidden;
   user-select: none;
@@ -1469,7 +1493,7 @@ onBeforeUnmount(() => {
   content: '';
   display: block;
   width: 100%;
-  height: 52px;
+  height: 48px;
   pointer-events: none;
 }
 
@@ -1546,7 +1570,7 @@ onBeforeUnmount(() => {
 
 .auth-submit {
   margin-top: 8px;
-  height: 46px !important;
+  height: 48px !important;
   border-radius: 12px !important;
   font-size: 15px !important;
   font-weight: 600 !important;
@@ -1572,19 +1596,32 @@ onBeforeUnmount(() => {
   background: linear-gradient(135deg, #0f766e 0%, #0d9488 55%, #2dd4bf 100%) !important;
 }
 
-.auth-recovery-link-row {
+.field-label-row {
   display: flex;
-  justify-content: flex-end;
-  margin: -10px 0 18px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.field-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #94a3b8;
+}
+.field-hint--warn {
+  color: #b45309;
+  font-weight: 600;
 }
 .auth-recovery-link,
 .recovery-back {
   border: 0;
+  padding: 0;
   background: transparent;
   color: #0f766e;
   font: inherit;
-  font-size: 13px;
-  font-weight: 650;
+  font-size: 12.5px;
+  font-weight: 600;
   cursor: pointer;
 }
 .auth-recovery-link:hover,
@@ -1637,9 +1674,9 @@ onBeforeUnmount(() => {
   flex: 1;
 }
 .recovery-code-button {
-  height: 46px;
+  height: 48px;
   min-width: 116px;
-  border-radius: 11px;
+  border-radius: 10px;
   color: #0f766e;
   border-color: #8bd9ce;
 }
@@ -1760,13 +1797,17 @@ onBeforeUnmount(() => {
   background: linear-gradient(180deg, rgba(17, 26, 34, 0.98) 0%, rgba(13, 20, 28, 0.99) 100%);
 }
 
-.auth-card--dark .auth-panel-lead {
+.auth-card--dark .field-hint {
   color: #94a3b8;
 }
 
+.auth-card--dark .field-hint--warn {
+  color: #fbbf24;
+}
+
 .auth-card--dark .segmented {
-  background: linear-gradient(180deg, rgba(15, 118, 110, 0.14) 0%, rgba(15, 118, 110, 0.06) 100%);
-  border-color: rgba(83, 219, 194, 0.2);
+  background: rgba(148, 163, 184, 0.1);
+  border-color: rgba(148, 163, 184, 0.16);
 }
 
 .auth-card--dark .segmented-pill {
@@ -1839,6 +1880,24 @@ onBeforeUnmount(() => {
   color: #5eead4;
 }
 
+@media (max-width: 560px) {
+  .auth-hero {
+    padding: 18px 18px 16px;
+  }
+
+  .auth-body {
+    padding: 16px 18px 20px;
+  }
+
+  .captcha-tile {
+    width: 96px;
+  }
+
+  .recovery-code-button {
+    min-width: 100px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .auth-card {
     opacity: 1 !important;
@@ -1883,5 +1942,12 @@ onBeforeUnmount(() => {
 
 .auth-modal-shell .arco-modal-body {
   padding: 0 !important;
+}
+
+@media (max-width: 560px) {
+  .auth-modal-shell.arco-modal {
+    width: calc(100vw - 24px) !important;
+    max-width: calc(100vw - 24px);
+  }
 }
 </style>

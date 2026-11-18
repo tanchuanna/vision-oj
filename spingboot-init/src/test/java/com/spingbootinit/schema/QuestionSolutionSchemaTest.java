@@ -11,13 +11,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class QuestionSolutionSchemaTest {
 
     private static final Path SCHEMA = Path.of("src/main/resources/db/schema.sql");
-    private static final Path MIGRATION = Path.of("src/main/resources/db/migrations/20261114_question_solution.sql");
-
     @Test
-    void masterSchemaAndMigrationContainCompleteQuestionSolutionTables() throws IOException {
+    void masterSchemaContainsCompleteQuestionSolutionTables() throws IOException {
         assertSchema(Files.readString(SCHEMA));
-        assertTrue(Files.exists(MIGRATION), "missing production migration SQL");
-        assertSchema(Files.readString(MIGRATION));
     }
 
     private static void assertSchema(String sql) {

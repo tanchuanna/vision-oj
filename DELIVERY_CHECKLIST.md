@@ -17,12 +17,12 @@
 - `target`、`dist`、Jar、class：可重新构建
 - 重复训练权重 `best.pt`、`last.pt`：正式模型 `hard-hat-best.pt` 已保留
 - `.git`、IDE 配置、日志、缓存和临时代码
-- `.env`、`ap.env`、`application-local.yml`：可能包含密码或密钥
+- `.env`、`.sandbox.env`、`application-local.yml`、`*.private-backup.yml`：可能包含密码或密钥
 
 ## 收到项目后的启动顺序
 
 1. 安装并启动 MySQL、Redis、MinIO、Docker。
-2. 导入 `spingboot-init/src/main/resources/db/schema.sql`。
+2. 创建并选中目标数据库，再执行 `spingboot-init/src/main/resources/db/schema.sql`；脚本本身不会切换数据库。本地默认库为 `test`，详见 `spingboot-init/src/main/resources/db/README.md`。
 3. 复制 `.env.example` 为 `.env`，填写本机配置。
 4. 在 Ubuntu 按 `deploy/ubuntu/README.md` 启动 Sandbox。
 5. 在 `vision-ai` 创建虚拟环境并安装 `requirements.txt`，运行 `python run.py`。

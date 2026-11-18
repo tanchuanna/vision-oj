@@ -56,6 +56,16 @@ export type SubmissionDetail = SubmissionListItem & {
   ownSubmission?: boolean
 }
 
+export type SubmissionDiagnosis = {
+  verdict?: string
+  headline?: string
+  rootCause?: string
+  evidence?: string[]
+  hints?: string[]
+  nextStep?: string
+  snippet?: string
+}
+
 type ApiResult<T> = { code?: number; message?: string; data?: T }
 type ApiPage<T> = { records?: T[]; total?: number; current?: number; size?: number }
 
@@ -98,5 +108,18 @@ export async function getSubmissionDetail(submissionId: string) {
     { headers: await getAuthHeaders() },
   )
   if (data.code !== 200 || !data.data) throw new Error(data.message || '提交详情加载失败')
+  return data.data
+}
+
+export async function diagnoseSubmission(
+  submissionId: string,
+  options?: { providerCode?: string; modelId?: string },
+) {
+  const { data } = await axios.post<ApiResult<SubmissionDiagnosis>>(
+    `${API_BASE_URL}/question_submit/${encodeURIComponent(submissionId)}/ai-diagnose`,
+    { providerCode: options?.providerCode, modelId: options?.modelId },
+    { headers: await getAuthHeaders() },
+  )
+  if (data.code !== 200 || !data.data) throw new Error(data.message || 'AI 诊断失败，请稍后重试')
   return data.data
 }

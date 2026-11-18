@@ -7,6 +7,8 @@ import com.spingbootinit.common.exception.BusinessException;
 import com.spingbootinit.common.exception.ThrowUtils;
 import com.spingbootinit.common.result.ResultCode;
 import com.spingbootinit.context.UserContext.UserContext;
+import com.spingbootinit.judo.strategy.ImageJudgeConfigPolicy;
+import com.spingbootinit.judo.strategy.ImageOutputJudgeStrategy;
 import com.spingbootinit.mapper.QuestionMapper;
 import com.spingbootinit.model.dto.question.*;
 import com.spingbootinit.model.entity.Question;
@@ -67,15 +69,14 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         if (!TYPE_TEXT.equals(questionType) && !IMAGE_TYPES.contains(questionType)) {
             throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "不支持的题目类型");
         }
+        if (judgeConfig == null) {
+            throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "判题配置不完整");
+        }
         if (IMAGE_TYPES.contains(questionType)) {
             if (StringUtils.isBlank(question.getImageUrl())) {
                 throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "图像类题目必须配置题图 URL");
             }
-            int tolerance = question.getCountTolerance() == null ? 0 : question.getCountTolerance();
-            if (tolerance < 0 || tolerance > 100) {
-                throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "计数允许误差必须在 0~100 之间");
-            }
-            question.setCountTolerance(tolerance);
+            normalizeImageJudgeConfig(questionType, question, judgeConfig);
             String modelKey = StringUtils.defaultIfBlank(question.getVisionModelKey(), "YOLO_GENERAL")
                     .trim().toUpperCase(Locale.ROOT);
             if ("IMAGE_OCR".equals(questionType)) modelKey = "EASYOCR_ZH_EN";
@@ -124,14 +125,23 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
             }
             if (TYPE_IMAGE_OBJECT_COUNT.equals(questionType)) {
                 validateObjectCountJson(c.getOutput(), i + 1);
+            } else if ("IMAGE_CLASSIFICATION".equals(questionType)) {
+                validateClassificationLabel(c.getOutput(), i + 1);
             } else if ("IMAGE_OBJECT_DETECTION".equals(questionType)) {
                 validateDetectionJson(c.getOutput(), i + 1);
+            } else if ("IMAGE_OCR".equals(questionType)) {
+                validateOcrText(c.getOutput(), i + 1);
             } else if ("IMAGE_ANALYSIS".equals(questionType)) {
-                validateAnalysisJson(c.getOutput(), i + 1);
+                validateAnalysisJson(c.getOutput(), i + 1,
+                        ImageJudgeConfigPolicy.usesStructuredAnalysis(judgeConfig));
             }
         }
         if (IMAGE_TYPES.contains(questionType)) {
             Map<String, Object> review = question.getQualityReview();
+            if (review == null || !Boolean.TRUE.equals(review.get("candidateConfirmed"))) {
+                throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(),
+                        "请先复核识别候选答案，并确认标准答案已经过命题人员人工确认");
+            }
             if (review != null && review.get("reports") instanceof Map<?, ?> reports) {
                 boolean hasWarning = judgeCases.stream().map(JudgeCase::getInput).anyMatch(url -> {
                     Object report = reports.get(url);
@@ -160,8 +170,7 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
             }
         }
 
-        if (judgeConfig == null
-                || judgeConfig.getTimeLimit() == null
+        if (judgeConfig.getTimeLimit() == null
                 || judgeConfig.getMemoryLimit() == null
                 || judgeConfig.getStackLimit() == null) {
             throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "判题配置不完整");
@@ -199,24 +208,124 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
     }
 
     private void validateDetectionJson(String raw, int caseNo) {
-        try {
-            cn.hutool.json.JSONArray array = cn.hutool.json.JSONUtil.parseArray(raw);
-            for (Object item : array) {
-                cn.hutool.json.JSONObject box = cn.hutool.json.JSONUtil.parseObj(item);
-                if (StringUtils.isBlank(box.getStr("label")) || box.get("x1") == null || box.get("y1") == null
-                        || box.get("x2") == null || box.get("y2") == null) throw new IllegalArgumentException();
-            }
-        } catch (Exception e) {
+        if (!ImageOutputJudgeStrategy.outputsMatch("IMAGE_OBJECT_DETECTION", raw, raw, 50)) {
             throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(),
-                    "第 " + caseNo + " 组检测标准输出必须是包含 label/x1/y1/x2/y2 的 JSON 数组");
+                    "第 " + caseNo + " 组检测标准输出必须是包含 label/x1/y1/x2/y2 的 JSON 数组，坐标需满足 0≤x1<x2≤1、0≤y1<y2≤1");
         }
     }
 
-    private void validateAnalysisJson(String raw, int caseNo) {
+    private void validateClassificationLabel(String raw, int caseNo) {
+        String label = StringUtils.trimToEmpty(raw);
+        if (label.contains("\n") || label.contains("\r")
+                || !label.matches("[A-Za-z][A-Za-z0-9_-]*(?: [A-Za-z0-9_-]+)*")) {
+            throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(),
+                    "第 " + caseNo + " 组分类标准输出必须是一个英文类别标签，例如 traffic light；无目标请填写 unknown");
+        }
+    }
+
+    private void validateOcrText(String raw, int caseNo) {
+        String text = StringUtils.trimToEmpty(raw);
         try {
-            if (cn.hutool.json.JSONUtil.parseObj(raw).isEmpty()) throw new IllegalArgumentException();
+            if ((text.startsWith("{") && text.endsWith("}")) || (text.startsWith("[") && text.endsWith("]"))) {
+                cn.hutool.json.JSONUtil.parse(text);
+                throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(),
+                        "第 " + caseNo + " 组 OCR 标准输出应为纯文本，不能输出 JSON 或解释文字");
+            }
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception ignored) {
+            // 形似括号但并非 JSON 的内容仍按普通 OCR 文本处理。
+        }
+    }
+
+    private void validateAnalysisJson(String raw, int caseNo, boolean structured) {
+        try {
+            cn.hutool.json.JSONObject object = cn.hutool.json.JSONUtil.parseObj(raw);
+            if (!structured) {
+                if (object.isEmpty()) throw new IllegalArgumentException();
+                return;
+            }
+            Set<String> fields = Set.of("width", "height", "mode", "mean_gray", "edge_strength");
+            if (!object.keySet().equals(fields)) throw new IllegalArgumentException();
+            Number width = object.get("width") instanceof Number n ? n : null;
+            Number height = object.get("height") instanceof Number n ? n : null;
+            Number meanGray = object.get("mean_gray") instanceof Number n ? n : null;
+            Number edgeStrength = object.get("edge_strength") instanceof Number n ? n : null;
+            if (width == null || height == null || meanGray == null || edgeStrength == null
+                    || width.longValue() <= 0 || height.longValue() <= 0
+                    || width.doubleValue() != width.longValue() || height.doubleValue() != height.longValue()
+                    || !Double.isFinite(meanGray.doubleValue()) || !Double.isFinite(edgeStrength.doubleValue())
+                    || StringUtils.isBlank(object.getStr("mode"))) throw new IllegalArgumentException();
         } catch (Exception e) {
-            throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "第 " + caseNo + " 组图像属性标准输出必须是 JSON 对象");
+            throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(),
+                    "第 " + caseNo + " 组图像数值标准输出必须包含 width、height、mode、mean_gray、edge_strength 五个字段");
+        }
+    }
+
+    private void normalizeImageJudgeConfig(String questionType, Question question, JudgeConfig config) {
+        Integer legacy = question.getCountTolerance();
+        switch (questionType) {
+            case TYPE_IMAGE_OBJECT_COUNT -> {
+                if (config.getCountTolerance() != null) {
+                    requireRange(config.getCountTolerance(), 0, 100, "数量允许误差必须在 0~100 之间");
+                } else if (legacy != null) {
+                    requireRange(legacy, 0, 100, "数量允许误差必须在 0~100 之间");
+                }
+                int tolerance = ImageJudgeConfigPolicy.countTolerance(config, legacy);
+                config.setCountTolerance(tolerance);
+                question.setCountTolerance(tolerance);
+            }
+            case "IMAGE_OBJECT_DETECTION" -> {
+                Double configured = config.getIouThreshold();
+                if (configured != null && (!Double.isFinite(configured) || configured < 0.1 || configured > 0.95)) {
+                    throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "IoU 阈值必须在 0.1~0.95 之间");
+                }
+                double threshold = ImageJudgeConfigPolicy.iouThreshold(config, legacy);
+                config.setIouThreshold(threshold);
+                question.setCountTolerance((int) Math.round(threshold * 100));
+            }
+            case "IMAGE_OCR" -> {
+                if (config.getOcrEditDistance() != null) {
+                    requireRange(config.getOcrEditDistance(), 0, 100, "OCR 允许错误字符数必须在 0~100 之间");
+                } else if (legacy != null) {
+                    requireRange(legacy, 0, 100, "OCR 允许错误字符数必须在 0~100 之间");
+                }
+                int distance = ImageJudgeConfigPolicy.ocrEditDistance(config, legacy);
+                config.setOcrEditDistance(distance);
+                question.setCountTolerance(distance);
+            }
+            case "IMAGE_ANALYSIS" -> {
+                if (ImageJudgeConfigPolicy.usesStructuredAnalysis(config)) {
+                    if (config.getMeanGrayTolerance() != null) {
+                        requireFiniteRange(config.getMeanGrayTolerance(), 0, 255,
+                                "平均灰度允许误差必须在 0~255 之间");
+                    }
+                    if (config.getEdgeStrengthTolerance() != null) {
+                        requireFiniteRange(config.getEdgeStrengthTolerance(), 0, 255,
+                                "边缘强度允许误差必须在 0~255 之间");
+                    }
+                    double meanTolerance = ImageJudgeConfigPolicy.meanGrayTolerance(config, legacy);
+                    double edgeTolerance = ImageJudgeConfigPolicy.edgeStrengthTolerance(config, legacy);
+                    requireFiniteRange(meanTolerance, 0, 255, "平均灰度允许误差必须在 0~255 之间");
+                    requireFiniteRange(edgeTolerance, 0, 255, "边缘强度允许误差必须在 0~255 之间");
+                    config.setAnalysisVersion(2);
+                    config.setMeanGrayTolerance(meanTolerance);
+                    config.setEdgeStrengthTolerance(edgeTolerance);
+                }
+                question.setCountTolerance(Math.max(0, legacy == null ? 0 : legacy));
+            }
+            case "IMAGE_CLASSIFICATION" -> question.setCountTolerance(0);
+            default -> throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "不支持的图像题型");
+        }
+    }
+
+    private void requireRange(int value, int min, int max, String message) {
+        if (value < min || value > max) throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), message);
+    }
+
+    private void requireFiniteRange(double value, double min, double max, String message) {
+        if (!Double.isFinite(value) || value < min || value > max) {
+            throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), message);
         }
     }
 
@@ -424,15 +533,10 @@ public class QuestionServiceImpl extends ServiceImpl<QuestionMapper, Question> i
         if (judgeCases == null || judgeCases.isEmpty()) {
             vo.setSampleJudgeCase(Collections.emptyList());
         } else {
-            boolean imageQuestion = IMAGE_TYPES.contains(StringUtils.upperCase(question.getQuestionType()));
             List<JudgeCase> explicitSamples = judgeCases.stream()
                     .filter(c -> Boolean.TRUE.equals(c.getSample())).toList();
-            if (imageQuestion) {
-                // 兼容旧数据：没有 sample 标记时仅公开第一组，绝不返回隐藏用例。
-                vo.setSampleJudgeCase(explicitSamples.isEmpty() ? judgeCases.stream().limit(1).toList() : explicitSamples);
-            } else {
-                vo.setSampleJudgeCase(explicitSamples.isEmpty() ? judgeCases.stream().limit(3).toList() : explicitSamples);
-            }
+            // 未标记公开的历史用例一律视为隐藏，避免题目详情泄露标准输出。
+            vo.setSampleJudgeCase(explicitSamples);
         }
         User owner = userService.getById(question.getUserId());
         if (owner != null) {

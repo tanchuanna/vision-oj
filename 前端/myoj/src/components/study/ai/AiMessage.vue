@@ -4,6 +4,7 @@ import { useClipboard } from '@vueuse/core'
 import { extractMarkdownCodeBlocks } from '@/utils/extractMarkdownCodeBlocks'
 import { useAuthStore } from '@/stores/auth'
 import AiProviderAvatar from './AiProviderAvatar.vue'
+import { localize as l } from '@/i18n/locale'
 
 const props = defineProps<{
   message: {
@@ -144,7 +145,7 @@ async function onCopyBlock(code: string, idx: number) {
             class="tw-h-full tw-w-full tw-object-cover"
             @error="avatarFailed = true"
           />
-          <template v-else>我</template>
+          <template v-else>{{ l('我', 'Me') }}</template>
         </span>
         <AiProviderAvatar
           v-else
@@ -155,10 +156,10 @@ async function onCopyBlock(code: string, idx: number) {
         <span class="tw-text-[11px] tw-font-medium tw-text-zinc-500 dark:tw-text-zinc-400">
           {{
             message.role === 'user'
-              ? '你'
+              ? l('你', 'You')
               : variant === 'error'
-                ? '提示'
-                : message.modelId || '助手'
+                ? l('提示', 'Notice')
+                : message.modelId || l('助手', 'Assistant')
           }}
         </span>
       </div>
@@ -200,7 +201,11 @@ async function onCopyBlock(code: string, idx: number) {
               class="tw-self-start tw-rounded-lg tw-border tw-border-teal-500/35 tw-bg-teal-500/10 tw-px-2.5 tw-py-1 tw-text-[11px] tw-font-semibold tw-text-teal-800 hover:tw-bg-teal-500/20 dark:tw-text-teal-200"
               @click="emit('auto-edit', message.content)"
             >
-              {{ auth.isAdmin ? '自动写入编辑器并运行样例' : '自动修复局部代码并运行样例' }}
+              {{
+                auth.isAdmin
+                  ? l('自动写入编辑器并运行样例', 'Write to editor and run samples')
+                  : l('自动修复局部代码并运行样例', 'Fix local code and run samples')
+              }}
             </button>
             <div
               v-for="(f, i) in fences"
@@ -212,7 +217,11 @@ async function onCopyBlock(code: string, idx: number) {
                 class="tw-rounded-lg tw-border tw-border-zinc-300 tw-bg-white/60 tw-px-2.5 tw-py-1 tw-text-[11px] tw-font-semibold tw-text-zinc-700 tw-backdrop-blur hover:tw-bg-white dark:tw-border-zinc-600 dark:tw-bg-zinc-800/60 dark:tw-text-zinc-200"
                 @click="onCopyBlock(f.code, i)"
               >
-                {{ copiedIdx === i ? '已复制' : `复制代码块 ${i + 1}` }}
+                {{
+                  copiedIdx === i
+                    ? l('已复制', 'Copied')
+                    : l(`复制代码块 ${i + 1}`, `Copy code block ${i + 1}`)
+                }}
               </button>
             </div>
           </div>
@@ -222,7 +231,7 @@ async function onCopyBlock(code: string, idx: number) {
         <img
           v-if="message.imagePreview"
           :src="message.imagePreview"
-          alt="本轮提问附带的图片"
+          :alt="l('本轮提问附带的图片', 'Image attached to this message')"
           class="tw-mb-2 tw-max-h-48 tw-max-w-full tw-rounded-lg tw-border tw-border-zinc-200 tw-object-contain dark:tw-border-zinc-700"
         />
         <p

@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { RouterLink } from 'vue-router'
+import { localize as l } from '@/i18n/locale'
 </script>
 
 <template>
   <footer class="app-footer">
     <div class="app-footer__inner">
-      <RouterLink to="/legal/terms" class="app-footer__link">服务协议</RouterLink>
+      <RouterLink to="/legal/terms" class="app-footer__link">{{
+        l('服务协议', 'Terms')
+      }}</RouterLink>
       <span class="app-footer__sep" aria-hidden="true">·</span>
-      <RouterLink to="/legal/privacy" class="app-footer__link">隐私政策</RouterLink>
+      <RouterLink to="/legal/privacy" class="app-footer__link">{{
+        l('隐私政策', 'Privacy')
+      }}</RouterLink>
       <span class="app-footer__sep" aria-hidden="true">·</span>
-      <RouterLink to="/blog" class="app-footer__link">博客</RouterLink>
+      <RouterLink to="/blog" class="app-footer__link">{{ l('博客', 'Blog') }}</RouterLink>
     </div>
   </footer>
 </template>

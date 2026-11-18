@@ -6,6 +6,7 @@ import { ContestControllerService } from '@generated'
 import { isResultSuccess } from '@/api/result'
 import { getBackendErrorMessage } from '@/api/httpError'
 import { mapApiError } from '@/api/mapApiError'
+import { formatSiteDate, localize as l } from '@/i18n/locale'
 
 type ContestItem = {
   id: string
@@ -21,10 +22,9 @@ const loading = ref(false)
 const list = ref<ContestItem[]>([])
 const activeTab = ref<ArenaTab>('all')
 
-/** 列表卡片开赛倒计时（与详情页一致：仅「未开始」且 ≤1 小时） */
+/** 列表卡片开赛倒计时：所有「未开始」场次都显示，自动按 天/时/分/秒 降级 */
 const nowTick = ref(Date.now())
 let listTickTimer: ReturnType<typeof setInterval> | null = null
-const LIST_START_GATE_MS = 60 * 60 * 1000
 
 function parseContestInstant(v: unknown): number | null {
   if (v == null) return null
@@ -46,16 +46,16 @@ function msUntilContestStart(iso?: string): number {
   return Math.max(0, t - nowTick.value)
 }
 
-function showListPremiere(c: ContestItem): boolean {
-  if (c.phase !== '未开始') return false
+function countdownDisplay(c: ContestItem): string | null {
+  if (c.phase !== '未开始') return null
   const ms = msUntilContestStart(c.startTime)
-  return ms > 0 && ms <= LIST_START_GATE_MS
-}
-
-function listPremiereMmSs(iso?: string): { mm: number; ss: number } {
-  const ms = msUntilContestStart(iso)
-  const totalSec = Math.max(0, Math.ceil(ms / 1000))
-  return { mm: Math.floor(totalSec / 60), ss: totalSec % 60 }
+  if (!(ms > 0)) return null
+  const total = Math.floor(ms / 1000)
+  const days = Math.floor(total / 86400)
+  const hh = String(Math.floor((total % 86400) / 3600)).padStart(2, '0')
+  const mm = String(Math.floor((total % 3600) / 60)).padStart(2, '0')
+  const ss = String(total % 60).padStart(2, '0')
+  return days > 0 ? `${days} ${l('天', 'days')} ${hh}:${mm}:${ss}` : `${hh}:${mm}:${ss}`
 }
 
 const liveContests = computed(() => list.value.filter((c) => c.phase === '进行中'))
@@ -83,9 +83,16 @@ function phaseRailClass(phase: string): string {
 }
 
 function phaseLabelShort(phase: string): string {
-  if (phase === '进行中') return 'LIVE'
-  if (phase === '未开始') return 'SOON'
-  return 'ARCHIVE'
+  if (phase === '进行中') return l('实时赛况', 'Live')
+  if (phase === '未开始') return l('即将开赛', 'Upcoming')
+  return l('往期赛事', 'Past contest')
+}
+
+function displayPhase(phase: string) {
+  if (phase === '进行中') return l('进行中', 'Live')
+  if (phase === '未开始') return l('未开始', 'Upcoming')
+  if (phase === '已结束') return l('已结束', 'Ended')
+  return phase
 }
 
 async function loadList() {
@@ -93,7 +100,7 @@ async function loadList() {
   try {
     const data = await ContestControllerService.listContests()
     if (!isResultSuccess(data.code)) {
-      Message.error(data.message || '加载失败')
+      Message.error(data.message || l('加载失败', 'Could not load contests'))
       return
     }
     list.value = (Array.isArray(data.data) ? data.data : []).map((c) => ({
@@ -104,7 +111,9 @@ async function loadList() {
       phase: c.phase ?? '',
     }))
   } catch (e) {
-    Message.error(mapApiError(e, getBackendErrorMessage(e, '加载失败')))
+    Message.error(
+      mapApiError(e, getBackendErrorMessage(e, l('加载失败', 'Could not load contests'))),
+    )
   } finally {
     loading.value = false
   }
@@ -128,12 +137,12 @@ function formatDateTime(iso?: string): string {
   if (!iso) return '—'
   const t = Date.parse(iso)
   if (Number.isNaN(t)) return iso
-  return new Intl.DateTimeFormat('zh-CN', {
+  return formatSiteDate(new Date(t), {
     month: 'numeric',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  }).format(new Date(t))
+  })
 }
 </script>
 
@@ -147,70 +156,106 @@ function formatDateTime(iso?: string): string {
 
       <div class="arena-hero__grid">
         <div class="arena-hero__copy">
-          <p class="arena-hero__eyebrow">Arena Hub · 限时赛场</p>
+          <p class="arena-hero__eyebrow">{{ l('限时比赛', 'Timed contests') }}</p>
           <span class="arena-hero__rule" aria-hidden="true" />
-          <h1 class="arena-hero__title">比赛中心</h1>
+          <h1 class="arena-hero__title">{{ l('比赛中心', 'Contest center') }}</h1>
           <p class="arena-hero__sub">
-            限时赛制、实时榜单与 ICPC 风格罚时——在同一处完成报名、进入题目与追踪排名。
-            <RouterLink class="arena-hero__inline-link" to="/rankings">全站排行榜</RouterLink>
-            面向日常练习与积分；赛场成绩仅在本页关联的比赛中统计。
+            {{
+              l(
+                '查看赛程、报名并进入比赛题目。单场成绩在比赛详情查看；',
+                'Browse contests, register and solve contest problems. View contest results in each contest; ',
+              )
+            }}
+            <RouterLink class="arena-hero__inline-link" to="/rankings">{{
+              l('全站排行榜', 'global leaderboard')
+            }}</RouterLink>
+            {{ l('展示日常练习成绩。', ' shows practice results.') }}
           </p>
         </div>
 
-        <aside class="arena-hero__stats" aria-label="赛况概览">
+        <aside class="arena-hero__stats" :aria-label="l('赛况概览', 'Contest overview')">
           <div class="arena-stat arena-stat--total">
             <span class="arena-stat__num">{{ arenaStats.total }}</span>
-            <span class="arena-stat__lab">赛事总数</span>
+            <span class="arena-stat__lab">{{ l('赛事总数', 'Total') }}</span>
           </div>
           <div class="arena-stat arena-stat--live">
             <span class="arena-stat__num">{{ arenaStats.live }}</span>
-            <span class="arena-stat__lab">进行中</span>
+            <span class="arena-stat__lab">{{ l('进行中', 'Live') }}</span>
           </div>
           <div class="arena-stat arena-stat--soon">
             <span class="arena-stat__num">{{ arenaStats.soon }}</span>
-            <span class="arena-stat__lab">未开始</span>
+            <span class="arena-stat__lab">{{ l('未开始', 'Upcoming') }}</span>
           </div>
           <div class="arena-stat arena-stat--past">
             <span class="arena-stat__num">{{ arenaStats.past }}</span>
-            <span class="arena-stat__lab">已归档</span>
+            <span class="arena-stat__lab">{{ l('已归档', 'Past') }}</span>
           </div>
         </aside>
       </div>
     </header>
 
     <div class="arena-shell">
-      <section class="arena-guide" aria-label="参赛指南">
-        <div class="arena-guide__card">
-          <span class="arena-guide__glyph">①</span>
-          <div>
-            <h3 class="arena-guide__h">参赛路径</h3>
-            <p class="arena-guide__p">进入场次 → <strong>开赛后再报名</strong> → 从本题卡片进做题页，顶部需显示「计入本场比赛」。</p>
+      <details class="arena-guide-details">
+        <summary>
+          {{ l('参赛说明', 'Contest guide') }}
+          <span>{{
+            l('报名、榜单刷新与排名规则', 'Registration, standings and ranking rules')
+          }}</span>
+        </summary>
+        <section class="arena-guide" :aria-label="l('参赛指南', 'Contest guide')">
+          <div class="arena-guide__card">
+            <span class="arena-guide__glyph">①</span>
+            <div>
+              <h3 class="arena-guide__h">{{ l('参赛路径', 'How to join') }}</h3>
+              <p class="arena-guide__p">
+                {{
+                  l(
+                    '进入场次 → 开赛后再报名 → 从本题卡片进做题页。',
+                    'Open a contest, register after it starts, then open a problem from its contest page.',
+                  )
+                }}
+              </p>
+            </div>
           </div>
-        </div>
-        <div class="arena-guide__card">
-          <span class="arena-guide__glyph">②</span>
-          <div>
-            <h3 class="arena-guide__h">榜单刷新</h3>
-            <p class="arena-guide__p">开赛后可看榜；进行中约每 12 秒自动刷新，也可手动刷新。</p>
+          <div class="arena-guide__card">
+            <span class="arena-guide__glyph">②</span>
+            <div>
+              <h3 class="arena-guide__h">{{ l('榜单刷新', 'Standings') }}</h3>
+              <p class="arena-guide__p">
+                {{
+                  l(
+                    '开赛后可看榜；进行中约每 12 秒自动刷新，也可手动刷新。',
+                    'Standings become available after the start and refresh about every 12 seconds.',
+                  )
+                }}
+              </p>
+            </div>
           </div>
-        </div>
-        <div class="arena-guide__card">
-          <span class="arena-guide__glyph">③</span>
-          <div>
-            <h3 class="arena-guide__h">排名规则</h3>
-            <p class="arena-guide__p">通过题数优先，相同则总罚时（分钟）更少更靠前。</p>
+          <div class="arena-guide__card">
+            <span class="arena-guide__glyph">③</span>
+            <div>
+              <h3 class="arena-guide__h">{{ l('排名规则', 'Ranking rules') }}</h3>
+              <p class="arena-guide__p">
+                {{
+                  l(
+                    '通过题数优先，相同则总罚时（分钟）更少更靠前。',
+                    'More solved problems rank first; ties use lower total penalty time.',
+                  )
+                }}
+              </p>
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      </details>
 
-      <nav class="arena-tabs" aria-label="筛选赛事">
+      <nav class="arena-tabs" :aria-label="l('筛选赛事', 'Filter contests')">
         <button
           type="button"
           class="arena-tab"
           :class="{ 'arena-tab--on': activeTab === 'all' }"
           @click="activeTab = 'all'"
         >
-          全部
+          {{ l('全部', 'All') }}
           <span class="arena-tab__dot" />
         </button>
         <button
@@ -219,7 +264,7 @@ function formatDateTime(iso?: string): string {
           :class="{ 'arena-tab--on': activeTab === 'live' }"
           @click="activeTab = 'live'"
         >
-          进行中
+          {{ l('进行中', 'Live') }}
           <span v-if="arenaStats.live" class="arena-tab__badge">{{ arenaStats.live }}</span>
         </button>
         <button
@@ -228,7 +273,7 @@ function formatDateTime(iso?: string): string {
           :class="{ 'arena-tab--on': activeTab === 'soon' }"
           @click="activeTab = 'soon'"
         >
-          即将开始
+          {{ l('即将开始', 'Upcoming') }}
           <span v-if="arenaStats.soon" class="arena-tab__badge">{{ arenaStats.soon }}</span>
         </button>
         <button
@@ -237,8 +282,10 @@ function formatDateTime(iso?: string): string {
           :class="{ 'arena-tab--on': activeTab === 'past' }"
           @click="activeTab = 'past'"
         >
-          已结束
-          <span v-if="arenaStats.past" class="arena-tab__badge arena-tab__badge--muted">{{ arenaStats.past }}</span>
+          {{ l('已结束', 'Ended') }}
+          <span v-if="arenaStats.past" class="arena-tab__badge arena-tab__badge--muted">{{
+            arenaStats.past
+          }}</span>
         </button>
       </nav>
 
@@ -248,8 +295,18 @@ function formatDateTime(iso?: string): string {
             <div class="arena-empty__glyph" aria-hidden="true">◇</div>
           </template>
           <template #description>
-            <p class="arena-empty__title">当前没有开放赛事</p>
-            <p class="arena-empty__desc">新赛程上架后将出现在这里；你也可以先去题库热身。</p>
+            <p class="arena-empty__title">{{ l('当前没有开放赛事', 'No contests available') }}</p>
+            <p class="arena-empty__desc">
+              {{
+                l(
+                  '新赛程上架后将出现在这里；你也可以先去',
+                  'New contests will appear here. You can practice in the ',
+                )
+              }}<RouterLink class="arena-empty__link" :to="{ name: 'problems' }">{{
+                l('题库', 'problem set')
+              }}</RouterLink
+              >{{ l('热身。', ' first.') }}
+            </p>
           </template>
         </a-empty>
 
@@ -259,8 +316,10 @@ function formatDateTime(iso?: string): string {
             <section v-if="liveContests.length" class="arena-block">
               <div class="arena-block__head">
                 <span class="arena-block__rail arena-block__rail--live" />
-                <h2 class="arena-block__title">进行中</h2>
-                <span class="arena-block__hint">正在进行的场次优先展示</span>
+                <h2 class="arena-block__title">{{ l('进行中', 'Live') }}</h2>
+                <span class="arena-block__hint">{{
+                  l('正在进行的场次优先展示', 'Active contests appear first')
+                }}</span>
               </div>
               <div class="arena-card-list">
                 <RouterLink
@@ -272,7 +331,14 @@ function formatDateTime(iso?: string): string {
                   <article class="arena-card" :class="phaseRailClass(c.phase)">
                     <div class="arena-card__rail-meta">
                       <span class="arena-card__phase-en">{{ phaseLabelShort(c.phase) }}</span>
-                      <span class="arena-card__phase-zh">{{ c.phase }}</span>
+                      <span class="arena-card__phase-zh">
+                        <span
+                          v-if="c.phase === '进行中'"
+                          class="arena-card__live"
+                          aria-hidden="true"
+                        />
+                        {{ displayPhase(c.phase) }}
+                      </span>
                     </div>
                     <div class="arena-card__body">
                       <h3 class="arena-card__title">{{ c.title }}</h3>
@@ -283,7 +349,7 @@ function formatDateTime(iso?: string): string {
                       </p>
                     </div>
                     <div class="arena-card__action">
-                      <span>进入赛场</span>
+                      <span>{{ l('进入赛场', 'Enter contest') }}</span>
                       <span class="arena-card__chev">›</span>
                     </div>
                   </article>
@@ -294,8 +360,13 @@ function formatDateTime(iso?: string): string {
             <section v-if="soonContests.length" class="arena-block">
               <div class="arena-block__head">
                 <span class="arena-block__rail arena-block__rail--soon" />
-                <h2 class="arena-block__title">即将开始</h2>
-                <span class="arena-block__hint">开赛后方可报名；最后一小时卡片内显示倒计时</span>
+                <h2 class="arena-block__title">{{ l('即将开始', 'Upcoming') }}</h2>
+                <span class="arena-block__hint">{{
+                  l(
+                    '开赛后方可报名；卡片内实时显示距开赛时间',
+                    'Registration opens when the contest starts',
+                  )
+                }}</span>
               </div>
               <div class="arena-card-list">
                 <RouterLink
@@ -307,7 +378,7 @@ function formatDateTime(iso?: string): string {
                   <article class="arena-card" :class="phaseRailClass(c.phase)">
                     <div class="arena-card__rail-meta">
                       <span class="arena-card__phase-en">{{ phaseLabelShort(c.phase) }}</span>
-                      <span class="arena-card__phase-zh">{{ c.phase }}</span>
+                      <span class="arena-card__phase-zh">{{ displayPhase(c.phase) }}</span>
                     </div>
                     <div class="arena-card__body">
                       <h3 class="arena-card__title">{{ c.title }}</h3>
@@ -316,17 +387,17 @@ function formatDateTime(iso?: string): string {
                         <span class="arena-card__arrow-icon">→</span>
                         <time>{{ formatDateTime(c.endTime) }}</time>
                       </p>
-                      <div v-if="showListPremiere(c)" class="arena-card__premiere">
-                        <span class="arena-card__premiere-label">距开赛</span>
-                        <span class="arena-card__premiere-time" aria-live="polite">
-                          {{ String(listPremiereMmSs(c.startTime).mm).padStart(2, '0') }}
-                          <span class="arena-card__premiere-colon">:</span>
-                          {{ String(listPremiereMmSs(c.startTime).ss).padStart(2, '0') }}
-                        </span>
+                      <div v-if="countdownDisplay(c)" class="arena-card__premiere">
+                        <span class="arena-card__premiere-label">{{
+                          l('距开赛', 'Starts in')
+                        }}</span>
+                        <span class="arena-card__premiere-time" aria-live="polite">{{
+                          countdownDisplay(c)
+                        }}</span>
                       </div>
                     </div>
                     <div class="arena-card__action">
-                      <span>预告 / 报名</span>
+                      <span>{{ l('预告 / 报名', 'Preview / register') }}</span>
                       <span class="arena-card__chev">›</span>
                     </div>
                   </article>
@@ -337,8 +408,10 @@ function formatDateTime(iso?: string): string {
             <section v-if="pastContests.length" class="arena-block arena-block--past">
               <div class="arena-block__head">
                 <span class="arena-block__rail arena-block__rail--past" />
-                <h2 class="arena-block__title">已归档</h2>
-                <span class="arena-block__hint">可回看榜单与题目说明</span>
+                <h2 class="arena-block__title">{{ l('已归档', 'Past contests') }}</h2>
+                <span class="arena-block__hint">{{
+                  l('可回看榜单与题目说明', 'Review standings and problems')
+                }}</span>
               </div>
               <div class="arena-card-list">
                 <RouterLink
@@ -350,7 +423,7 @@ function formatDateTime(iso?: string): string {
                   <article class="arena-card arena-card--past" :class="phaseRailClass(c.phase)">
                     <div class="arena-card__rail-meta">
                       <span class="arena-card__phase-en">{{ phaseLabelShort(c.phase) }}</span>
-                      <span class="arena-card__phase-zh">{{ c.phase }}</span>
+                      <span class="arena-card__phase-zh">{{ displayPhase(c.phase) }}</span>
                     </div>
                     <div class="arena-card__body">
                       <h3 class="arena-card__title">{{ c.title }}</h3>
@@ -361,7 +434,7 @@ function formatDateTime(iso?: string): string {
                       </p>
                     </div>
                     <div class="arena-card__action arena-card__action--muted">
-                      <span>回顾</span>
+                      <span>{{ l('回顾', 'Review') }}</span>
                       <span class="arena-card__chev">›</span>
                     </div>
                   </article>
@@ -382,7 +455,14 @@ function formatDateTime(iso?: string): string {
                 <article class="arena-card" :class="phaseRailClass(c.phase)">
                   <div class="arena-card__rail-meta">
                     <span class="arena-card__phase-en">{{ phaseLabelShort(c.phase) }}</span>
-                    <span class="arena-card__phase-zh">{{ c.phase }}</span>
+                    <span class="arena-card__phase-zh">
+                      <span
+                        v-if="c.phase === '进行中'"
+                        class="arena-card__live"
+                        aria-hidden="true"
+                      />
+                      {{ displayPhase(c.phase) }}
+                    </span>
                   </div>
                   <div class="arena-card__body">
                     <h3 class="arena-card__title">{{ c.title }}</h3>
@@ -391,26 +471,37 @@ function formatDateTime(iso?: string): string {
                       <span class="arena-card__arrow-icon">→</span>
                       <time>{{ formatDateTime(c.endTime) }}</time>
                     </p>
-                    <div v-if="showListPremiere(c)" class="arena-card__premiere">
-                      <span class="arena-card__premiere-label">距开赛</span>
-                      <span class="arena-card__premiere-time" aria-live="polite">
-                        {{ String(listPremiereMmSs(c.startTime).mm).padStart(2, '0') }}
-                        <span class="arena-card__premiere-colon">:</span>
-                        {{ String(listPremiereMmSs(c.startTime).ss).padStart(2, '0') }}
-                      </span>
+                    <div v-if="countdownDisplay(c)" class="arena-card__premiere">
+                      <span class="arena-card__premiere-label">{{ l('距开赛', 'Starts in') }}</span>
+                      <span class="arena-card__premiere-time" aria-live="polite">{{
+                        countdownDisplay(c)
+                      }}</span>
                     </div>
                   </div>
                   <div
                     class="arena-card__action"
                     :class="{ 'arena-card__action--muted': c.phase === '已结束' }"
                   >
-                    <span>{{ c.phase === '已结束' ? '回顾' : c.phase === '进行中' ? '进入赛场' : '预告 / 报名' }}</span>
+                    <span>{{
+                      c.phase === '已结束'
+                        ? l('回顾', 'Review')
+                        : c.phase === '进行中'
+                          ? l('进入赛场', 'Enter contest')
+                          : l('预告 / 报名', 'Preview / register')
+                    }}</span>
                     <span class="arena-card__chev">›</span>
                   </div>
                 </article>
               </RouterLink>
             </template>
-            <p v-else class="arena-filter-empty">该分类下暂无赛事，试试其它筛选。</p>
+            <p v-else class="arena-filter-empty">
+              {{
+                l(
+                  '该分类下暂无赛事，试试其它筛选。',
+                  'No contests in this category. Try another filter.',
+                )
+              }}
+            </p>
           </div>
         </template>
       </a-spin>
@@ -429,17 +520,16 @@ function formatDateTime(iso?: string): string {
 .arena-hero {
   position: relative;
   margin: 0 0 28px;
-  padding: clamp(28px, 5vw, 48px) clamp(20px, 4vw, 40px) clamp(36px, 6vw, 52px);
+  padding: clamp(24px, 3vw, 34px) clamp(20px, 4vw, 40px) clamp(26px, 3vw, 36px);
   border-radius: 0 0 clamp(20px, 4vw, 32px) clamp(20px, 4vw, 32px);
   overflow: hidden;
   border-bottom: 1px solid color-mix(in srgb, var(--app-accent) 22%, var(--color-border-2));
-  background:
-    linear-gradient(
-      165deg,
-      color-mix(in srgb, var(--app-accent) 12%, var(--color-bg-1)) 0%,
-      var(--color-bg-1) 42%,
-      color-mix(in srgb, var(--app-accent-2) 8%, var(--color-bg-2)) 100%
-    );
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--app-accent) 12%, var(--color-bg-1)) 0%,
+    var(--color-bg-1) 42%,
+    color-mix(in srgb, var(--app-accent-2) 8%, var(--color-bg-2)) 100%
+  );
 }
 
 .arena-hero__mesh {
@@ -449,7 +539,11 @@ function formatDateTime(iso?: string): string {
   opacity: 0.45;
   background-image:
     linear-gradient(color-mix(in srgb, var(--app-accent) 18%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--app-accent) 18%, transparent) 1px, transparent 1px);
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--app-accent) 18%, transparent) 1px,
+      transparent 1px
+    );
   background-size: 36px 36px;
   mask-image: radial-gradient(ellipse 95% 80% at 70% 20%, #000 15%, transparent 65%);
   -webkit-mask-image: radial-gradient(ellipse 95% 80% at 70% 20%, #000 15%, transparent 65%);
@@ -467,7 +561,11 @@ function formatDateTime(iso?: string): string {
   height: min(72vw, 420px);
   top: -40%;
   right: -8%;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--app-accent) 38%, transparent), transparent 72%);
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--app-accent) 38%, transparent),
+    transparent 72%
+  );
   opacity: 0.55;
 }
 
@@ -476,7 +574,11 @@ function formatDateTime(iso?: string): string {
   height: min(48vw, 280px);
   bottom: -35%;
   left: -5%;
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--app-accent-2) 28%, transparent), transparent 70%);
+  background: radial-gradient(
+    closest-side,
+    color-mix(in srgb, var(--app-accent-2) 28%, transparent),
+    transparent 70%
+  );
   opacity: 0.42;
 }
 
@@ -598,7 +700,54 @@ function formatDateTime(iso?: string): string {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 12px;
-  margin-bottom: 22px;
+  margin-top: 12px;
+}
+
+.arena-guide-details {
+  max-width: var(--arena-max);
+  margin: 0 auto 18px;
+}
+
+.arena-guide-details summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border-2);
+  border-radius: 12px;
+  background: var(--color-bg-2);
+  color: var(--color-text-1);
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.arena-guide-details summary::-webkit-details-marker {
+  display: none;
+}
+.arena-guide-details summary span {
+  color: var(--color-text-3);
+  font-size: 12px;
+  font-weight: 400;
+}
+.arena-guide-details summary::after {
+  content: '⌄';
+  margin-left: auto;
+  color: var(--app-accent);
+  transition: transform 0.2s ease;
+}
+.arena-guide-details[open] summary::after {
+  transform: rotate(180deg);
+}
+.arena-guide-details summary:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 2px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .arena-guide-details summary::after {
+    transition: none;
+  }
 }
 
 .arena-guide__card {
@@ -761,12 +910,20 @@ function formatDateTime(iso?: string): string {
 }
 
 .arena-block__rail--live {
-  background: linear-gradient(180deg, var(--app-accent), color-mix(in srgb, var(--app-accent) 60%, #38bdf8));
+  background: linear-gradient(
+    180deg,
+    var(--app-accent),
+    color-mix(in srgb, var(--app-accent) 60%, #38bdf8)
+  );
   box-shadow: 0 0 14px color-mix(in srgb, var(--app-accent) 45%, transparent);
 }
 
 .arena-block__rail--soon {
-  background: linear-gradient(180deg, var(--app-accent-2), color-mix(in srgb, var(--app-accent-3) 70%, var(--app-accent-2)));
+  background: linear-gradient(
+    180deg,
+    var(--app-accent-2),
+    color-mix(in srgb, var(--app-accent-3) 70%, var(--app-accent-2))
+  );
 }
 
 .arena-block__rail--past {
@@ -841,7 +998,11 @@ function formatDateTime(iso?: string): string {
 }
 
 .arena-card--live::before {
-  background: linear-gradient(180deg, var(--app-accent), color-mix(in srgb, var(--app-accent) 50%, #22d3ee));
+  background: linear-gradient(
+    180deg,
+    var(--app-accent),
+    color-mix(in srgb, var(--app-accent) 50%, #22d3ee)
+  );
   box-shadow: 0 0 16px color-mix(in srgb, var(--app-accent) 35%, transparent);
 }
 
@@ -989,6 +1150,54 @@ function formatDateTime(iso?: string): string {
     padding-top: 4px;
     border-top: 1px dashed var(--color-border-3);
   }
+}
+
+/* —— 列表细化：LIVE 呼吸点、倒计时数字、进入箭头 —— */
+.arena-card__phase-zh {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.arena-card__live {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #22c55e 20%, transparent);
+  animation: arena-live-pulse 1.7s ease-in-out infinite;
+}
+
+@keyframes arena-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+}
+
+.arena-card__premiere-time {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.arena-card__chev {
+  transition: transform 0.2s ease;
+}
+
+.arena-card-link:hover .arena-card__chev {
+  transform: translateX(4px);
+}
+
+.arena-empty__link {
+  color: var(--app-accent);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 /* 暗黑：与首页首屏 / 功能入口高亮一致，见 @/styles/oj-spotlight-pages.css */

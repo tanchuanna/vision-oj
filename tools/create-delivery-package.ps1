@@ -23,18 +23,16 @@ New-Item -ItemType Directory -Path $OutputRoot | Out-Null
 
 $excludedDirs = @(
     ".git", ".idea", ".vscode", ".venv", "node_modules", "target",
-    "dist", "dist-ssr", "__pycache__", ".runtime-logs", ".local-ai",
+    "dist", "dist-ssr", "__pycache__", ".runtime-logs", ".local-ai", ".superpowers",
     "tmpCode", "logs", "coverage"
 )
 $excludedDirs += @(
-    (Join-Path $repoRoot "weights"),
-    (Join-Path $repoRoot "vision-ai\.venv-partial-20260917-161046"),
     (Join-Path $repoRoot "vision-ai\runs"),
-    (Join-Path $repoRoot "git-master"),
-    (Join-Path $repoRoot "runs")
+    (Join-Path $repoRoot "docs\superpowers")
 )
 $excludedFiles = @(
-    ".env", "ap.env", "application-local.yml", "*.log", "*.class", "*.jar", "*.war",
+    ".env", ".sandbox.env", "ap.env", "backend-prod.env", "application-local.yml",
+    "*.private-backup.yml", "*.log", "*.class", "*.jar", "*.war",
     "*.pyc", "*.pyo", "best.pt", "last.pt", "npm-debug.log*", "pnpm-debug.log*", "hs_err_pid*.log"
 )
 

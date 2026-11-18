@@ -12,6 +12,42 @@ const GlobalMusicPlayer = defineAsyncComponent(() => import('@/components/Global
 </template>
 
 <style>
+html.blog-shared-transition .blog-read__title {
+  view-transition-name: selected-blog-title;
+}
+
+html.problem-shared-transition .solve-page .title-wrap h1 {
+  view-transition-name: selected-problem-title;
+}
+
+html.problem-shared-transition::view-transition-old(root),
+html.problem-shared-transition::view-transition-new(root),
+html.blog-shared-transition::view-transition-old(root),
+html.blog-shared-transition::view-transition-new(root) {
+  animation-duration: 0.01ms;
+}
+
+::view-transition-old(selected-blog-title),
+::view-transition-new(selected-blog-title) {
+  animation-duration: 240ms;
+  animation-timing-function: ease-out;
+}
+
+::view-transition-old(selected-problem-title),
+::view-transition-new(selected-problem-title) {
+  animation-duration: 240ms;
+  animation-timing-function: ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(selected-blog-title),
+  ::view-transition-new(selected-blog-title),
+  ::view-transition-old(selected-problem-title),
+  ::view-transition-new(selected-problem-title) {
+    animation-duration: 0.01ms;
+  }
+}
+
 *,
 *::before,
 *::after {

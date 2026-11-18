@@ -32,11 +32,9 @@ public class ImageOutputJudgeStrategy implements JudgeStrategy {
         }
         String type = context.getQuestion().getQuestionType();
         int tolerance = context.getQuestion().getCountTolerance() == null ? 0 : context.getQuestion().getCountTolerance();
+        JudgeConfig rule = context.getQuestion().getJudgeConfig();
         for (int i = 0; i < cases.size(); i++) {
-            JudgeConfig rule = context.getQuestion().getJudgeConfig();
-            Match match = ANALYSIS.equalsIgnoreCase(type) && rule != null && Integer.valueOf(2).equals(rule.getAnalysisVersion())
-                    ? matchNumericJsonV2(cases.get(i).getOutput(), outputs.get(i))
-                    : match(type, cases.get(i).getOutput(), outputs.get(i), tolerance);
+            Match match = match(type, cases.get(i).getOutput(), outputs.get(i), tolerance, rule);
             if (!match.passed()) return wrong(result, "第 " + (i + 1) + " 组：" + match.detail());
         }
         JudgeConfig config = context.getQuestion().getJudgeConfig();
@@ -58,14 +56,14 @@ public class ImageOutputJudgeStrategy implements JudgeStrategy {
     }
 
     public static boolean outputsMatch(String type, String expected, String actual, int tolerance, JudgeConfig config) {
-        if (ANALYSIS.equalsIgnoreCase(type) && config != null && Integer.valueOf(2).equals(config.getAnalysisVersion())) {
-            try { return matchNumericJsonV2(expected, actual).passed(); }
-            catch (Exception e) { return false; }
-        }
-        return outputsMatch(type, expected, actual, tolerance);
+        return match(type, expected, actual, tolerance, config).passed();
     }
 
     private static Match match(String type, String expected, String actual, int tolerance) {
+        return match(type, expected, actual, tolerance, null);
+    }
+
+    private static Match match(String type, String expected, String actual, int tolerance, JudgeConfig config) {
         try {
             if (CLASSIFICATION.equalsIgnoreCase(type)) {
                 boolean ok = normalizeText(expected).equals(normalizeText(actual));
@@ -74,21 +72,29 @@ public class ImageOutputJudgeStrategy implements JudgeStrategy {
             if (OCR.equalsIgnoreCase(type)) {
                 String e = normalizeOcr(expected), a = normalizeOcr(actual);
                 int distance = levenshtein(e, a);
-                boolean ok = distance <= tolerance;
-                return new Match(ok, "OCR 编辑距离 " + distance + "，允许 " + tolerance);
+                int allowed = ImageJudgeConfigPolicy.ocrEditDistance(config, tolerance);
+                boolean ok = distance <= allowed;
+                return new Match(ok, "OCR 编辑距离 " + distance + "，允许 " + allowed);
             }
-            if (DETECTION.equalsIgnoreCase(type)) return matchDetections(expected, actual, tolerance <= 0 ? 50 : tolerance);
-            if (ANALYSIS.equalsIgnoreCase(type)) return matchNumericJson(expected, actual, tolerance);
+            if (DETECTION.equalsIgnoreCase(type)) {
+                return matchDetections(expected, actual, ImageJudgeConfigPolicy.iouThreshold(config, tolerance));
+            }
+            if (ANALYSIS.equalsIgnoreCase(type)) {
+                return ImageJudgeConfigPolicy.usesStructuredAnalysis(config)
+                        ? matchNumericJsonV2(expected, actual,
+                        ImageJudgeConfigPolicy.meanGrayTolerance(config, tolerance),
+                        ImageJudgeConfigPolicy.edgeStrengthTolerance(config, tolerance))
+                        : matchNumericJson(expected, actual, tolerance);
+            }
             return new Match(false, "不支持的图像题型");
         } catch (Exception e) {
             return new Match(false, "输出格式错误：" + e.getMessage());
         }
     }
 
-    private static Match matchDetections(String expectedRaw, String actualRaw, int iouPercent) {
+    private static Match matchDetections(String expectedRaw, String actualRaw, double threshold) {
         List<Box> expected = boxes(expectedRaw), actual = boxes(actualRaw);
         boolean[] used = new boolean[actual.size()];
-        double threshold = Math.max(0.1, Math.min(0.95, iouPercent / 100.0));
         for (Box e : expected) {
             int best = -1; double bestIou = 0;
             for (int i = 0; i < actual.size(); i++) {
@@ -97,7 +103,8 @@ public class ImageOutputJudgeStrategy implements JudgeStrategy {
                     if (score > bestIou) { bestIou = score; best = i; }
                 }
             }
-            if (best < 0 || bestIou < threshold) return new Match(false, "目标 " + e.label + " 缺失或 IoU 低于 " + iouPercent + "%");
+            if (best < 0) return new Match(false, "目标类别 " + e.label + " 缺失");
+            if (bestIou < threshold) return new Match(false, "目标 " + e.label + " 的 IoU 低于 " + formatThreshold(threshold));
             used[best] = true;
         }
         if (expected.size() != actual.size()) return new Match(false, "检测框数量不一致");
@@ -116,7 +123,8 @@ public class ImageOutputJudgeStrategy implements JudgeStrategy {
         return new Match(true, "图像属性匹配");
     }
 
-    private static Match matchNumericJsonV2(String expectedRaw, String actualRaw) {
+    private static Match matchNumericJsonV2(String expectedRaw, String actualRaw,
+                                             double meanGrayTolerance, double edgeStrengthTolerance) {
         JSONObject expected = JSONUtil.parseObj(expectedRaw), actual = JSONUtil.parseObj(actualRaw);
         Set<String> fields = Set.of("width", "height", "mode", "mean_gray", "edge_strength");
         if (!expected.keySet().equals(fields) || !actual.keySet().equals(fields)) return new Match(false, "图像属性 JSON 字段不完整");
@@ -125,12 +133,15 @@ public class ImageOutputJudgeStrategy implements JudgeStrategy {
             if (!(e instanceof Number en) || !(a instanceof Number an) || en.longValue() != an.longValue()
                     || en.doubleValue() != en.longValue() || an.doubleValue() != an.longValue()) return new Match(false, key + " 必须与图片尺寸精确一致");
         }
-        if (!"RGB".equals(expected.getStr("mode")) || !"RGB".equals(actual.getStr("mode"))) return new Match(false, "mode 必须为 RGB");
+        String expectedMode = expected.getStr("mode", "").trim();
+        String actualMode = actual.getStr("mode", "").trim();
+        if (expectedMode.isBlank() || !expectedMode.equalsIgnoreCase(actualMode)) return new Match(false, "mode 内容不匹配");
         for (String key : List.of("mean_gray", "edge_strength")) {
             Object e = expected.get(key), a = actual.get(key);
+            double allowed = "mean_gray".equals(key) ? meanGrayTolerance : edgeStrengthTolerance;
             if (!(e instanceof Number en) || !(a instanceof Number an) || !Double.isFinite(en.doubleValue())
-                    || !Double.isFinite(an.doubleValue()) || Math.abs(en.doubleValue() - an.doubleValue()) > ("mean_gray".equals(key) ? 0.5 : 1.0))
-                return new Match(false, key + " 数值超出允许误差");
+                    || !Double.isFinite(an.doubleValue()) || Math.abs(en.doubleValue() - an.doubleValue()) > allowed)
+                return new Match(false, key + " 数值超出允许误差 " + allowed);
         }
         return new Match(true, "图像属性匹配");
     }
@@ -159,6 +170,7 @@ public class ImageOutputJudgeStrategy implements JudgeStrategy {
         return union <= 0 ? 0 : intersection / union;
     }
     private static double area(Box b) { return Math.max(0, b.x2 - b.x1) * Math.max(0, b.y2 - b.y1); }
+    private static String formatThreshold(double threshold) { return String.format(Locale.ROOT, "%.2f", threshold); }
     private static String normalizeText(String s) { return s == null ? "" : s.trim().toLowerCase(Locale.ROOT).replaceAll("^[\"']|[\"']$", ""); }
     private static String normalizeOcr(String s) { return normalizeText(s).replaceAll("[\\s\\p{P}]", ""); }
     private static int levenshtein(String a, String b) {

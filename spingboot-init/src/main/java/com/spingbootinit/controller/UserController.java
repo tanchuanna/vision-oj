@@ -9,6 +9,8 @@ import com.spingbootinit.common.result.Result;
 import com.spingbootinit.common.result.ResultCode;
 import com.spingbootinit.context.UserContext.IsAdminRoleString;
 import com.spingbootinit.context.UserContext.UserContext;
+import com.spingbootinit.mapper.QuestionSubmitMapper;
+import com.spingbootinit.mapper.TeacherStudentRelationMapper;
 import com.spingbootinit.model.dto.user.*;
 import com.spingbootinit.model.entity.User;
 import com.spingbootinit.model.vo.uservo.*;
@@ -28,6 +30,7 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.util.Collections;
+import java.util.List;
 
 /**
  * 用户相关控制器。
@@ -50,6 +53,12 @@ public class UserController {
 
     @Resource
     private UserService userService;
+
+    @Resource
+    private QuestionSubmitMapper questionSubmitMapper;
+
+    @Resource
+    private TeacherStudentRelationMapper teacherStudentRelationMapper;
 
     @Resource
     private com.spingbootinit.service.PasswordRecoveryService passwordRecoveryService;
@@ -237,6 +246,30 @@ public class UserController {
         } else {
             vo.setWebsite(Collections.emptyList());
         }
+
+        // 做题统计：AC 题目数（去重）与累计提交次数
+        vo.setSolvedCount(questionSubmitMapper.countSolvedQuestions(id));
+        vo.setSubmitCount(questionSubmitMapper.countSubmitRecords(id));
+
+        // 师生关系：老师的名下学生数 / 学生的指导老师昵称
+        String role = StrUtil.blankToDefault(user.getUserRole(), "user").toLowerCase();
+        if ("teacher".equals(role)) {
+            vo.setStudentCount(teacherStudentRelationMapper.countActiveStudents(id));
+            vo.setTeacherNames(Collections.emptyList());
+        } else {
+            vo.setStudentCount(0L);
+            List<Long> teacherIds = teacherStudentRelationMapper.selectActiveTeacherIds(id);
+            if (teacherIds == null || teacherIds.isEmpty()) {
+                vo.setTeacherNames(Collections.emptyList());
+            } else {
+                List<String> names = userService.listByIds(teacherIds).stream()
+                        .map(t -> StrUtil.blankToDefault(t.getNickname(), t.getUsername()))
+                        .filter(StrUtil::isNotBlank)
+                        .toList();
+                vo.setTeacherNames(names);
+            }
+        }
+
         return Result.success(vo);
     }
 

@@ -4,6 +4,7 @@ import { Message } from '@arco-design/web-vue'
 import { useAuthStore } from '@/stores/auth'
 import { renderMarkdownToHtml } from '@/utils/renderMarkdown'
 import { resolveMediaUrl } from '@/utils/resolveMediaUrl'
+import { formatSiteDate, localize as l } from '@/i18n/locale'
 import {
   questionSolutionApi,
   type SolutionComment,
@@ -39,6 +40,12 @@ const reviewRejectPresets = [
   '参考代码无法通过',
   '内容包含与本题无关的信息',
 ]
+const reviewRejectPresetEnglish: Record<string, string> = {
+  思路说明不够完整: 'Explanation is incomplete',
+  复杂度分析需要补充: 'Add a complexity analysis',
+  参考代码无法通过: 'Reference code does not pass',
+  内容包含与本题无关的信息: 'Contains unrelated content',
+}
 const form = reactive<SolutionSavePayload>({
   questionId: props.questionId,
   title: '',
@@ -49,7 +56,15 @@ const form = reactive<SolutionSavePayload>({
 
 const statusText = computed(() => {
   const s = selected.value?.reviewStatus
-  return s === 0 ? '草稿' : s === 1 ? '待审核' : s === 2 ? '已发布' : s === 3 ? '已驳回' : ''
+  return s === 0
+    ? l('草稿', 'Draft')
+    : s === 1
+      ? l('待审核', 'Pending review')
+      : s === 2
+        ? l('已发布', 'Published')
+        : s === 3
+          ? l('已驳回', 'Rejected')
+          : ''
 })
 const fullHtml = computed(() => renderMarkdownToHtml(selected.value?.content || ''))
 const hintHtml = computed(() => renderMarkdownToHtml(selected.value?.hintContent || ''))
@@ -60,10 +75,10 @@ function avatar(url?: string) {
 function dateText(raw?: string) {
   if (!raw) return ''
   const d = new Date(raw)
-  return Number.isNaN(d.getTime()) ? raw : d.toLocaleDateString('zh-CN')
+  return Number.isNaN(d.getTime()) ? raw : formatSiteDate(d)
 }
 function generatedTitle() {
-  return `${props.questionTitle?.trim() || '本题'} · 解题思路`
+  return `${props.questionTitle?.trim() || l('本题', 'This problem')} · ${l('解题思路', 'Solution approach')}`
 }
 function generatedSummary(content: string, hint: string) {
   const plain = (content || hint)
@@ -71,14 +86,20 @@ function generatedSummary(content: string, hint: string) {
     .replace(/[#>*_`\[\]()~-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-  return (plain || '分享本题的分析过程、算法思路与实现方法').slice(0, 120)
+  return (
+    plain ||
+    l('分享本题的分析过程、算法思路与实现方法', 'Share your analysis, approach and implementation')
+  ).slice(0, 120)
 }
 function resetForm() {
   Object.assign(form, {
     id: undefined,
     questionId: props.questionId,
     title: generatedTitle(),
-    summary: '分享本题的分析过程、算法思路与实现方法',
+    summary: l(
+      '分享本题的分析过程、算法思路与实现方法',
+      'Share your analysis, approach and implementation',
+    ),
     hintContent: '',
     content: '',
   })
@@ -95,7 +116,9 @@ async function load() {
     eligibility.value = access
     solutions.value = (page.records || []).filter((item) => item.questionId === props.questionId)
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : '题解加载失败')
+    Message.error(
+      error instanceof Error ? error.message : l('题解加载失败', 'Failed to load solutions'),
+    )
   } finally {
     loading.value = false
   }
@@ -109,20 +132,37 @@ async function openSolution(id: string, adminPending = false) {
     const detail = adminPending
       ? await questionSolutionApi.adminDetail(id)
       : await questionSolutionApi.detail(id)
-    if (detail.questionId !== props.questionId) throw new Error('题解与当前题目不匹配，已阻止打开')
+    if (detail.questionId !== props.questionId)
+      throw new Error(
+        l(
+          '题解与当前题目不匹配，已阻止打开',
+          'This solution belongs to another problem and cannot be opened here.',
+        ),
+      )
     selected.value = detail
     comments.value = []
     if (selected.value.accessLevel === 'FULL' && selected.value.reviewStatus === 2) {
       comments.value = (await questionSolutionApi.comments(id)).records || []
     }
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : '题解打开失败')
+    Message.error(
+      error instanceof Error ? error.message : l('题解打开失败', 'Failed to open solution'),
+    )
   }
 }
 
 async function writeSolution() {
-  if (!auth.isLoggedIn) return void Message.warning('请先登录，再完成本题后编写题解')
-  if (!eligibility.value.canWrite) return void Message.warning('通过本题后才能编写题解')
+  if (!auth.isLoggedIn)
+    return void Message.warning(
+      l(
+        '请先登录，再完成本题后编写题解',
+        'Sign in and solve this problem before writing a solution.',
+      ),
+    )
+  if (!eligibility.value.canWrite)
+    return void Message.warning(
+      l('通过本题后才能编写题解', 'You can write a solution after passing this problem.'),
+    )
   try {
     const mine = await questionSolutionApi.mine(props.questionId)
     resetForm()
@@ -138,7 +178,11 @@ async function writeSolution() {
     selected.value = mine
     editorOpen.value = true
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : '无法打开题解编辑器')
+    Message.error(
+      error instanceof Error
+        ? error.message
+        : l('无法打开题解编辑器', 'Cannot open the solution editor'),
+    )
   }
 }
 
@@ -155,12 +199,17 @@ async function saveDraft(submit = false) {
     form.id = id
     if (submit) {
       await questionSolutionApi.submitReview(id)
-      Message.success('题解已提交审核，审核通过后会公开展示')
+      Message.success(
+        l(
+          '题解已提交审核，审核通过后会公开展示',
+          'Solution sent for review. It will be visible after approval.',
+        ),
+      )
       editorOpen.value = false
-    } else Message.success('草稿已保存')
+    } else Message.success(l('草稿已保存', 'Draft saved'))
     await load()
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : '保存失败')
+    Message.error(error instanceof Error ? error.message : l('保存失败', 'Save failed'))
   } finally {
     saving.value = false
   }
@@ -173,7 +222,11 @@ async function toggleLike() {
     selected.value.liked = result.liked
     selected.value.likeCount = result.likeCount
   } catch (error) {
-    Message.warning(error instanceof Error ? error.message : '通过本题后才能点赞')
+    Message.warning(
+      error instanceof Error
+        ? error.message
+        : l('通过本题后才能点赞', 'Pass this problem before liking a solution.'),
+    )
   }
 }
 
@@ -185,7 +238,7 @@ async function addComment() {
     comments.value = (await questionSolutionApi.comments(selected.value.id)).records || []
     selected.value.commentCount += 1
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : '评论失败')
+    Message.error(error instanceof Error ? error.message : l('评论失败', 'Comment failed'))
   }
 }
 
@@ -195,7 +248,7 @@ async function removeComment(item: SolutionComment) {
     comments.value = comments.value.filter((v) => v.id !== item.id)
     if (selected.value) selected.value.commentCount = Math.max(0, selected.value.commentCount - 1)
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : '删除失败')
+    Message.error(error instanceof Error ? error.message : l('删除失败', 'Delete failed'))
   }
 }
 
@@ -206,7 +259,9 @@ async function loadReviewQueue() {
     const page = await questionSolutionApi.adminPage(props.questionId, 1)
     solutions.value = (page.records || []).filter((item) => item.questionId === props.questionId)
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : '审核队列加载失败')
+    Message.error(
+      error instanceof Error ? error.message : l('审核队列加载失败', 'Failed to load review queue'),
+    )
   }
 }
 
@@ -220,11 +275,11 @@ async function review(approved: boolean) {
   reviewSaving.value = true
   try {
     await questionSolutionApi.review(selected.value.id, true, '')
-    Message.success('题解已发布')
+    Message.success(l('题解已发布', 'Solution published'))
     selected.value = null
     await loadReviewQueue()
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : '审核失败')
+    Message.error(error instanceof Error ? error.message : l('审核失败', 'Review failed'))
   } finally {
     reviewSaving.value = false
   }
@@ -244,17 +299,28 @@ async function confirmReject() {
   const detail = selected.value
   const reason = reviewRejectReason.value.trim()
   if (!detail) return
-  if (reason.length < 4) return void Message.warning('请填写至少 4 个字的具体驳回原因')
+  if (reason.length < 4)
+    return void Message.warning(
+      l(
+        '请填写至少 4 个字的具体驳回原因',
+        'Enter a specific rejection reason of at least 4 characters.',
+      ),
+    )
   reviewSaving.value = true
   try {
     await questionSolutionApi.review(detail.id, false, reason)
-    Message.success('已驳回题解，作者可以根据原因修改后重新提交')
+    Message.success(
+      l(
+        '已驳回题解，作者可以根据原因修改后重新提交',
+        'Solution rejected. The author can revise and resubmit it.',
+      ),
+    )
     reviewRejectOpen.value = false
     reviewRejectReason.value = ''
     selected.value = null
     await loadReviewQueue()
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : '驳回失败')
+    Message.error(error instanceof Error ? error.message : l('驳回失败', 'Rejection failed'))
   } finally {
     reviewSaving.value = false
   }
@@ -265,9 +331,13 @@ async function setOfficial() {
   try {
     await questionSolutionApi.official(selected.value.id, !selected.value.official)
     selected.value.official = !selected.value.official
-    Message.success(selected.value.official ? '已设为官方题解' : '已取消官方标记')
+    Message.success(
+      selected.value.official
+        ? l('已设为官方题解', 'Marked as official solution')
+        : l('已取消官方标记', 'Official mark removed'),
+    )
   } catch (error) {
-    Message.error(error instanceof Error ? error.message : '操作失败')
+    Message.error(error instanceof Error ? error.message : l('操作失败', 'Operation failed'))
   }
 }
 
@@ -291,8 +361,8 @@ onMounted(load)
   <section class="solution-panel" :aria-busy="loading">
     <header v-if="!selected" class="solution-toolbar">
       <div>
-        <h2>{{ reviewMode ? '题解审核' : '题解列表' }}</h2>
-        <span>共 {{ solutions.length }} 篇</span>
+        <h2>{{ reviewMode ? l('题解审核', 'Review solutions') : l('题解列表', 'Solutions') }}</h2>
+        <span>{{ l('共', 'Total') }} {{ solutions.length }} {{ l('篇', 'articles') }}</span>
       </div>
       <div class="solution-toolbar__actions">
         <button
@@ -301,7 +371,7 @@ onMounted(load)
           type="button"
           @click="loadReviewQueue"
         >
-          审核队列
+          {{ l('审核队列', 'Review queue') }}
         </button>
         <button
           v-if="reviewMode"
@@ -312,7 +382,7 @@ onMounted(load)
             load()
           "
         >
-          返回公开题解
+          {{ l('返回公开题解', 'Public solutions') }}
         </button>
         <button
           v-if="!reviewMode"
@@ -321,38 +391,60 @@ onMounted(load)
           :class="{ locked: !eligibility.canWrite }"
           @click="writeSolution"
         >
-          ＋ 写题解
+          ＋ {{ l('写题解', 'Write solution') }}
         </button>
       </div>
     </header>
 
     <div v-if="!selected && !reviewMode" class="solution-search">
       <span aria-hidden="true">⌕</span
-      ><input v-model="keyword" placeholder="搜索题解标题或摘要" @keyup.enter="search" /><button
-        type="button"
-        @click="search"
-      >
-        搜索
+      ><input
+        v-model="keyword"
+        :placeholder="l('搜索题解标题或摘要', 'Search solutions')"
+        @keyup.enter="search"
+      /><button type="button" @click="search">
+        {{ l('搜索', 'Search') }}
       </button>
     </div>
 
     <div v-if="!selected && !eligibility.canViewFull && !reviewMode" class="unlock-notice">
       <span>🔒</span>
       <div>
-        <strong>通过本题后可解锁完整题解</strong>
-        <p>现在可以查看作者提供的安全提示，不会直接展示完整代码。</p>
+        <strong>{{
+          l('通过本题后可解锁完整题解', 'Solve this problem to unlock full solutions')
+        }}</strong>
+        <p>
+          {{
+            l(
+              '现在可以查看作者提供的安全提示，不会直接展示完整代码。',
+              'You can read hints without seeing full code.',
+            )
+          }}
+        </p>
       </div>
     </div>
 
-    <div v-if="!selected && loading" class="solution-state">正在加载题解…</div>
+    <div v-if="!selected && loading" class="solution-state">
+      {{ l('正在加载题解…', 'Loading solutions…') }}
+    </div>
     <div v-else-if="!selected && !solutions.length" class="solution-state solution-state--empty">
       <span>▤</span
-      ><strong>{{ reviewMode ? '暂时没有待审核题解' : '这道题还没有已发布题解' }}</strong>
+      ><strong>{{
+        reviewMode
+          ? l('暂时没有待审核题解', 'No pending solutions')
+          : l('这道题还没有已发布题解', 'No published solutions yet')
+      }}</strong>
       <p>
         {{
           eligibility.canWrite
-            ? '你已经通过本题，可以成为第一位分享解法的人。'
-            : '先独立完成题目，通过后即可查看完整题解并分享自己的思路。'
+            ? l(
+                '你已经通过本题，可以成为第一位分享解法的人。',
+                'You solved it. Share the first solution!',
+              )
+            : l(
+                '先独立完成题目，通过后即可查看完整题解并分享自己的思路。',
+                'Solve the problem to read and share full solutions.',
+              )
         }}
       </p>
     </div>
@@ -365,9 +457,9 @@ onMounted(load)
         @click="openSolution(item.id, reviewMode)"
       >
         <div class="solution-card__top">
-          <h3>{{ item.authorName || '用户' }} 的解题思路</h3>
-          <span v-if="item.official" class="official-badge">官方题解</span
-          ><span v-if="reviewMode" class="pending-badge">待审核</span>
+          <h3>{{ item.authorName || l('用户', 'User') }} {{ l('的解题思路', '— solution') }}</h3>
+          <span v-if="item.official" class="official-badge">{{ l('官方题解', 'Official') }}</span
+          ><span v-if="reviewMode" class="pending-badge">{{ l('待审核', 'Pending') }}</span>
         </div>
         <p>{{ item.summary }}</p>
         <footer>
@@ -376,7 +468,7 @@ onMounted(load)
               ><img v-if="avatar(item.authorAvatar)" :src="avatar(item.authorAvatar)" alt="" />{{
                 avatar(item.authorAvatar) ? '' : (item.authorName || '用').slice(0, 1)
               }}</span
-            >{{ item.authorName || '用户' }}</span
+            >{{ item.authorName || l('用户', 'User') }}</span
           ><span>◉ {{ item.viewCount || 0 }}</span
           ><span>♡ {{ item.likeCount || 0 }}</span
           ><span>💬 {{ item.commentCount || 0 }}</span
@@ -389,16 +481,20 @@ onMounted(load)
       <article class="solution-reader">
         <header class="solution-detail__nav">
           <button class="back-button" type="button" @click="closeDetail">
-            <span aria-hidden="true">←</span> 返回题解列表
+            <span aria-hidden="true">←</span> {{ l('返回题解列表', 'Back to solutions') }}
           </button>
           <div class="solution-detail__badges">
-            <span v-if="selected.official" class="official-badge">✓ 官方题解</span>
+            <span v-if="selected.official" class="official-badge"
+              >✓ {{ l('官方题解', 'Official') }}</span
+            >
             <span v-if="reviewMode || selected.mine" class="pending-badge">{{ statusText }}</span>
           </div>
         </header>
 
         <header class="solution-detail__hero">
-          <p class="solution-detail__eyebrow">{{ reviewMode ? '题解审核' : '解题思路' }}</p>
+          <p class="solution-detail__eyebrow">
+            {{ reviewMode ? l('题解审核', 'Review') : l('解题思路', 'Solution') }}
+          </p>
           <h2>{{ selected.title }}</h2>
           <p class="solution-detail__summary">{{ selected.summary }}</p>
           <div class="solution-detail__author">
@@ -412,16 +508,16 @@ onMounted(load)
               }}</span
             >
             <div>
-              <strong>{{ selected.authorName || '用户' }}</strong
+              <strong>{{ selected.authorName || l('用户', 'User') }}</strong
               ><span
-                >{{ reviewMode ? '提交于' : '发布于' }}
+                >{{ reviewMode ? l('提交于', 'Submitted') : l('发布于', 'Published') }}
                 {{ dateText(selected.publishedAt || selected.createTime) }}</span
               >
             </div>
             <div class="solution-detail__metrics">
-              <span>◉ {{ selected.viewCount || 0 }} 阅读</span
-              ><span>♡ {{ selected.likeCount || 0 }} 点赞</span
-              ><span>💬 {{ selected.commentCount || 0 }} 讨论</span>
+              <span>◉ {{ selected.viewCount || 0 }} {{ l('阅读', 'views') }}</span
+              ><span>♡ {{ selected.likeCount || 0 }} {{ l('点赞', 'likes') }}</span
+              ><span>💬 {{ selected.commentCount || 0 }} {{ l('讨论', 'comments') }}</span>
             </div>
           </div>
         </header>
@@ -429,25 +525,49 @@ onMounted(load)
         <div v-if="reviewMode" class="review-notice">
           <span>!</span>
           <div>
-            <strong>这篇题解正在等待审核</strong>
-            <p>请检查安全提示是否泄露完整答案，并确认正文思路、复杂度与代码说明清晰。</p>
+            <strong>{{ l('这篇题解正在等待审核', 'This solution is awaiting review') }}</strong>
+            <p>
+              {{
+                l(
+                  '请检查安全提示是否泄露完整答案，并确认正文思路、复杂度与代码说明清晰。',
+                  'Check that hints do not reveal the full answer and that the explanation is clear.',
+                )
+              }}
+            </p>
           </div>
         </div>
 
         <section v-if="selected.accessLevel === 'FULL'" class="solution-content-card">
-          <div class="solution-content-card__title"><span>▤</span><strong>题解正文</strong></div>
+          <div class="solution-content-card__title">
+            <span>▤</span><strong>{{ l('题解正文', 'Full solution') }}</strong>
+          </div>
           <div class="solution-markdown" v-html="fullHtml" />
         </section>
         <section v-else class="hint-view">
           <div class="hint-view__head">
             <span>💡</span>
             <div>
-              <strong>安全提示</strong>
-              <p>以下内容只提供思路方向，不包含可直接提交的完整答案。</p>
+              <strong>{{ l('安全提示', 'Hints') }}</strong>
+              <p>
+                {{
+                  l(
+                    '以下内容只提供思路方向，不包含可直接提交的完整答案。',
+                    'These hints give direction without a complete answer.',
+                  )
+                }}
+              </p>
             </div>
           </div>
           <div class="solution-markdown" v-html="hintHtml" />
-          <div class="hint-lock">🔒 通过本题后可查看完整题解、参考代码和讨论区</div>
+          <div class="hint-lock">
+            🔒
+            {{
+              l(
+                '通过本题后可查看完整题解、参考代码和讨论区',
+                'Solve this problem to see the full solution, code and discussion',
+              )
+            }}
+          </div>
         </section>
 
         <div
@@ -455,22 +575,32 @@ onMounted(load)
           class="solution-actions"
         >
           <button type="button" :class="{ liked: selected.liked }" @click="toggleLike">
-            ♡ {{ selected.liked ? '已点赞' : '点赞' }} · {{ selected.likeCount }}</button
+            ♡ {{ selected.liked ? l('已点赞', 'Liked') : l('点赞', 'Like') }} ·
+            {{ selected.likeCount }}</button
           ><button v-if="eligibility.admin" type="button" @click="setOfficial">
-            {{ selected.official ? '取消官方' : '设为官方题解' }}
+            {{
+              selected.official
+                ? l('取消官方', 'Remove official status')
+                : l('设为官方题解', 'Mark official')
+            }}
           </button>
         </div>
         <section
           v-if="selected.accessLevel === 'FULL' && selected.reviewStatus === 2"
           class="comments"
         >
-          <h3>讨论 {{ selected.commentCount }}</h3>
+          <h3>{{ l('讨论', 'Discussion') }} {{ selected.commentCount }}</h3>
           <div class="comment-compose">
             <textarea
               v-model="commentText"
               maxlength="2000"
-              placeholder="交流思路和复杂度，请不要粘贴无关内容"
-            /><button type="button" @click="addComment">发表评论</button>
+              :placeholder="
+                l(
+                  '交流思路和复杂度，请不要粘贴无关内容',
+                  'Discuss ideas and complexity; keep comments relevant',
+                )
+              "
+            /><button type="button" @click="addComment">{{ l('发表评论', 'Post comment') }}</button>
           </div>
           <article v-for="item in comments" :key="item.id">
             <span class="avatar"
@@ -480,7 +610,7 @@ onMounted(load)
             >
             <div>
               <header>
-                <strong>{{ item.authorName || '用户' }}</strong
+                <strong>{{ item.authorName || l('用户', 'User') }}</strong
                 ><time>{{ dateText(item.createTime) }}</time>
               </header>
               <p>{{ item.content }}</p>
@@ -489,7 +619,7 @@ onMounted(load)
                 type="button"
                 @click="removeComment(item)"
               >
-                删除
+                {{ l('删除', 'Delete') }}
               </button>
             </div>
           </article>
@@ -497,11 +627,18 @@ onMounted(load)
       </article>
 
       <div v-if="reviewMode && eligibility.admin" class="review-actions">
-        <span>审核后将立即影响用户是否能看到完整题解</span
+        <span>{{
+          l(
+            '审核后将立即影响用户是否能看到完整题解',
+            'Review changes who can view the full solution',
+          )
+        }}</span
         ><button type="button" class="reject" :disabled="reviewSaving" @click="review(false)">
-          驳回并说明原因</button
+          {{ l('驳回并说明原因', 'Reject with reason') }}</button
         ><button type="button" class="approve" :disabled="reviewSaving" @click="review(true)">
-          {{ reviewSaving ? '处理中…' : '审核通过并发布' }}
+          {{
+            reviewSaving ? l('处理中…', 'Processing…') : l('审核通过并发布', 'Approve and publish')
+          }}
         </button>
       </div>
     </div>
@@ -512,62 +649,106 @@ onMounted(load)
         class="editor-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="题解编辑器"
+        :aria-label="l('题解编辑器', 'Solution editor')"
         @click.self="editorOpen = false"
       >
         <div class="editor-sheet">
           <header class="editor-sheet__head">
             <div>
               <span class="editor-sheet__eyebrow">WRITE A SOLUTION</span>
-              <h2>分享这道题的解法</h2>
-              <p>{{ questionTitle || '当前题目' }} · 审核通过后向符合权限的用户展示</p>
+              <h2>{{ l('分享这道题的解法', 'Share your solution') }}</h2>
+              <p>
+                {{ questionTitle || l('当前题目', 'Current problem') }} ·
+                {{
+                  l('审核通过后向符合权限的用户展示', 'Visible to eligible readers after review')
+                }}
+              </p>
             </div>
-            <button type="button" aria-label="关闭题解编辑器" @click="editorOpen = false">×</button>
+            <button
+              type="button"
+              :aria-label="l('关闭题解编辑器', 'Close solution editor')"
+              @click="editorOpen = false"
+            >
+              ×
+            </button>
           </header>
           <div class="editor-sheet__guide">
             <span>1</span>
             <div>
-              <strong>先给一个方向</strong>
-              <p>这部分提供给尚未通过的同学，只写思路入口和边界提醒，不放完整代码。</p>
+              <strong>{{ l('先给一个方向', 'Start with a hint') }}</strong>
+              <p>
+                {{
+                  l(
+                    '这部分提供给尚未通过的同学，只写思路入口和边界提醒，不放完整代码。',
+                    'Readers who have not solved this problem can see this. Do not include complete code.',
+                  )
+                }}
+              </p>
             </div>
           </div>
           <label class="editor-field"
             ><span
-              >思路提示 <small>{{ form.hintContent.length }} / 5000</small></span
+              >{{ l('思路提示', 'Hints') }}
+              <small>{{ form.hintContent.length }} / 5000</small></span
             ><textarea
               v-model="form.hintContent"
               maxlength="5000"
               rows="6"
-              placeholder="例如：先观察数据范围，考虑使用双指针维护区间；注意空数组和重复元素……"
+              :placeholder="
+                l(
+                  '例如：先观察数据范围，考虑使用双指针维护区间；注意空数组和重复元素……',
+                  'For example: inspect the constraints, then consider two pointers…',
+                )
+              "
             />
           </label>
           <div class="editor-sheet__guide editor-sheet__guide--full">
             <span>2</span>
             <div>
-              <strong>完整讲清楚你的解法</strong>
-              <p>建议包含核心思路、正确性说明、复杂度分析和参考代码，支持 Markdown。</p>
+              <strong>{{ l('完整讲清楚你的解法', 'Explain the full solution') }}</strong>
+              <p>
+                {{
+                  l(
+                    '建议包含核心思路、正确性说明、复杂度分析和参考代码，支持 Markdown。',
+                    'Include the idea, correctness, complexity and code. Markdown is supported.',
+                  )
+                }}
+              </p>
             </div>
           </div>
           <label class="editor-field"
             ><span
-              >完整题解 <small>{{ form.content.length }} / 100000</small></span
+              >{{ l('完整题解', 'Full solution') }}
+              <small>{{ form.content.length }} / 100000</small></span
             ><textarea
               v-model="form.content"
               maxlength="100000"
               rows="16"
-              placeholder="## 思路&#10;&#10;说明为什么这样做……&#10;&#10;## 复杂度&#10;&#10;- 时间复杂度：&#10;- 空间复杂度：&#10;&#10;## 参考代码&#10;&#10;```cpp&#10;// 在这里写代码&#10;```"
+              :placeholder="
+                l(
+                  '## 思路\n\n说明为什么这样做……\n\n## 复杂度\n\n- 时间复杂度：\n- 空间复杂度：\n\n## 参考代码\n\n```cpp\n// 在这里写代码\n```',
+                  '## Approach\n\nExplain why it works…\n\n## Complexity\n\n- Time:\n- Space:\n\n## Code\n\n```cpp\n// Write code here\n```',
+                )
+              "
             />
           </label>
           <p v-if="selected?.reviewReason" class="reject-reason">
-            上次驳回原因：{{ selected.reviewReason }}
+            {{ l('上次驳回原因：', 'Previous rejection: ') }}{{ selected.reviewReason }}
           </p>
           <footer>
-            <p>保存草稿不会公开，提交后由管理员审核。</p>
+            <p>
+              {{
+                l(
+                  '保存草稿不会公开，提交后由管理员审核。',
+                  'Drafts are private. Submitted solutions are reviewed before publishing.',
+                )
+              }}
+            </p>
             <div>
               <button type="button" class="ghost-btn" :disabled="saving" @click="saveDraft(false)">
-                保存草稿</button
+                {{ l('保存草稿', 'Save draft') }}</button
               ><button type="button" class="write-btn" :disabled="saving" @click="saveDraft(true)">
-                {{ saving ? '保存中…' : '提交审核' }}
+                {{ saving ? l('保存中…', 'Saving…') : l('提交审核', 'Submit for review') }}
               </button>
             </div>
           </footer>
@@ -588,12 +769,14 @@ onMounted(load)
           <header>
             <div class="review-reject-card__mark" aria-hidden="true">!</div>
             <div>
-              <p>题解审核</p>
-              <h2 id="review-reject-title">驳回并给出修改建议</h2>
+              <p>{{ l('题解审核', 'Solution review') }}</p>
+              <h2 id="review-reject-title">
+                {{ l('驳回并给出修改建议', 'Reject with feedback') }}
+              </h2>
             </div>
             <button
               type="button"
-              aria-label="关闭"
+              :aria-label="l('关闭', 'Close')"
               :disabled="reviewSaving"
               @click="closeRejectDialog"
             >
@@ -601,12 +784,14 @@ onMounted(load)
             </button>
           </header>
           <div class="review-reject-card__context">
-            <span>当前题解</span>
-            <strong>{{ selected?.title || '解题思路' }}</strong>
-            <small>作者：{{ selected?.authorName || '用户' }}</small>
+            <span>{{ l('当前题解', 'Solution') }}</span>
+            <strong>{{ selected?.title || l('解题思路', 'Solution') }}</strong>
+            <small
+              >{{ l('作者：', 'Author: ') }}{{ selected?.authorName || l('用户', 'User') }}</small
+            >
           </div>
           <div class="review-reject-card__presets">
-            <span>常用原因</span>
+            <span>{{ l('常用原因', 'Common reasons') }}</span>
             <button
               v-for="reason in reviewRejectPresets"
               :key="reason"
@@ -614,23 +799,36 @@ onMounted(load)
               :class="{ active: reviewRejectReason === reason }"
               @click="useRejectPreset(reason)"
             >
-              {{ reason }}
+              {{ l(reason, reviewRejectPresetEnglish[reason] || reason) }}
             </button>
           </div>
           <label class="review-reject-card__field">
             <span
-              ><strong>具体原因</strong><small>{{ reviewRejectReason.length }} / 500</small></span
+              ><strong>{{ l('具体原因', 'Reason') }}</strong
+              ><small>{{ reviewRejectReason.length }} / 500</small></span
             >
             <textarea
               v-model="reviewRejectReason"
               maxlength="500"
               rows="5"
               autofocus
-              placeholder="请说明需要修改的内容，帮助作者快速完善题解……"
+              :placeholder="
+                l(
+                  '请说明需要修改的内容，帮助作者快速完善题解……',
+                  'Describe what the author should change…',
+                )
+              "
               @keydown.ctrl.enter.prevent="confirmReject"
             />
           </label>
-          <p class="review-reject-card__tip">驳回后题解不会公开，作者可在修改后重新提交审核。</p>
+          <p class="review-reject-card__tip">
+            {{
+              l(
+                '驳回后题解不会公开，作者可在修改后重新提交审核。',
+                'Rejected solutions remain private and can be resubmitted.',
+              )
+            }}
+          </p>
           <footer>
             <button
               type="button"
@@ -638,14 +836,14 @@ onMounted(load)
               :disabled="reviewSaving"
               @click="closeRejectDialog"
             >
-              取消</button
+              {{ l('取消', 'Cancel') }}</button
             ><button
               type="button"
               class="review-reject-card__confirm"
               :disabled="reviewSaving || reviewRejectReason.trim().length < 4"
               @click="confirmReject"
             >
-              {{ reviewSaving ? '正在驳回…' : '确认驳回' }}
+              {{ reviewSaving ? l('正在驳回…', 'Rejecting…') : l('确认驳回', 'Confirm rejection') }}
             </button>
           </footer>
         </section>
@@ -868,12 +1066,13 @@ onMounted(load)
   margin: 0;
 }
 .solution-detail {
-  position: absolute;
+  position: relative;
   z-index: 4;
-  inset: 0;
-  overflow: auto;
-  padding: 20px;
+  min-height: 100%;
+  overflow: visible;
+  padding: 0;
   background: var(--app-bg);
+  scrollbar-gutter: stable;
 }
 .solution-detail > header {
   justify-content: space-between;
@@ -1129,15 +1328,6 @@ onMounted(load)
   }
 }
 /* 题解详情使用正常文档流，由左侧题面区域负责滚动，避免绝对覆盖造成高度截断。 */
-.solution-detail {
-  position: relative;
-  inset: auto;
-  min-height: 100%;
-  overflow: visible;
-  padding: 0;
-  background: var(--app-bg);
-  scrollbar-gutter: stable;
-}
 .solution-detail__nav {
   position: relative;
   display: flex;

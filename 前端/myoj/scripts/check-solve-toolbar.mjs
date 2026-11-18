@@ -13,10 +13,10 @@ const checks = [
   ['独立菜单', 'class="editor-settings-popover"'],
   ['点击外部关闭', 'onEditorSettingsOutsidePointer'],
   ['全宽工作台', 'solve-page--edge-to-edge'],
-  ['题目描述导航', '>题目描述</button>'],
-  ['题解导航', '>题解</button>'],
-  ['题目提交记录导航', '>提交记录</button>'],
-  ['题目统计导航', '>统计</button>'],
+  ['题目描述导航', "l('题目描述', 'Description')"],
+  ['题解导航', "l('题解', 'Solutions')"],
+  ['题目提交记录导航', "l('提交记录', 'Submissions')"],
+  ['题目统计导航', "l('统计', 'Statistics')"],
 ]
 
 for (const [name, marker] of checks) {

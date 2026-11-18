@@ -10,6 +10,10 @@ for (const marker of [
   'min-height: 42px',
   '.nav-link.active::after',
   'backdrop-filter: blur(18px)',
+  '<Teleport to="body">',
+  'position: fixed;',
+  'overflow-y: auto;',
+  'updateAdminDropdownPosition',
 ]) {
   if (!source.includes(marker)) throw new Error(`公共顶栏现代化样式缺少：${marker}`)
 }

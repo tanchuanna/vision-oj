@@ -23,6 +23,21 @@ class QuestionPreflightServiceTest {
     }
 
     @Test
+    void catchesFixedOutputAcrossEveryImageProtocol() {
+        assertFalse(QuestionPreflightService.hasDifferentExpectedAnswer("IMAGE_CLASSIFICATION", List.of(
+                testCase("car", true), testCase("CAR", false)), 0, null));
+        assertTrue(QuestionPreflightService.hasDifferentExpectedAnswer("IMAGE_CLASSIFICATION", List.of(
+                testCase("car", true), testCase("bus", false)), 0, null));
+
+        com.spingbootinit.model.dto.question.JudgeConfig config = new com.spingbootinit.model.dto.question.JudgeConfig();
+        config.setOcrEditDistance(1);
+        assertFalse(QuestionPreflightService.hasDifferentExpectedAnswer("IMAGE_OCR", List.of(
+                testCase("abcdef", true), testCase("abcxef", false)), 0, config));
+        assertTrue(QuestionPreflightService.hasDifferentExpectedAnswer("IMAGE_OCR", List.of(
+                testCase("abcdef", true), testCase("uvwxyz", false)), 0, config));
+    }
+
+    @Test
     void extractsOnlyFencedPythonReferenceCode() {
         assertEquals("print(1)", QuestionPreflightService.pythonCode("思路\n```python\nprint(1)\n```"));
         assertNull(QuestionPreflightService.pythonCode("只写了思路，没有代码"));

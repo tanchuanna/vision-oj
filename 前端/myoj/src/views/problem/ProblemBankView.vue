@@ -1,15 +1,24 @@
 <script setup lang="ts">
-import { computed, h, onMounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, ref, watch } from 'vue'
 import { Message, Modal } from '@arco-design/web-vue'
-import { OpenAPI, Service } from '@generated'
 import type { QuestionQueryRequest } from '@generated'
+import { OpenAPI, Service } from '@generated'
 import { getBackendErrorMessage } from '@/api/httpError'
 import { isResultSuccess } from '@/api/result'
 import { mapApiError } from '@/api/mapApiError'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
-import { PROBLEM_DIFFICULTIES, PROBLEM_KNOWLEDGE_TAGS, PROBLEM_TYPE_OPTIONS } from '@/config/problemTaxonomy'
-import { problemTypeLabel } from '@/config/problemTaxonomy'
+import {
+  PROBLEM_DIFFICULTIES,
+  PROBLEM_KNOWLEDGE_TAGS,
+  PROBLEM_TYPE_OPTIONS,
+  problemTypeLabel,
+} from '@/config/problemTaxonomy'
+import {
+  beginProblemSharedTransition,
+  endProblemSharedTransition,
+} from '@/composables/problemSharedTransition'
+import { formatSiteDate, localize as l } from '@/i18n/locale'
 
 type ProblemRow = {
   id: string
@@ -22,13 +31,36 @@ type ProblemRow = {
   updateTime?: string
 }
 
-type StudyRecommendation = { questionId: string; title: string; questionType: string; focusTag: string; reason: string }
+type StudyRecommendation = {
+  questionId: string
+  title: string
+  questionType: string
+  difficulty?: string
+  focusTag: string
+  reason: string
+}
+type RecommendationTagMastery = {
+  tag: string
+  attempted: number
+  solved: number
+  mastery: number
+  level: string
+}
+type StudyRecommendationPayload = {
+  recommendations?: StudyRecommendation[]
+  weakTags?: RecommendationTagMastery[]
+  todaySolved?: number
+  dailyGoal?: number
+}
 
 const loading = ref(false)
 const router = useRouter()
 const auth = useAuthStore()
 const rows = ref<ProblemRow[]>([])
 const recommendations = ref<StudyRecommendation[]>([])
+const weakTags = ref<RecommendationTagMastery[]>([])
+const todaySolved = ref(0)
+const dailyGoal = ref(3)
 const total = ref(0)
 const current = ref(1)
 const pageSize = ref(10)
@@ -45,6 +77,54 @@ const DIFFICULTY_OPTIONS = ['', ...PROBLEM_DIFFICULTIES]
 const CATEGORY_OPTIONS = ['', ...PROBLEM_KNOWLEDGE_TAGS]
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
+const trainingProgress = computed(() =>
+  Math.min(100, Math.round((todaySolved.value / Math.max(1, dailyGoal.value)) * 100)),
+)
+
+const englishTags: Record<string, string> = {
+  全部: 'All',
+  全部题型: 'All types',
+  传统编程题: 'Programming',
+  图像目标计数题: 'Object counting',
+  图像分类题: 'Main object label',
+  目标检测框题: 'Object detection',
+  'OCR 文字识别题': 'OCR',
+  图像属性分析题: 'Image analysis',
+  入门: 'Beginner',
+  简单: 'Easy',
+  中等: 'Medium',
+  困难: 'Hard',
+  未分级: 'Unrated',
+  基础语法: 'Basics',
+  分支: 'Branching',
+  循环: 'Loops',
+  字符串: 'Strings',
+  数组: 'Arrays',
+  链表: 'Linked lists',
+  栈: 'Stacks',
+  队列: 'Queues',
+  哈希表: 'Hash tables',
+  排序: 'Sorting',
+  查找: 'Searching',
+  双指针: 'Two pointers',
+  枚举: 'Enumeration',
+  模拟: 'Simulation',
+  贪心: 'Greedy',
+  递归: 'Recursion',
+  递推: 'Recurrence',
+  数学: 'Math',
+  二分: 'Binary search',
+  树: 'Trees',
+  图论: 'Graphs',
+  搜索: 'Search',
+  动态规划: 'Dynamic programming',
+  并查集: 'Disjoint set',
+  最短路: 'Shortest path',
+  图像识别: 'Image recognition',
+}
+function displayTag(value: string) {
+  return l(value, englishTags[value] || value)
+}
 
 function buildQueryPayload(): QuestionQueryRequest {
   const payload: QuestionQueryRequest = {
@@ -54,9 +134,9 @@ function buildQueryPayload(): QuestionQueryRequest {
   if (queryTitle.value.trim()) payload.title = queryTitle.value.trim()
   if (selectedType.value) payload.questionType = selectedType.value
   const tags = queryTags.value
-      .split(',')
-      .map((t) => t.trim())
-      .filter(Boolean)
+    .split(',')
+    .map((t) => t.trim())
+    .filter(Boolean)
   if (selectedDifficulty.value) tags.push(selectedDifficulty.value)
   if (selectedCategory.value) tags.push(selectedCategory.value)
   if (tags.length) payload.tags = [...new Set(tags)]
@@ -68,7 +148,7 @@ async function fetchList() {
   try {
     const data = await Service.pageQuestions(buildQueryPayload())
     if (!isResultSuccess(data.code)) {
-      Message.error(data.message || '获取题库失败')
+      Message.error(data.message || l('获取题库失败', 'Could not load problems'))
       return
     }
     const page = data.data
@@ -87,7 +167,12 @@ async function fetchList() {
     current.value = page?.current ?? current.value
     pageSize.value = page?.size ?? pageSize.value
   } catch (error) {
-    Message.error(mapApiError(error, getBackendErrorMessage(error, '获取题库失败')))
+    Message.error(
+      mapApiError(
+        error,
+        getBackendErrorMessage(error, l('获取题库失败', 'Could not load problems')),
+      ),
+    )
   } finally {
     loading.value = false
   }
@@ -95,17 +180,29 @@ async function fetchList() {
 
 async function loadRecommendations() {
   recommendations.value = []
+  weakTags.value = []
+  todaySolved.value = 0
+  dailyGoal.value = 3
   if (!auth.isLoggedIn || !auth.userId) return
   const requestedUserId = auth.userId
   try {
-    const token = typeof OpenAPI.TOKEN === 'function' ? await OpenAPI.TOKEN({} as never) : OpenAPI.TOKEN
+    const token =
+      typeof OpenAPI.TOKEN === 'function' ? await OpenAPI.TOKEN({} as never) : OpenAPI.TOKEN
     const response = await fetch(`${OpenAPI.BASE.replace(/\/+$/, '')}/question/recommend/my`, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       cache: 'no-store',
     })
-    const body = await response.json() as { code?: number; data?: StudyRecommendation[] }
+    const body = (await response.json()) as { code?: number; data?: StudyRecommendationPayload }
     if (auth.userId === requestedUserId && response.ok && isResultSuccess(body.code)) {
-      recommendations.value = Array.isArray(body.data) ? body.data : []
+      recommendations.value = Array.isArray(body.data?.recommendations)
+        ? body.data.recommendations
+        : []
+      weakTags.value = Array.isArray(body.data?.weakTags) ? body.data.weakTags : []
+      todaySolved.value = typeof body.data?.todaySolved === 'number' ? body.data.todaySolved : 0
+      dailyGoal.value =
+        typeof body.data?.dailyGoal === 'number' && body.data.dailyGoal > 0
+          ? body.data.dailyGoal
+          : 3
     }
   } catch {
     // 推荐服务不可用时保留正常题库，避免把个性化功能变成做题入口的故障点。
@@ -145,17 +242,15 @@ function formatDateTime(raw?: string): string {
   if (!raw) return '-'
   const d = new Date(raw)
   if (Number.isNaN(d.getTime())) return raw
-  return d
-    .toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    })
-    .replace(/\//g, '-')
+  return formatSiteDate(d, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).replace(/\//g, '-')
 }
 
 function getPassRate(item: ProblemRow): string {
@@ -181,24 +276,35 @@ function selectQuickFilter(group: 'type' | 'difficulty' | 'category', value: str
 }
 
 function difficultyOf(item: ProblemRow): string {
-  return (item.tags || []).find((tag) => DIFFICULTY_OPTIONS.includes(tag)) || '未分级'
+  return displayTag((item.tags || []).find((tag) => DIFFICULTY_OPTIONS.includes(tag)) || '未分级')
 }
 
-function goSolve(item: ProblemRow) {
+function goSolve(item: ProblemRow, event?: MouseEvent) {
   if (!auth.isLoggedIn) {
     Modal.confirm({
-      title: '登录后开始做题',
+      title: l('登录后开始做题', 'Sign in to solve problems'),
       modalClass: 'solve-login-modal',
       content: () =>
         h('div', { class: 'solve-login-modal__content' }, [
           h('div', { class: 'solve-login-modal__icon', 'aria-hidden': 'true' }, '✨'),
           h('div', { class: 'solve-login-modal__text' }, [
-            h('p', { class: 'solve-login-modal__lead' }, '登录后可解锁完整作答体验'),
-            h('p', { class: 'solve-login-modal__desc' }, '支持提交记录保存、进度同步与后续成绩追踪。'),
+            h(
+              'p',
+              { class: 'solve-login-modal__lead' },
+              l('登录后可解锁完整作答体验', 'Sign in to save and submit your solutions.'),
+            ),
+            h(
+              'p',
+              { class: 'solve-login-modal__desc' },
+              l(
+                '支持提交记录保存、进度同步与后续成绩追踪。',
+                'Your submissions and progress stay with your account.',
+              ),
+            ),
           ]),
         ]),
-      okText: '去登录',
-      cancelText: '稍后再说',
+      okText: l('去登录', 'Sign in'),
+      cancelText: l('稍后再说', 'Later'),
       okButtonProps: { status: 'success' },
       onOk: () => {
         router.push({ path: '/', query: { openAuth: '1' } })
@@ -206,41 +312,143 @@ function goSolve(item: ProblemRow) {
     })
     return
   }
-  router.push({ name: 'problem-solve', params: { id: item.id } })
+  const destination = { name: 'problem-solve', params: { id: item.id } }
+  const source = (event?.currentTarget as HTMLElement | null)
+    ?.closest('tr, .problem-card')
+    ?.querySelector<HTMLElement>('.problem-list-title')
+  if (
+    !source ||
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches ||
+    !document.startViewTransition
+  ) {
+    void router.push(destination)
+    return
+  }
+  source.style.viewTransitionName = 'selected-problem-title'
+  beginProblemSharedTransition(item.id, item.title)
+  try {
+    const transition = document.startViewTransition(async () => {
+      await router.push(destination)
+      await nextTick()
+    })
+    const cleanup = () => {
+      source.style.viewTransitionName = ''
+      endProblemSharedTransition()
+    }
+    void transition.finished.then(cleanup, cleanup)
+  } catch {
+    source.style.viewTransitionName = ''
+    endProblemSharedTransition()
+    void router.push(destination)
+  }
 }
 
-onMounted(() => { void fetchList(); void loadRecommendations() })
-watch(() => auth.userId, () => { void loadRecommendations() })
+onMounted(() => {
+  void fetchList()
+  void loadRecommendations()
+})
+watch(
+  () => auth.userId,
+  () => {
+    void loadRecommendations()
+  },
+)
 </script>
 
 <template>
   <div class="problem-page">
     <section class="hero panel">
       <div>
-        <p class="eyebrow">Problem Bank</p>
-        <h1>题库</h1>
-        <p class="lead">按标题和标签快速筛选题目，查看通过率与最近更新时间，题目探索更轻松。</p>
+        <h1>{{ l('题库', 'Problems') }}</h1>
+        <p class="lead">
+          {{ l('按题型、难度和知识点查找题目。', 'Find problems by type, difficulty and topic.') }}
+        </p>
       </div>
       <div class="hero-meta">
-        <span class="meta-chip">总题数 {{ total }}</span>
-        <span class="meta-chip">当前第 {{ current }} / {{ totalPages }} 页</span>
-        <span class="meta-chip">{{ loading ? '同步中' : '已同步' }}</span>
+        <span class="meta-chip">{{ l('总题数', 'Total') }} {{ total }}</span>
+        <span class="meta-chip"
+          >{{ l('当前第', 'Page') }} {{ current }} / {{ totalPages }} {{ l('页', '') }}</span
+        >
       </div>
     </section>
 
-    <section v-if="recommendations.length" class="recommend-panel panel" aria-label="个性化练习推荐">
-      <div class="recommend-panel__heading"><div><span class="eyebrow">为你推荐</span><h2>下一步练什么</h2></div><span class="recommend-panel__caption">依据你的提交记录与题目标签</span></div>
+    <section
+      v-if="recommendations.length"
+      class="recommend-panel panel"
+      :aria-label="l('个性化练习推荐', 'Recommended practice')"
+    >
+      <div class="recommend-panel__heading">
+        <div>
+          <span class="eyebrow">{{ l('为你推荐', 'Recommended') }}</span>
+          <h2>{{ l('今日训练', "Today's practice") }}</h2>
+        </div>
+        <div class="recommend-progress">
+          <span class="recommend-progress__text">
+            {{ l('今日已通过', 'Solved today') }} <strong>{{ todaySolved }}</strong> /
+            {{ dailyGoal }} {{ l('题', '') }}
+          </span>
+          <span class="recommend-progress__bar" aria-hidden="true">
+            <i :style="{ width: `${trainingProgress}%` }" />
+          </span>
+        </div>
+      </div>
+      <div v-if="weakTags.length" class="recommend-tags">
+        <span class="recommend-tags__label">{{ l('需要加强', 'Review next') }}</span>
+        <span
+          v-for="tag in weakTags"
+          :key="tag.tag"
+          class="recommend-chip"
+          :class="{ 'is-weak': tag.mastery < 40 }"
+          :title="
+            l(
+              `已尝试 ${tag.attempted} 题，通过 ${tag.solved} 题`,
+              `${tag.attempted} attempted, ${tag.solved} solved`,
+            )
+          "
+        >
+          {{ displayTag(tag.tag) }} · {{ tag.mastery }}%
+        </span>
+      </div>
       <div class="recommend-panel__grid">
-        <button v-for="item in recommendations" :key="item.questionId" type="button" class="recommend-card" @click="goSolve({ id: item.questionId, title: item.title, questionType: item.questionType })">
-          <span class="recommend-card__tag">{{ item.focusTag || problemTypeLabel(item.questionType) }}</span>
+        <button
+          v-for="item in recommendations"
+          :key="item.questionId"
+          type="button"
+          class="recommend-card"
+          @click="
+            goSolve({ id: item.questionId, title: item.title, questionType: item.questionType })
+          "
+        >
+          <span class="recommend-card__meta">
+            <span class="recommend-card__tag">{{
+              displayTag(item.focusTag || problemTypeLabel(item.questionType))
+            }}</span>
+            <span v-if="item.difficulty" class="recommend-card__difficulty">{{
+              displayTag(item.difficulty)
+            }}</span>
+          </span>
           <strong>{{ item.title }}</strong>
           <small>{{ item.reason }}</small>
-          <span class="recommend-card__action">去练习 →</span>
+          <span class="recommend-card__action">{{ l('去练习', 'Practice') }} →</span>
         </button>
       </div>
     </section>
 
     <section class="panel table-shell">
+      <div class="filter-intro">
+        <div>
+          <h2>{{ l('查找题目', 'Find problems') }}</h2>
+          <p>
+            {{
+              l(
+                '可以输入名称，或按题型、难度和知识点缩小范围。',
+                'Search by title or narrow results by type, difficulty and topic.',
+              )
+            }}
+          </p>
+        </div>
+        <span>{{ total }} {{ l('道题', 'problems') }}</span>
+      </div>
       <div class="view-switch">
         <a-button
           size="small"
@@ -248,7 +456,7 @@ watch(() => auth.userId, () => { void loadRecommendations() })
           :type="viewMode === 'table' ? 'primary' : 'secondary'"
           @click="viewMode = 'table'"
         >
-          表格视图
+          {{ l('表格视图', 'Table') }}
         </a-button>
         <a-button
           size="small"
@@ -256,20 +464,35 @@ watch(() => auth.userId, () => { void loadRecommendations() })
           :type="viewMode === 'card' ? 'primary' : 'secondary'"
           @click="viewMode = 'card'"
         >
-          卡片视图
+          {{ l('卡片视图', 'Cards') }}
         </a-button>
       </div>
 
       <div class="filter-row">
-        <a-input v-model="queryTitle" allow-clear placeholder="按标题搜索" />
-        <a-input v-model="queryTags" allow-clear placeholder="标签，逗号分隔，如：数组,图论" />
-        <a-button type="primary" class="query-btn query-btn--primary" :loading="loading" :disabled="loading" @click="onSearch">查询</a-button>
-        <a-button class="query-btn query-btn--ghost" :disabled="loading" @click="onReset">重置</a-button>
+        <a-input v-model="queryTitle" allow-clear :placeholder="l('按标题搜索', 'Search titles')" />
+        <a-input
+          v-model="queryTags"
+          allow-clear
+          :placeholder="
+            l('标签，逗号分隔，如：数组,图论', 'Tags, comma separated (e.g. 数组,图论)')
+          "
+        />
+        <a-button
+          type="primary"
+          class="query-btn query-btn--primary"
+          :loading="loading"
+          :disabled="loading"
+          @click="onSearch"
+          >{{ l('查询', 'Search') }}</a-button
+        >
+        <a-button class="query-btn query-btn--ghost" :disabled="loading" @click="onReset">{{
+          l('重置', 'Reset')
+        }}</a-button>
       </div>
 
       <div class="category-filter">
         <div class="category-filter__row">
-          <span class="category-filter__label">题型</span>
+          <span class="category-filter__label">{{ l('题型', 'Type') }}</span>
           <button
             v-for="option in TYPE_OPTIONS"
             :key="option.value || 'all-type'"
@@ -277,10 +500,12 @@ watch(() => auth.userId, () => { void loadRecommendations() })
             class="category-chip"
             :class="{ 'category-chip--active': selectedType === option.value }"
             @click="selectQuickFilter('type', option.value)"
-          >{{ option.label }}</button>
+          >
+            {{ displayTag(option.label) }}
+          </button>
         </div>
         <div class="category-filter__row">
-          <span class="category-filter__label">难度</span>
+          <span class="category-filter__label">{{ l('难度', 'Difficulty') }}</span>
           <button
             v-for="option in DIFFICULTY_OPTIONS"
             :key="option || 'all-difficulty'"
@@ -288,10 +513,12 @@ watch(() => auth.userId, () => { void loadRecommendations() })
             class="category-chip"
             :class="{ 'category-chip--active': selectedDifficulty === option }"
             @click="selectQuickFilter('difficulty', option)"
-          >{{ option || '全部' }}</button>
+          >
+            {{ displayTag(option || '全部') }}
+          </button>
         </div>
         <div class="category-filter__row">
-          <span class="category-filter__label">知识点</span>
+          <span class="category-filter__label">{{ l('知识点', 'Topic') }}</span>
           <button
             v-for="option in CATEGORY_OPTIONS"
             :key="option || 'all-category'"
@@ -299,7 +526,9 @@ watch(() => auth.userId, () => { void loadRecommendations() })
             class="category-chip"
             :class="{ 'category-chip--active': selectedCategory === option }"
             @click="selectQuickFilter('category', option)"
-          >{{ option || '全部' }}</button>
+          >
+            {{ displayTag(option || '全部') }}
+          </button>
         </div>
       </div>
 
@@ -307,33 +536,48 @@ watch(() => auth.userId, () => { void loadRecommendations() })
         <table class="problem-table">
           <thead>
             <tr>
-              <th>题目</th>
-              <th>标签</th>
-              <th>出题人</th>
-              <th>通过 / 提交</th>
-              <th>通过率</th>
-              <th>最近更新</th>
-              <th>操作</th>
+              <th>{{ l('题目', 'Problem') }}</th>
+              <th>{{ l('标签', 'Tags') }}</th>
+              <th>{{ l('出题人', 'Author') }}</th>
+              <th>{{ l('通过 / 提交', 'Solved / Submissions') }}</th>
+              <th>{{ l('通过率', 'Acceptance') }}</th>
+              <th>{{ l('最近更新', 'Updated') }}</th>
+              <th>{{ l('操作', 'Action') }}</th>
             </tr>
           </thead>
           <tbody>
             <tr v-if="loading && rows.length === 0">
-              <td colspan="7" class="empty-cell">加载中...</td>
+              <td colspan="7" class="empty-cell">{{ l('加载中...', 'Loading...') }}</td>
             </tr>
             <tr v-else-if="rows.length === 0">
-              <td colspan="7" class="empty-cell">暂无题目</td>
+              <td colspan="7" class="empty-cell">
+                <div class="problem-empty">
+                  <strong>{{ l('没有找到符合条件的题目', 'No matching problems') }}</strong
+                  ><span>{{
+                    l('换个关键词或清除筛选后再试。', 'Try another keyword or clear filters.')
+                  }}</span
+                  ><button type="button" @click="onReset">
+                    {{ l('清除筛选', 'Clear filters') }}
+                  </button>
+                </div>
+              </td>
             </tr>
             <tr v-for="item in rows" :key="item.id">
               <td class="title-cell">
-                <span class="problem-type-badge" :class="{ 'problem-type-badge--vision': item.questionType?.startsWith('IMAGE_') }">
-                  {{ problemTypeLabel(item.questionType) }}
+                <span
+                  class="problem-type-badge"
+                  :class="{ 'problem-type-badge--vision': item.questionType?.startsWith('IMAGE_') }"
+                >
+                  {{ displayTag(problemTypeLabel(item.questionType)) }}
                 </span>
-                {{ item.title }}
+                <span class="problem-list-title">{{ item.title }}</span>
                 <span class="difficulty-badge">{{ difficultyOf(item) }}</span>
               </td>
               <td class="tag-cell">
                 <template v-if="(item.tags || []).length">
-                  <span v-for="tag in item.tags" :key="`${item.id}-${tag}`" class="tag-pill">{{ tag }}</span>
+                  <span v-for="tag in item.tags" :key="`${item.id}-${tag}`" class="tag-pill">{{
+                    displayTag(tag)
+                  }}</span>
                 </template>
                 <span v-else class="muted">-</span>
               </td>
@@ -349,23 +593,46 @@ watch(() => auth.userId, () => { void loadRecommendations() })
               </td>
               <td class="muted">{{ formatDateTime(item.updateTime) }}</td>
               <td>
-                <a-button type="primary" size="mini" class="solve-btn" @click="goSolve(item)">去做题</a-button>
+                <a-button
+                  type="primary"
+                  size="mini"
+                  class="solve-btn"
+                  @click="goSolve(item, $event)"
+                  >{{ l('去做题', 'Solve') }}</a-button
+                >
               </td>
             </tr>
           </tbody>
         </table>
       </div>
       <div v-else class="card-wrap">
-        <div v-if="loading" class="empty-cell">加载中...</div>
-        <div v-else-if="rows.length === 0" class="empty-cell">暂无题目</div>
+        <div v-if="loading" class="empty-cell">{{ l('加载中...', 'Loading...') }}</div>
+        <div v-else-if="rows.length === 0" class="empty-cell">
+          <div class="problem-empty">
+            <strong>{{ l('没有找到符合条件的题目', 'No matching problems') }}</strong
+            ><span>{{
+              l('换个关键词或清除筛选后再试。', 'Try another keyword or clear filters.')
+            }}</span
+            ><button type="button" @click="onReset">{{ l('清除筛选', 'Clear filters') }}</button>
+          </div>
+        </div>
         <article v-for="item in rows" :key="`card-${item.id}`" class="problem-card">
-          <h3><span class="problem-type-badge" :class="{ 'problem-type-badge--vision': item.questionType?.startsWith('IMAGE_') }">{{ problemTypeLabel(item.questionType) }}</span> {{ item.title }}</h3>
-          <p class="card-meta">出题人：{{ item.userNickname || '-' }}</p>
+          <h3>
+            <span
+              class="problem-type-badge"
+              :class="{ 'problem-type-badge--vision': item.questionType?.startsWith('IMAGE_') }"
+              >{{ displayTag(problemTypeLabel(item.questionType)) }}</span
+            >
+            <span class="problem-list-title">{{ item.title }}</span>
+          </h3>
+          <p class="card-meta">{{ l('出题人：', 'Author: ') }}{{ item.userNickname || '-' }}</p>
           <div class="tag-cell">
             <template v-if="(item.tags || []).length">
-              <span v-for="tag in item.tags" :key="`card-${item.id}-${tag}`" class="tag-pill">{{ tag }}</span>
+              <span v-for="tag in item.tags" :key="`card-${item.id}-${tag}`" class="tag-pill">{{
+                displayTag(tag)
+              }}</span>
             </template>
-            <span v-else class="muted">暂无标签</span>
+            <span v-else class="muted">{{ l('暂无标签', 'No tags') }}</span>
           </div>
           <div class="card-stats">
             <span>{{ item.acceptedNum ?? 0 }} / {{ item.submitNum ?? 0 }}</span>
@@ -374,15 +641,26 @@ watch(() => auth.userId, () => { void loadRecommendations() })
           <div class="rate-track">
             <span class="rate-fill" :style="{ width: `${getPassRateValue(item)}%` }"></span>
           </div>
-          <p class="muted card-time">更新于 {{ formatDateTime(item.updateTime) }}</p>
-          <a-button type="primary" class="solve-btn card-solve-btn" @click="goSolve(item)">去做题</a-button>
+          <p class="muted card-time">
+            {{ l('更新于', 'Updated') }} {{ formatDateTime(item.updateTime) }}
+          </p>
+          <a-button
+            type="primary"
+            class="solve-btn card-solve-btn"
+            @click="goSolve(item, $event)"
+            >{{ l('去做题', 'Solve') }}</a-button
+          >
         </article>
       </div>
 
       <div class="pager-row">
-        <a-button :disabled="current <= 1 || loading" @click="onPrevPage">上一页</a-button>
-        <span>第 {{ current }} / {{ totalPages }} 页</span>
-        <a-button :disabled="current >= totalPages || loading" @click="onNextPage">下一页</a-button>
+        <a-button :disabled="current <= 1 || loading" @click="onPrevPage">{{
+          l('上一页', 'Previous')
+        }}</a-button>
+        <span>{{ l('第', 'Page') }} {{ current }} / {{ totalPages }} {{ l('页', '') }}</span>
+        <a-button :disabled="current >= totalPages || loading" @click="onNextPage">{{
+          l('下一页', 'Next')
+        }}</a-button>
       </div>
     </section>
   </div>
@@ -397,52 +675,52 @@ watch(() => auth.userId, () => { void loadRecommendations() })
   padding: 28px 12px 52px;
 }
 
-.problem-page::before,
-.problem-page::after {
-  content: '';
-  position: absolute;
-  z-index: -1;
-  pointer-events: none;
-  filter: blur(40px);
-  border-radius: 999px;
-  opacity: 0.42;
-  animation: floatGlow 10s ease-in-out infinite;
-}
-
-.problem-page::before {
-  width: 320px;
-  height: 320px;
-  left: -82px;
-  top: 36px;
-  background: radial-gradient(circle, color-mix(in srgb, var(--app-accent) 70%, transparent), transparent 72%);
-}
-
-.problem-page::after {
-  width: 300px;
-  height: 300px;
-  right: -64px;
-  top: 200px;
-  background: radial-gradient(circle, color-mix(in srgb, var(--app-success) 70%, transparent), transparent 70%);
-  animation-delay: -2.2s;
-}
-
 .panel {
   border: 1px solid var(--app-border);
-  background: linear-gradient(145deg, color-mix(in srgb, var(--app-surface) 94%, #ffffff 6%), var(--app-surface));
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--app-surface) 94%, #ffffff 6%),
+    var(--app-surface)
+  );
   box-shadow:
     0 14px 36px color-mix(in srgb, var(--app-accent) 8%, transparent),
     var(--app-card-shadow);
   border-radius: 24px;
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
 }
 
 .hero {
-  padding: 30px 32px;
+  position: relative;
+  overflow: hidden;
+  padding: 8px 4px 14px;
   display: flex;
   justify-content: space-between;
   gap: 20px;
   align-items: end;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  animation: bank-enter 0.38s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.hero > * {
+  position: relative;
+}
+.recommend-panel {
+  animation: bank-enter 0.38s 0.08s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.table-shell {
+  animation: bank-enter 0.38s 0.13s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes bank-enter {
+  from {
+    opacity: 0.45;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .eyebrow {
@@ -456,13 +734,13 @@ watch(() => auth.userId, () => { void loadRecommendations() })
 
 h1 {
   margin: 0;
-  font-size: clamp(32px, 4vw, 52px);
+  font-size: clamp(30px, 3vw, 40px);
   line-height: 1.06;
   font-family: var(--app-font-display);
 }
 
 .lead {
-  margin: 12px 0 0;
+  margin: 8px 0 0;
   color: var(--app-text-muted);
   max-width: 760px;
   line-height: 1.8;
@@ -487,16 +765,150 @@ h1 {
   margin-top: 18px;
   padding: 20px;
 }
-.recommend-panel { margin-top: 18px; padding: 22px 26px; }
-.recommend-panel__heading { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-.recommend-panel__heading h2 { margin: 0; font-size: 20px; color: var(--app-text); }
-.recommend-panel__heading .eyebrow { display: block; margin-bottom: 5px; }
-.recommend-panel__caption { color: var(--app-text-muted); font-size: 12px; }
-.recommend-panel__grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.recommend-card { display: flex; flex-direction: column; align-items: start; gap: 8px; min-height: 140px; text-align: left; cursor: pointer; border: 1px solid var(--app-border); border-radius: 16px; padding: 15px; background: color-mix(in srgb, var(--app-surface) 90%, var(--app-accent) 10%); color: var(--app-text); }
-.recommend-card:hover { border-color: var(--app-accent); transform: translateY(-2px); }
-.recommend-card strong { font-size: 15px; }.recommend-card small { color: var(--app-text-muted); line-height: 1.5; }.recommend-card__tag { color: var(--app-accent); font-size: 11px; font-weight: 800; }.recommend-card__action { margin-top: auto; color: var(--app-accent); font-size: 12px; font-weight: 700; }
-@media (max-width: 800px) { .recommend-panel__grid { grid-template-columns: 1fr; }.recommend-panel__heading { align-items: start; flex-direction: column; } }
+.recommend-panel {
+  margin-top: 18px;
+  padding: 22px 26px;
+}
+.recommend-panel__heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.recommend-panel__heading h2 {
+  margin: 0;
+  font-size: 20px;
+  color: var(--app-text);
+}
+.recommend-panel__heading .eyebrow {
+  display: block;
+  margin-bottom: 5px;
+}
+.recommend-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 200px;
+}
+.recommend-progress__text {
+  font-size: 12px;
+  color: var(--app-text-muted);
+}
+.recommend-progress__text strong {
+  color: var(--app-accent);
+  font-size: 14px;
+}
+.recommend-progress__bar {
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--app-text) 9%, transparent);
+}
+.recommend-progress__bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    var(--app-accent),
+    color-mix(in srgb, var(--app-accent) 55%, #f59e0b)
+  );
+  transition: width 0.4s ease;
+}
+.recommend-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 14px;
+}
+.recommend-tags__label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: var(--app-text-muted);
+  text-transform: uppercase;
+}
+.recommend-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--app-accent) 26%, transparent);
+}
+.recommend-chip.is-weak {
+  color: #c2410c;
+  background: rgba(249, 115, 22, 0.1);
+  border-color: rgba(249, 115, 22, 0.26);
+}
+.recommend-panel__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.recommend-card {
+  display: flex;
+  flex-direction: column;
+  align-items: start;
+  gap: 8px;
+  min-height: 140px;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid var(--app-border);
+  border-radius: 16px;
+  padding: 15px;
+  background: color-mix(in srgb, var(--app-surface) 90%, var(--app-accent) 10%);
+  color: var(--app-text);
+}
+.recommend-card:hover {
+  border-color: var(--app-accent);
+  transform: translateY(-2px);
+}
+.recommend-card strong {
+  font-size: 15px;
+}
+.recommend-card small {
+  color: var(--app-text-muted);
+  line-height: 1.5;
+}
+.recommend-card__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+}
+.recommend-card__tag {
+  color: var(--app-accent);
+  font-size: 11px;
+  font-weight: 800;
+}
+.recommend-card__difficulty {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--app-text-muted);
+  background: color-mix(in srgb, var(--app-text) 8%, transparent);
+}
+.recommend-card__action {
+  margin-top: auto;
+  color: var(--app-accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+@media (max-width: 800px) {
+  .recommend-panel__grid {
+    grid-template-columns: 1fr;
+  }
+  .recommend-panel__heading {
+    align-items: start;
+    flex-direction: column;
+  }
+}
 
 .view-switch {
   display: flex;
@@ -581,7 +993,10 @@ h1 {
   border-radius: 16px;
   padding: 14px;
   background: color-mix(in srgb, var(--app-surface) 88%, #ffffff 12%);
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    border-color 0.2s ease;
 }
 
 .problem-card:hover {
@@ -863,7 +1278,10 @@ h1 {
   min-height: 40px;
   background: color-mix(in srgb, var(--app-surface) 86%, #ffffff 14%);
   border-color: color-mix(in srgb, var(--app-border) 78%, #94a3b8);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  transition:
+    border-color 0.2s ease,
+    box-shadow 0.2s ease,
+    background 0.2s ease;
 }
 
 :deep(.arco-input) {
@@ -893,22 +1311,14 @@ h1 {
 }
 
 .problem-table tbody tr {
-  transition: background 0.2s ease, transform 0.2s ease;
+  transition:
+    background 0.2s ease,
+    transform 0.2s ease;
 }
 
 .problem-table tbody tr:hover {
   background: var(--app-hover);
   transform: translateY(-1px);
-}
-
-@keyframes floatGlow {
-  0%,
-  100% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(8px, -10px, 0) scale(1.06);
-  }
 }
 
 @media (max-width: 900px) {
@@ -946,8 +1356,11 @@ h1 {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .problem-page::before,
-  .problem-page::after,
+  .hero,
+  .recommend-panel,
+  .table-shell {
+    animation: none !important;
+  }
   .problem-table tbody tr {
     animation: none !important;
     transition: none !important;
@@ -1139,6 +1552,67 @@ h1 {
   }
   100% {
     transform: translate3d(1.2%, -0.8%, 0) scale(1.02);
+  }
+}
+.filter-intro {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 18px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--app-border);
+}
+.filter-intro h2 {
+  margin: 0 0 4px;
+  color: var(--app-text);
+  font-size: 20px;
+}
+.filter-intro p {
+  margin: 0;
+  color: var(--app-text-muted);
+  font-size: 13px;
+}
+.filter-intro > span {
+  flex: none;
+  color: var(--app-accent);
+  font-size: 13px;
+  font-weight: 700;
+}
+.problem-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 36px 10px;
+  color: var(--app-text);
+  text-align: center;
+}
+.problem-empty strong {
+  font-size: 17px;
+}
+.problem-empty span {
+  color: var(--app-text-muted);
+  font-size: 13px;
+}
+.problem-empty button {
+  min-height: 40px;
+  margin-top: 6px;
+  padding: 0 18px;
+  border: 1px solid var(--app-accent);
+  border-radius: 10px;
+  background: var(--app-surface);
+  color: var(--app-accent);
+  font-weight: 700;
+  cursor: pointer;
+}
+.problem-empty button:hover {
+  background: color-mix(in srgb, var(--app-accent) 10%, var(--app-surface));
+}
+@media (max-width: 640px) {
+  .filter-intro {
+    align-items: start;
+    flex-direction: column;
   }
 }
 </style>

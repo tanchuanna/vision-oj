@@ -5,17 +5,10 @@ import cn.hutool.json.JSONUtil;
 import com.spingbootinit.model.dto.question.JudgeCase;
 import com.spingbootinit.model.dto.question.JudgeConfig;
 import com.spingbootinit.model.dto.questionsubmit.JudgeInfo;
-import com.spingbootinit.model.entity.Question;
 import com.spingbootinit.model.enums.JudgeInfoMessageEnum;
 
-import java.util.LinkedHashMap;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.math.BigDecimal;
-import java.util.TreeSet;
+import java.util.*;
 
 /**
  * 图像目标计数题判题。学生每个用例输出一个 JSON 对象，例如
@@ -36,8 +29,8 @@ public class ObjectCountJudgeStrategy implements JudgeStrategy {
             return wrong(result, "输出组数与测试用例数不一致");
         }
 
-        int tolerance = context.getQuestion().getCountTolerance() == null
-                ? 0 : context.getQuestion().getCountTolerance();
+        int tolerance = ImageJudgeConfigPolicy.countTolerance(
+                context.getQuestion().getJudgeConfig(), context.getQuestion().getCountTolerance());
         for (int i = 0; i < cases.size(); i++) {
             Map<String, Integer> expected;
             Map<String, Integer> actual;
@@ -55,8 +48,13 @@ public class ObjectCountJudgeStrategy implements JudgeStrategy {
                 int expectedCount = expected.getOrDefault(label, 0);
                 int actualCount = actual.getOrDefault(label, 0);
                 if (Math.abs(expectedCount - actualCount) > tolerance) {
+                    if (!Boolean.TRUE.equals(cases.get(i).getSample())) {
+                        return wrong(result, String.format(
+                                "第 %d 组隐藏评测类别 %s 数量不匹配（标准数量不公开），允许误差 %d",
+                                i + 1, label, tolerance));
+                    }
                     return wrong(result, String.format(
-                            "第 %d 组类别 %s 数量不匹配：期望 %d，实际 %d，允许误差 %d",
+                            "第 %d 组公开样例类别 %s 数量不匹配：期望 %d，实际 %d，允许误差 %d",
                             i + 1, label, expectedCount, actualCount, tolerance));
                 }
             }

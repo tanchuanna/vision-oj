@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run check:id-contract && npm run check:oj-statement && npm run check:solve-toolbar && npm run check:question-solution && npm run check:question-statistics && npm run check:submission-dashboard && npm run check:account-profile && npm run check:app-header && npm run check:blog-theme && npm run check:auth-recovery && run-p type-check \"build-only {@}\" --",
+    "build": "npm run check:id-contract && npm run check:oj-statement && npm run check:solve-toolbar && npm run check:question-solution && npm run check:question-statistics && npm run check:submission-dashboard && npm run check:account-profile && npm run check:app-header && npm run check:blog-theme && npm run check:auth-recovery && npm run check:image-problem-types && run-p type-check \"build-only {@}\" --",
     "check:id-contract": "node scripts/check-id-contract.mjs",
     "check:oj-statement": "node scripts/check-oj-statement.mjs",
     "check:solve-toolbar": "node scripts/check-solve-toolbar.mjs",
@@ -16,6 +16,7 @@
     "check:app-header": "node scripts/check-app-header.mjs",
     "check:blog-theme": "node scripts/check-blog-light-theme.mjs",
     "check:auth-recovery": "node scripts/check-auth-recovery.mjs",
+    "check:image-problem-types": "node scripts/check-image-problem-types.mjs",
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",

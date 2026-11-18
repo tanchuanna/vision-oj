@@ -75,6 +75,36 @@ const locationText = computed(() => {
 
 const websiteList = computed(() => profile.value?.website?.filter(Boolean) ?? [])
 
+const introText = computed(() => profile.value?.introduction?.trim() ?? '')
+const joinedText = computed(() => profile.value?.createTime?.slice(0, 10) ?? '')
+const teacherNames = computed(() => profile.value?.teacherNames?.filter(Boolean) ?? [])
+const isTeacherProfile = computed(() => profile.value?.userRole?.toLowerCase() === 'teacher')
+const showRelationSection = computed(() =>
+  ['teacher', 'user', 'student'].includes((profile.value?.userRole || '').toLowerCase()),
+)
+
+const stats = computed(() => {
+  const p = profile.value
+  return [
+    { key: 'solved', label: '通过题目', value: p?.solvedCount ?? 0 },
+    { key: 'submit', label: '提交次数', value: p?.submitCount ?? 0 },
+    { key: 'points', label: '积分', value: p?.points ?? 0 },
+    isTeacherProfile.value
+      ? { key: 'students', label: '指导学生', value: p?.studentCount ?? 0 }
+      : { key: 'checkin', label: '签到天数', value: p?.checkInCount ?? 0 },
+  ]
+})
+
+const hasProfileDetail = computed(
+  () =>
+    !!sexText.value ||
+    !!locationText.value ||
+    !!profile.value?.country ||
+    !!profile.value?.birthday ||
+    !!joinedText.value ||
+    websiteList.value.length > 0,
+)
+
 // 关系状态派生
 const isActive = computed(() => relation.value?.status === 1)
 const isPending = computed(() => relation.value?.status === 2)
@@ -258,6 +288,14 @@ onBeforeUnmount(() => {
                 </div>
                 <p class="profile-modal__username">@{{ profile.username }}</p>
 
+                <!-- 数据概览 -->
+                <div class="profile-modal__stats">
+                  <div v-for="s in stats" :key="s.key" class="stat-card">
+                    <span class="stat-card__value">{{ s.value }}</span>
+                    <span class="stat-card__label">{{ s.label }}</span>
+                  </div>
+                </div>
+
                 <!-- 关系状态提示 -->
                 <div
                   v-if="isActive"
@@ -279,51 +317,69 @@ onBeforeUnmount(() => {
                 </div>
 
                 <!-- 个人介绍 -->
-                <div v-if="profile.introduction?.trim()" class="profile-modal__intro">
+                <div class="profile-modal__intro">
                   <div class="profile-modal__intro-label">个人介绍</div>
-                  <p>{{ profile.introduction }}</p>
+                  <p v-if="introText">{{ introText }}</p>
+                  <p v-else class="is-placeholder">这位同学很低调，还没有填写个人介绍。</p>
                 </div>
 
-                <!-- 信息网格 -->
-                <div
-                  v-if="locationText || sexText || websiteList.length || profile.country"
-                  class="profile-modal__info"
-                >
-                  <div v-if="locationText" class="info-item">
-                    <span class="info-icon" aria-hidden="true">📍</span>
-                    <span>{{ locationText }}</span>
+                <!-- 基本信息 -->
+                <div class="profile-modal__section">
+                  <div class="profile-modal__section-title">基本信息</div>
+                  <div v-if="hasProfileDetail" class="profile-modal__info">
+                    <div v-if="sexText" class="info-item">
+                      <span class="info-icon" aria-hidden="true">👤</span>
+                      <span>{{ sexText }}</span>
+                    </div>
+                    <div v-if="locationText" class="info-item">
+                      <span class="info-icon" aria-hidden="true">📍</span>
+                      <span>{{ locationText }}</span>
+                    </div>
+                    <div v-if="profile.country" class="info-item">
+                      <span class="info-icon" aria-hidden="true">🌐</span>
+                      <span>{{ profile.country }}</span>
+                    </div>
+                    <div v-if="profile.birthday" class="info-item">
+                      <span class="info-icon" aria-hidden="true">🎂</span>
+                      <span>{{ profile.birthday }}</span>
+                    </div>
+                    <div v-if="joinedText" class="info-item">
+                      <span class="info-icon" aria-hidden="true">📅</span>
+                      <span>注册于 {{ joinedText }}</span>
+                    </div>
+                    <div v-for="site in websiteList" :key="site" class="info-item">
+                      <span class="info-icon" aria-hidden="true">🔗</span>
+                      <a
+                        :href="site.startsWith('http') ? site : `https://${site}`"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        >{{ site }}</a
+                      >
+                    </div>
                   </div>
-                  <div v-if="sexText" class="info-item">
-                    <span class="info-icon" aria-hidden="true">👤</span>
-                    <span>{{ sexText }}</span>
-                  </div>
-                  <div v-if="profile.country" class="info-item">
-                    <span class="info-icon" aria-hidden="true">🌐</span>
-                    <span>{{ profile.country }}</span>
-                  </div>
-                  <div v-for="site in websiteList" :key="site" class="info-item">
-                    <span class="info-icon" aria-hidden="true">🔗</span>
-                    <a
-                      :href="site.startsWith('http') ? site : `https://${site}`"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      >{{ site }}</a
-                    >
-                  </div>
+                  <p v-else class="profile-modal__section-empty">暂未填写基本信息</p>
                 </div>
 
-                <!-- 空状态 -->
-                <div
-                  v-if="
-                    !profile.introduction?.trim() &&
-                    !locationText &&
-                    !sexText &&
-                    !websiteList.length &&
-                    !profile.country
-                  "
-                  class="profile-modal__empty"
-                >
-                  这个人很神秘，还没有留下任何介绍。
+                <!-- 师生关系信息 -->
+                <div v-if="showRelationSection" class="profile-modal__section">
+                  <div class="profile-modal__section-title">
+                    {{ isTeacherProfile ? '教学信息' : '师门信息' }}
+                  </div>
+                  <template v-if="isTeacherProfile">
+                    <p class="profile-modal__relation-text">
+                      当前指导
+                      <strong>{{ profile.studentCount ?? 0 }}</strong>
+                      名学生
+                    </p>
+                  </template>
+                  <template v-else>
+                    <div v-if="teacherNames.length" class="profile-modal__chips">
+                      <span v-for="name in teacherNames" :key="name" class="profile-chip">
+                        指导老师 · {{ name }}
+                      </span>
+                    </div>
+                    <p v-else class="profile-modal__section-empty">还没有加入任何老师的师门</p>
+                  </template>
                 </div>
               </template>
 
@@ -359,7 +415,7 @@ onBeforeUnmount(() => {
                 </button>
               </template>
               <template v-else>
-                <span class="hint">—</span>
+                <span class="hint">暂时没有可执行的操作</span>
               </template>
             </div>
           </div>
@@ -614,6 +670,79 @@ onBeforeUnmount(() => {
   }
 }
 
+/* 数据概览 */
+.profile-modal__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 0 0;
+}
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 4px;
+  border-radius: 12px;
+  background: var(--color-fill-1, #f8fafc);
+  border: 1px solid var(--color-border-1, #eef2f7);
+}
+.stat-card__value {
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.1;
+  color: var(--color-text-1, #0f172a);
+  font-variant-numeric: tabular-nums;
+}
+.stat-card__label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--app-text-muted, #94a3b8);
+}
+
+/* 分块 */
+.profile-modal__section {
+  margin: 18px 0 0;
+  text-align: left;
+}
+.profile-modal__section-title {
+  margin-bottom: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--app-text-muted, #94a3b8);
+  text-transform: uppercase;
+}
+.profile-modal__section-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--app-text-muted, #94a3b8);
+}
+.profile-modal__relation-text {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-2, #334155);
+}
+.profile-modal__relation-text strong {
+  margin: 0 2px;
+  font-size: 15px;
+  color: #4f46e5;
+}
+.profile-modal__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.profile-chip {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4f46e5;
+  background: rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.18);
+}
+
 /* 个人介绍 */
 .profile-modal__intro {
   margin: 18px 0 0;
@@ -638,13 +767,17 @@ onBeforeUnmount(() => {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.profile-modal__intro p.is-placeholder {
+  color: var(--app-text-muted, #94a3b8);
+  font-style: italic;
+}
 
 /* 信息网格 */
 .profile-modal__info {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin: 16px 0 0;
+  margin: 0;
   text-align: left;
 }
 .info-item {
@@ -661,14 +794,6 @@ onBeforeUnmount(() => {
 }
 .info-item a:hover {
   text-decoration: underline;
-}
-
-.profile-modal__empty {
-  margin: 22px 0 0;
-  padding: 18px;
-  color: var(--app-text-muted, #94a3b8);
-  font-size: 13px;
-  font-style: italic;
 }
 
 /* 底部操作区 */
@@ -793,6 +918,9 @@ onBeforeUnmount(() => {
   }
   .profile-modal__name {
     font-size: 19px;
+  }
+  .profile-modal__stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 </style>

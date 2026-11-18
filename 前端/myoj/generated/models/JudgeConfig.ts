@@ -7,5 +7,10 @@ export type JudgeConfig = {
     memoryLimit: number;
     stackLimit: number;
     analysisVersion?: number;
+    countTolerance?: number;
+    iouThreshold?: number;
+    ocrEditDistance?: number;
+    meanGrayTolerance?: number;
+    edgeStrengthTolerance?: number;
 };
 

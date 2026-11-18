@@ -177,11 +177,7 @@ onBeforeUnmount(() => {
 }
 
 html[data-theme='light'] .blog-cyber {
-  --cb-light-page:
-    radial-gradient(ellipse 75% 48% at 82% 0%, rgba(255, 130, 70, 0.22) 0%, transparent 58%),
-    radial-gradient(ellipse 55% 42% at 8% 100%, rgba(15, 118, 110, 0.14) 0%, transparent 52%),
-    radial-gradient(ellipse 50% 35% at 50% 120%, rgba(180, 140, 95, 0.08) 0%, transparent 45%),
-    linear-gradient(168deg, #ebe0d2 0%, #e3d5c4 38%, #d8c9b6 100%);
+  --cb-light-page: #f8f7f4;
   --cb-text: #0f172a;
   --cb-muted: #334155;
   --cb-subtle: #526477;
@@ -609,18 +605,11 @@ html[data-theme='dark']
 html[data-theme='light']
   .blog-cyber__stage
   :deep(.blog-cards .blog-card.panel:hover .blog-card__title) {
-  color: transparent !important;
-  background: linear-gradient(
-    100deg,
-    #4338ca 0%,
-    #6d28d9 30%,
-    #be185d 72%,
-    #4338ca 100%
-  ) !important;
-  background-size: 220% 100% !important;
-  -webkit-background-clip: text !important;
-  background-clip: text !important;
-  animation: cb-card-title-flow 3.2s linear infinite;
+  color: #0f766e !important;
+  background: none !important;
+  -webkit-background-clip: initial !important;
+  background-clip: initial !important;
+  animation: none !important;
 }
 
 html[data-theme='dark'] .blog-cyber__stage :deep(.blog-read__sub),

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { removeAdminRoutes } from '@/router/admin-dynamic'
 import { Message } from '@arco-design/web-vue'
@@ -13,22 +13,55 @@ import { useAuthStore } from '@/stores/auth'
 import { isResultSuccess } from '@/api/result'
 import { fetchNotificationSummary } from '@/api/inAppNotifications'
 import { LAYOUT_THEME_KEY } from '@/config/theme-injection'
+import { HOME_INTRO_AUTH_VISIBLE_KEY } from '@/config/homeIntro'
 import { useBanCountdownTick } from '@/composables/useBanCountdownTick'
 import { useOnlineHeartbeat } from '@/composables/useOnlineHeartbeat'
 import { useSessionStatusPush } from '@/composables/useSessionStatusPush'
 import { formatBanCountdown, parseBanUntilMs } from '@/utils/formatBanCountdown'
 import { normalizeRole, PERMISSIONS } from '@/config/roles'
+import { blogSharedTransitionActive } from '@/composables/blogSharedTransition'
+import { problemSharedTransitionActive } from '@/composables/problemSharedTransition'
+import { localize as l, setSiteLocale, useSiteLocale } from '@/i18n/locale'
 
 const route = useRoute()
 const routerInstance = useRouter()
+const pageTransition = ref('')
+watch(
+  () => route.path,
+  (path, previousPath) => {
+    if (!previousPath) return
+    const from = routerInstance.resolve(previousPath).name
+    const to = routerInstance.resolve(path).name
+    // 白天模式的博客页保持实体白底，避免整页透明淡入时露出底层背景而显得发白。
+    if ((to === 'blog' || to === 'blog-detail') && document.documentElement.dataset.theme !== 'dark') {
+      pageTransition.value = ''
+      return
+    }
+    // 编辑器有独立的布局与草稿生命周期，切换时直接呈现，避免动画期间重绘 Monaco。
+    if (blogSharedTransitionActive || problemSharedTransitionActive || from === 'problem-solve' || to === 'problem-solve') {
+      pageTransition.value = ''
+      return
+    }
+    pageTransition.value = to === 'blog-detail' ? 'page-detail' : 'page-fade'
+  },
+  { flush: 'sync' },
+)
 const auth = useAuthStore()
+const siteLocale = useSiteLocale()
+function toggleSiteLocale() {
+  setSiteLocale(siteLocale.value === 'zh-CN' ? 'en-US' : 'zh-CN')
+}
 const adminOpen = ref(false)
 const adminMenuRef = ref<HTMLElement | null>(null)
+const adminButtonRef = ref<HTMLButtonElement | null>(null)
+const adminDropdownRef = ref<HTMLElement | null>(null)
+const adminDropdownStyle = ref<Record<string, string>>({})
 const userOpen = ref(false)
 const userPinnedOpen = ref(false)
 const userMenuRef = ref<HTMLElement | null>(null)
 let userCloseTimer: ReturnType<typeof setTimeout> | null = null
 const authVisible = ref(false)
+provide(HOME_INTRO_AUTH_VISIBLE_KEY, authVisible)
 
 /** 站内消息 + 未读公告角标 */
 const notifUnreadTotal = ref(0)
@@ -55,7 +88,7 @@ if (typeof document !== 'undefined') {
 }
 provide(LAYOUT_THEME_KEY, themeMode)
 const isDarkTheme = computed(() => themeMode.value === 'dark')
-const themeButtonTitle = computed(() => (isDarkTheme.value ? '切换到浅色模式' : '切换到深色模式'))
+const themeButtonTitle = computed(() => (isDarkTheme.value ? l('切换到浅色模式', 'Switch to light mode') : l('切换到深色模式', 'Switch to dark mode')))
 const themeButtonIcon = computed(() => (isDarkTheme.value ? '☀' : '☾'))
 const userAvatarUrl = computed(() => auth.avatarUrl)
 const showFooter = computed(() => route.meta.hideFooter !== true)
@@ -63,7 +96,7 @@ const showFooter = computed(() => route.meta.hideFooter !== true)
 /** 顶栏角色展示：英文/空值统一成可读中文 */
 const roleLabel = computed(() => {
   const role = normalizeRole(auth.userRole)
-  return role === 'admin' ? '管理员' : role === 'teacher' ? '老师' : '学生'
+  return role === 'admin' ? l('管理员', 'Admin') : role === 'teacher' ? l('老师', 'Teacher') : l('学生', 'Student')
 })
 
 function applyTheme(mode: ThemeMode) {
@@ -105,7 +138,7 @@ function logout() {
     route.matched.some((r) => r.meta.requiresAuth) || route.path.startsWith('/admin')
   removeAdminRoutes(routerInstance)
   auth.logout()
-  Message.success('已退出登录')
+  Message.success(l('已退出登录', 'Signed out'))
   if (onProtectedPage) {
     void routerInstance.replace('/')
   }
@@ -118,15 +151,18 @@ type NavItem = {
   accent?: boolean
 }
 
-const mainNav: NavItem[] = [
-  { to: '/', label: '首页', exact: true },
-  { to: '/problems', label: '题库' },
-  { to: '/contests', label: '比赛' },
-  { to: '/rankings', label: '排行榜' },
-  { to: '/teaching/teachers', label: '任课老师' },
-  { to: '/submissions', label: '提交记录' },
-  { to: '/notifications', label: '消息' },
-]
+const mainNav = computed<NavItem[]>(() => [
+  { to: '/', label: l('首页', 'Home'), exact: true },
+  { to: '/problems', label: l('题库', 'Problems') },
+  ...(auth.isStudent
+    ? [{ to: '/my-practice', label: l('我的练习', 'My practice') }]
+    : []),
+  { to: '/contests', label: l('比赛', 'Contests') },
+  { to: '/rankings', label: l('排行榜', 'Leaderboard') },
+  { to: '/teaching/teachers', label: l('任课老师', 'Teachers') },
+  { to: '/submissions', label: l('提交记录', 'Submissions') },
+  { to: '/notifications', label: l('消息', 'Messages') },
+])
 
 const adminMenus = computed(
   () =>
@@ -134,27 +170,27 @@ const adminMenus = computed(
       auth.can(PERMISSIONS.QUESTION_AUTHOR)
         ? {
             to: '/manage/problems',
-            title: '题目管理',
-            desc: '编辑题目、标签与判题配置',
+            title: l('题目管理', 'Manage problems'),
+            desc: l('编辑题目、标签与判题配置', 'Edit problems, tags and judging settings'),
             icon: '🧩',
           }
         : null,
       auth.can(PERMISSIONS.STUDENT_VIEW_ASSIGNED) || auth.can(PERMISSIONS.STUDENT_VIEW_ALL)
         ? {
             to: '/teaching/students',
-            title: '学生管理',
-            desc: '查看有权管理学生的学习数据',
+            title: l('学生管理', 'Manage students'),
+            desc: l('查看有权管理学生的学习数据', 'View assigned student progress'),
             icon: '🎓',
           }
         : null,
       auth.can(PERMISSIONS.USER_ROLE_MANAGE)
-        ? { to: '/admin/users', title: '用户管理', desc: '角色、分配与账号状态', icon: '👥' }
+        ? { to: '/admin/users', title: l('用户管理', 'Manage users'), desc: l('角色、分配与账号状态', 'Roles, assignments and account status'), icon: '👥' }
         : null,
       auth.can(PERMISSIONS.CONTEST_MANAGE)
-        ? { to: '/admin/contests', title: '比赛管理', desc: '创建限时赛与办赛配置', icon: '🏁' }
+        ? { to: '/admin/contests', title: l('比赛管理', 'Manage contests'), desc: l('创建限时赛与办赛配置', 'Create contests and settings'), icon: '🏁' }
         : null,
       auth.can(PERMISSIONS.ANNOUNCEMENT_MANAGE)
-        ? { to: '/admin/announcements', title: '发布公告', desc: '全站公告与未读提醒', icon: '📢' }
+        ? { to: '/admin/announcements', title: l('发布公告', 'Announcements'), desc: l('全站公告与未读提醒', 'Site notices and unread alerts'), icon: '📢' }
         : null,
     ].filter(Boolean) as Array<{ to: string; title: string; desc: string; icon: string }>,
 )
@@ -174,6 +210,23 @@ function isAdminNavActive() {
 
 function toggleAdminMenu() {
   adminOpen.value = !adminOpen.value
+  if (adminOpen.value) {
+    updateAdminDropdownPosition()
+    void nextTick(() => adminDropdownRef.value?.querySelector<HTMLElement>('a')?.focus())
+  }
+}
+
+function updateAdminDropdownPosition() {
+  if (!adminOpen.value || !adminButtonRef.value) return
+  const bounds = adminButtonRef.value.getBoundingClientRect()
+  const width = Math.min(320, window.innerWidth - 24)
+  const left = Math.max(12, Math.min(bounds.right - width, window.innerWidth - width - 12))
+  const top = bounds.bottom + 8
+  adminDropdownStyle.value = {
+    left: `${left}px`,
+    top: `${top}px`,
+    maxHeight: `${Math.max(120, window.innerHeight - top - 12)}px`,
+  }
 }
 
 function closeAdminMenu() {
@@ -269,7 +322,7 @@ function toggleUserMenuPin() {
 
 function onGlobalPointerDown(e: Event) {
   const target = e.target as Node | null
-  if (adminOpen.value && adminMenuRef.value && target && !adminMenuRef.value.contains(target)) {
+  if (adminOpen.value && target && !adminMenuRef.value?.contains(target) && !adminDropdownRef.value?.contains(target)) {
     adminOpen.value = false
   }
   if (userOpen.value && userMenuRef.value && target && !userMenuRef.value.contains(target)) {
@@ -280,6 +333,7 @@ function onGlobalPointerDown(e: Event) {
 
 function onGlobalKeydown(e: KeyboardEvent) {
   if (e.key === 'Escape') {
+    if (adminOpen.value) adminButtonRef.value?.focus()
     adminOpen.value = false
     closeUserMenu()
   }
@@ -438,6 +492,8 @@ watch(
 onMounted(() => {
   document.addEventListener('pointerdown', onGlobalPointerDown)
   document.addEventListener('keydown', onGlobalKeydown)
+  window.addEventListener('resize', updateAdminDropdownPosition)
+  window.addEventListener('scroll', updateAdminDropdownPosition, true)
   window.addEventListener('myoj:notifications-changed', onNotifHubEvent)
   window.addEventListener('myoj:session-expired', onSessionExpired)
   window.addEventListener('myoj:account-revoked', onAccountRevoked)
@@ -451,6 +507,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateAdminDropdownPosition)
+  window.removeEventListener('scroll', updateAdminDropdownPosition, true)
   if (userCloseTimer) {
     clearTimeout(userCloseTimer)
     userCloseTimer = null
@@ -526,6 +584,7 @@ onBeforeUnmount(() => {
 
           <div v-if="adminMenus.length" ref="adminMenuRef" class="nav-item-wrap admin-wrap">
             <button
+              ref="adminButtonRef"
               type="button"
               class="nav-link admin-nav"
               :class="{ active: isAdminNavActive() || adminOpen }"
@@ -533,10 +592,11 @@ onBeforeUnmount(() => {
               aria-haspopup="menu"
               @click="toggleAdminMenu"
             >
-              工作台
+              {{ l('工作台', 'Workspace') }}
               <span class="caret" aria-hidden="true">▾</span>
             </button>
-            <div v-show="adminOpen" class="dropdown admin-dropdown" role="menu">
+            <Teleport to="body">
+            <div v-if="adminOpen" ref="adminDropdownRef" class="dropdown admin-dropdown" role="menu" :style="adminDropdownStyle">
               <RouterLink
                 v-for="item in adminMenus"
                 :key="item.to"
@@ -552,31 +612,39 @@ onBeforeUnmount(() => {
                 </span>
               </RouterLink>
             </div>
+            </Teleport>
           </div>
         </nav>
 
         <div class="actions">
           <RouterLink to="/publish" class="btn-publish">
             <span class="icon-plane" aria-hidden="true">✈</span>
-            博客
+            {{ l('博客', 'Blog') }}
           </RouterLink>
           <button
             type="button"
+            class="icon-btn locale-btn"
+            :aria-label="l('切换到英语', 'Switch to Chinese')"
+            :title="l('切换到英语', 'Switch to Chinese')"
+            @click="toggleSiteLocale"
+          >{{ siteLocale === 'zh-CN' ? 'EN' : '中' }}</button>
+          <button
+            type="button"
             class="icon-btn"
-            aria-label="切换主题"
+            :aria-label="themeButtonTitle"
             :title="themeButtonTitle"
             @click="toggleTheme"
           >
             {{ themeButtonIcon }}
           </button>
-          <RouterLink to="/notifications" class="icon-btn notif-bell" aria-label="通知">
+          <RouterLink to="/notifications" class="icon-btn notif-bell" :aria-label="l('通知', 'Notifications')">
             🔔
             <span v-if="notifUnreadTotal > 0" class="notif-badge" aria-hidden="true">{{
               notifUnreadTotal > 99 ? '99+' : notifUnreadTotal
             }}</span>
           </RouterLink>
           <template v-if="!auth.isLoggedIn">
-            <button type="button" class="btn-auth" @click="authVisible = true">登录/注册</button>
+            <button type="button" class="btn-auth" @click="authVisible = true">{{ l('登录/注册', 'Sign in') }}</button>
           </template>
           <template v-else>
             <div
@@ -630,11 +698,11 @@ onBeforeUnmount(() => {
                         <p class="user-popover-id">{{ roleLabel }}</p>
                         <p class="user-popover-stats" aria-live="polite">
                           <span class="user-popover-stat"
-                            >积分 {{ checkInLoading ? '…' : checkInPoints }}</span
+                            >{{ l('积分', 'Points') }} {{ checkInLoading ? '…' : checkInPoints }}</span
                           >
                           <span class="user-popover-stat-sep">·</span>
                           <span class="user-popover-stat"
-                            >累计签到 {{ checkInLoading ? '…' : checkInTotal }} 天</span
+                            >{{ l('累计签到', 'Check-ins') }} {{ checkInLoading ? '…' : checkInTotal }} {{ l('天', 'days') }}</span
                           >
                         </p>
                       </div>
@@ -648,7 +716,7 @@ onBeforeUnmount(() => {
                       @click="openCheckInModal"
                     >
                       <span class="user-popover-btn-ico" aria-hidden="true">📅</span>
-                      {{ checkInCheckedToday ? '学习打卡 · 今日已签' : '学习打卡' }}
+                      {{ checkInCheckedToday ? l('学习打卡 · 今日已签', 'Checked in today') : l('学习打卡', 'Daily check-in') }}
                     </button>
                     <button
                       type="button"
@@ -656,7 +724,7 @@ onBeforeUnmount(() => {
                       @click="goAccountSettings"
                     >
                       <span class="user-popover-btn-ico" aria-hidden="true">⚙</span>
-                      账户设置
+                      {{ l('账户设置', 'Account settings') }}
                     </button>
                     <button
                       type="button"
@@ -664,7 +732,7 @@ onBeforeUnmount(() => {
                       @click="logout"
                     >
                       <span class="user-popover-btn-ico" aria-hidden="true">↪</span>
-                      退出登录
+                      {{ l('退出登录', 'Sign out') }}
                     </button>
                   </div>
                 </div>
@@ -683,7 +751,11 @@ onBeforeUnmount(() => {
     />
 
     <main class="main">
-      <RouterView />
+      <RouterView v-slot="{ Component, route: currentRoute }">
+        <Transition :name="pageTransition" mode="out-in">
+          <component :is="Component" :key="currentRoute.path" />
+        </Transition>
+      </RouterView>
     </main>
 
     <AppFooter v-if="showFooter" />
@@ -836,11 +908,21 @@ html[data-theme='light'] .header {
 }
 
 .admin-dropdown {
+  position: fixed;
+  z-index: 1000;
+  top: auto;
   left: auto;
-  right: 0;
-  min-width: 260px;
-  padding: 8px;
-  border-radius: 12px;
+  right: auto;
+  width: min(320px, calc(100vw - 24px));
+  min-width: 0;
+  max-height: calc(100dvh - var(--app-header-height) - 20px);
+  margin: 0;
+  padding: 9px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 16px;
+  background: var(--color-bg-1);
+  box-shadow: 0 18px 48px rgba(28, 35, 35, 0.18);
 }
 
 .dropdown-item {
@@ -856,7 +938,9 @@ html[data-theme='light'] .header {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 10px;
+  min-height: 58px;
+  padding: 11px 12px;
+  border-radius: 10px;
 }
 
 .admin-item-icon {
@@ -966,6 +1050,14 @@ html[data-theme='light'] .header {
 .icon-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.locale-btn {
+  width: 42px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  border-color: var(--app-border);
 }
 
 .notif-bell {
@@ -1327,6 +1419,36 @@ html[data-theme='light'] .header {
   flex: 1;
 }
 
+.page-fade-enter-active,
+.page-fade-leave-active,
+.page-detail-enter-active,
+.page-detail-leave-active {
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+.page-fade-enter-from,
+.page-fade-leave-to {
+  opacity: 0;
+}
+
+.page-detail-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.page-detail-leave-to {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-fade-enter-active,
+  .page-fade-leave-active,
+  .page-detail-enter-active,
+  .page-detail-leave-active {
+    transition: none;
+  }
+}
+
 :global(html[data-theme='dark']) .nav-link:hover {
   color: var(--app-accent);
   background: color-mix(in srgb, var(--app-accent) 12%, transparent);
@@ -1428,5 +1550,16 @@ html[data-theme='light'] .header {
   .btn-publish .icon-plane {
     font-size: 13px;
   }
+}
+
+@media (max-width: 480px) {
+  .header-inner { gap: 6px; padding: 0 8px; }
+  .brand { padding-right: 0; }
+  .nav { min-width: 52px; }
+  .nav-link { padding: 0 7px; }
+  .actions { gap: 2px; }
+  .btn-publish, .icon-btn { width: 32px; height: 36px; min-height: 36px; }
+  .locale-btn { width: 32px; font-size: 11px; }
+  .btn-auth { min-height: 36px; padding: 0 9px; margin-left: 0; font-size: 12px; }
 }
 </style>

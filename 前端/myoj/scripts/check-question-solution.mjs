@@ -46,7 +46,7 @@ for (const text of [
 if (!api.includes('adminPage: (questionId: string'))
   throw new Error('管理员审核队列必须按当前题目过滤')
 if (!solve.includes('<ProblemSolutionPanel')) throw new Error('做题页尚未接入独立题解组件')
-if (!panel.includes('.solution-detail{position:relative'))
+if (!/\.solution-detail\s*\{[^}]*position:\s*relative/s.test(panel))
   throw new Error('题解详情必须使用正常文档流，不能再以绝对定位覆盖列表')
 if (!panel.includes('v-else-if="!selected" class="solution-list"'))
   throw new Error('打开详情时应隐藏题解列表，避免两层内容重叠')

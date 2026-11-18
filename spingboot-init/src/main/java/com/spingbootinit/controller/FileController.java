@@ -54,6 +54,23 @@ public class FileController {
         return Result.success(url);
     }
 
+    @PostMapping("/blog-cover")
+    @Operation(summary = "上传博客封面", description = "登录用户上传文章封面，仅返回图片地址")
+    public Result<String> uploadBlogCover(@RequestParam("image") MultipartFile file) {
+        Long currentUserId = UserContext.getCurrentUserId();
+        if (currentUserId == null) {
+            throw new BusinessException(ResultCode.NO_AUTH_ERROR);
+        }
+        if (file == null || file.isEmpty() || file.getSize() > 5 * 1024 * 1024L) {
+            throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "请上传不超过 5MB 的图片");
+        }
+        String contentType = file.getContentType();
+        if (contentType == null || !contentType.toLowerCase().startsWith("image/")) {
+            throw new BusinessException(ResultCode.PARAMS_ERROR.getCode(), "文件必须是图片");
+        }
+        return Result.success(minioUtils.upload(file, "blog-covers/"));
+    }
+
     @PostMapping("/question-image")
     @Operation(summary = "上传图像题题图", description = "仅管理员可用，不会修改用户头像")
     public Result<String> uploadQuestionImage(@RequestParam("image") MultipartFile file) {

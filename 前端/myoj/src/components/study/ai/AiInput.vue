@@ -3,6 +3,7 @@ import { storeToRefs } from 'pinia'
 import { ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useStudyAiCopilotStore } from '@/stores/studyAiCopilot'
+import { localize as l } from '@/i18n/locale'
 
 const props = defineProps<{
   disabled: boolean
@@ -28,8 +29,9 @@ function chooseImage() {
 async function readImage(file: File) {
   if (props.disabled) return
   if (!['image/png', 'image/jpeg'].includes(file.type))
-    return void Message.warning('请选择 PNG 或 JPEG 图片')
-  if (file.size > 4 * 1024 * 1024) return void Message.warning('图片不能超过 4 MB')
+    return void Message.warning(l('请选择 PNG 或 JPEG 图片', 'Choose a PNG or JPEG image'))
+  if (file.size > 4 * 1024 * 1024)
+    return void Message.warning(l('图片不能超过 4 MB', 'Image must be under 4 MB'))
   try {
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader()
@@ -39,7 +41,7 @@ async function readImage(file: File) {
     })
     emit('attach', { name: file.name, dataUrl })
   } catch {
-    Message.error('读取图片失败，请重新选择')
+    Message.error(l('读取图片失败，请重新选择', 'Could not read image. Choose it again.'))
   }
 }
 
@@ -84,16 +86,16 @@ function onSend() {
       type="file"
       accept="image/png,image/jpeg"
       class="file-input"
-      aria-label="选择要分析的图片"
+      :aria-label="l('选择要分析的图片', 'Choose image to analyze')"
       @change="onFileChange"
     />
     <div v-if="props.attachment" class="attachment-preview">
-      <img :src="props.attachment.dataUrl" alt="待分析图片预览" />
+      <img :src="props.attachment.dataUrl" :alt="l('待分析图片预览', 'Image preview')" />
       <span class="attachment-name">{{ props.attachment.name }}</span>
       <button
         type="button"
-        aria-label="移除图片"
-        title="移除图片"
+        :aria-label="l('移除图片', 'Remove image')"
+        :title="l('移除图片', 'Remove image')"
         :disabled="disabled"
         @click="emit('removeAttachment')"
       >
@@ -104,7 +106,7 @@ function onSend() {
       v-model="draft"
       rows="2"
       class="composer-textarea"
-      placeholder="向助手提问，也可以粘贴图片…"
+      :placeholder="l('向助手提问，也可以粘贴图片…', 'Ask the assistant or paste an image…')"
       :disabled="disabled"
       @paste="onPaste"
       @keydown.enter.exact.prevent="onSend"
@@ -113,8 +115,8 @@ function onSend() {
       <button
         type="button"
         class="attach-button"
-        aria-label="添加图片"
-        title="添加图片"
+        :aria-label="l('添加图片', 'Add image')"
+        :title="l('添加图片', 'Add image')"
         :disabled="disabled"
         @click="chooseImage"
       >
@@ -132,14 +134,18 @@ function onSend() {
         </svg>
       </button>
       <span class="composer-hint">{{
-        props.attachment ? '已附加图片 · 发送时会用于分析' : '可上传、粘贴或拖入 PNG/JPEG 图片'
+        props.attachment
+          ? l('已附加图片 · 发送时会用于分析', 'Image attached for analysis')
+          : l('可上传、粘贴或拖入 PNG/JPEG 图片', 'Upload, paste or drop a PNG/JPEG image')
       }}</span>
-      <button v-if="sending" type="button" class="stop-button" @click="emit('stop')">停止</button>
+      <button v-if="sending" type="button" class="stop-button" @click="emit('stop')">
+        {{ l('停止', 'Stop') }}
+      </button>
       <button
         type="button"
         class="send-button"
-        aria-label="发送消息"
-        title="发送消息"
+        :aria-label="l('发送消息', 'Send message')"
+        :title="l('发送消息', 'Send message')"
         :disabled="disabled || (!draft.trim() && !props.attachment)"
         @click="onSend"
       >

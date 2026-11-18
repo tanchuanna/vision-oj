@@ -19,6 +19,7 @@ import { useAiModelsStore } from '@/stores/aiModels'
 import AiProviderAvatar from './AiProviderAvatar.vue'
 import { type CodeEdit, requestCodeEdit } from '@/api/codeEdit'
 import { shouldAutoEditCode } from './codeEditIntent'
+import { localize as l } from '@/i18n/locale'
 
 const open = defineModel<boolean>('open', { default: false })
 
@@ -64,7 +65,12 @@ async function startCodeEdit(instruction: string, referenceAnswer?: string) {
   if (editBusy.value || sending.value || aiAssistBanned.value) return
   const base = props.getCode()
   if (!base.trim() && !auth.isAdmin && !auth.isTeacher)
-    return void Message.warning('请先在编辑器写入代码，再让助手修复')
+    return void Message.warning(
+      l(
+        '请先在编辑器写入代码，再让助手修复',
+        'Write some code in the editor before asking for a fix.',
+      ),
+    )
   const requestedQuestion = props.questionId
   const requestedLanguage = props.language
   const controller = new AbortController()
@@ -72,7 +78,7 @@ async function startCodeEdit(instruction: string, referenceAnswer?: string) {
   editBusy.value = true
   editStage.value = 'generating'
   canUndoEdit.value = false
-  editStatus.value = '正在分析当前代码和公开样例…'
+  editStatus.value = l('正在分析当前代码和公开样例…', 'Analyzing your code and public samples…')
   activeTab.value = 'chat'
   try {
     const proposal = await requestCodeEdit(
@@ -91,40 +97,61 @@ async function startCodeEdit(instruction: string, referenceAnswer?: string) {
       },
       controller.signal,
     )
-    if (controller.signal.aborted) throw new DOMException('已停止修改', 'AbortError')
+    if (controller.signal.aborted)
+      throw new DOMException(l('已停止修改', 'Code editing stopped'), 'AbortError')
     if (props.questionId !== requestedQuestion || props.language !== requestedLanguage)
-      throw new Error('题目或语言已切换，请重新生成修改建议')
+      throw new Error(
+        l(
+          '题目或语言已切换，请重新生成修改建议',
+          'The problem or language changed. Generate a new edit proposal.',
+        ),
+      )
     editStage.value = 'applying'
-    editStatus.value = `已找到 ${proposal.edits.length} 处修改，正在写入…`
+    editStatus.value = l(
+      `已找到 ${proposal.edits.length} 处修改，正在写入…`,
+      `Found ${proposal.edits.length} edits. Writing them now…`,
+    )
     await props.applyCodeEdits(base, proposal.edits, controller.signal, (step, total, reason) => {
-      editStatus.value = `修改第 ${step}/${total} 处：${reason || '更新代码'}`
+      editStatus.value = l(
+        `修改第 ${step}/${total} 处：${reason || '更新代码'}`,
+        `Applying edit ${step}/${total}: ${reason || 'Update code'}`,
+      )
     })
     if (controller.signal.aborted) {
       props.undoCodeEdit()
-      throw new DOMException('已停止修改', 'AbortError')
+      throw new DOMException(l('已停止修改', 'Code editing stopped'), 'AbortError')
     }
     canUndoEdit.value = true
     editStage.value = 'running'
-    editStatus.value = '修改完成，正在运行公开样例…'
+    editStatus.value = l('修改完成，正在运行公开样例…', 'Edits complete. Running public samples…')
     messages.value.push({ id: `edit-user-${Date.now()}`, role: 'user', content: instruction })
     messages.value.push({
       id: `edit-result-${Date.now()}`,
       role: 'assistant',
-      content: `已修改 ${proposal.edits.length} 处。${proposal.summary}\n\n正在运行公开样例；代码不会自动提交。`,
+      content: l(
+        `已修改 ${proposal.edits.length} 处。${proposal.summary}\n\n正在运行公开样例；代码不会自动提交。`,
+        `Applied ${proposal.edits.length} edits. ${proposal.summary}\n\nRunning public samples. The code will not be submitted automatically.`,
+      ),
       providerCode: aiModels.selectedProvider,
       modelId: aiModels.selectedModel,
     })
     await props.runSamples()
     await nextTick()
     editStatus.value = props.runResult
-      ? '修改已写入，公开样例运行结果见下方；你可以撤销本次修改。'
-      : '代码已写入，但样例运行没有返回结果；请查看页面提示后重试。'
+      ? l(
+          '修改已写入，公开样例运行结果见下方；你可以撤销本次修改。',
+          'Edits applied. Review the public sample results below; you can undo these edits.',
+        )
+      : l(
+          '代码已写入，但样例运行没有返回结果；请查看页面提示后重试。',
+          'Code was updated, but no sample result was returned. Check the page notice and retry.',
+        )
   } catch (error) {
     editStatus.value = controller.signal.aborted
-      ? '已停止；写入中的修改已恢复。'
+      ? l('已停止；写入中的修改已恢复。', 'Stopped. In-progress edits were restored.')
       : error instanceof Error
         ? error.message
-        : '修改失败，编辑器未改变'
+        : l('修改失败，编辑器未改变', 'Editing failed. The editor was not changed.')
     if (!controller.signal.aborted) Message.warning(editStatus.value)
   } finally {
     if (editController === controller) editController = null
@@ -135,7 +162,7 @@ async function startCodeEdit(instruction: string, referenceAnswer?: string) {
 
 function stopCodeEdit() {
   editController?.abort()
-  editStatus.value = '正在停止并恢复代码…'
+  editStatus.value = l('正在停止并恢复代码…', 'Stopping and restoring your code…')
 }
 
 watch(
@@ -146,10 +173,15 @@ watch(
 function undoCodeEdit() {
   if (props.undoCodeEdit()) {
     canUndoEdit.value = false
-    editStatus.value = '已撤销本次修改。'
+    editStatus.value = l('已撤销本次修改。', 'These edits were undone.')
   } else {
     canUndoEdit.value = false
-    Message.warning('代码已被再次编辑，无法安全撤销本次修改')
+    Message.warning(
+      l(
+        '代码已被再次编辑，无法安全撤销本次修改',
+        'The code changed again, so these edits cannot be undone safely.',
+      ),
+    )
   }
 }
 
@@ -158,50 +190,74 @@ const quickActions = computed<QuickChip[]>(() => {
   const common: QuickChip[] = [
     {
       icon: '💡',
-      label: '一级提示',
-      text: '请只给我一级提示：指出解题方向和需要观察的规律，不要给算法步骤或代码。',
+      label: l('一级提示', 'First hint'),
+      text: l(
+        '请只给我一级提示：指出解题方向和需要观察的规律，不要给算法步骤或代码。',
+        'Give me a first hint: point out the direction and patterns to notice, without algorithm steps or code.',
+      ),
     },
     {
       icon: '🧭',
-      label: '进阶提示',
-      text: '请给我二级提示：列出关键算法步骤和伪代码，但不要给可直接提交的完整程序。',
+      label: l('进阶提示', 'Deeper hint'),
+      text: l(
+        '请给我二级提示：列出关键算法步骤和伪代码，但不要给可直接提交的完整程序。',
+        'Give me a deeper hint with key algorithm steps and pseudocode, but no complete solution.',
+      ),
     },
     {
       icon: '🔍',
-      label: '分析代码',
-      text: '请结合当前代码逐点分析最可能的问题，标明原因和最小修改方向，不要重写整题。',
+      label: l('分析代码', 'Review code'),
+      text: l(
+        '请结合当前代码逐点分析最可能的问题，标明原因和最小修改方向，不要重写整题。',
+        'Review my current code, explain likely problems and minimal fixes, without rewriting the whole solution.',
+      ),
     },
     {
       icon: '⏱',
-      label: '复杂度检查',
-      text: '请根据题目约束和当前代码分析时间、空间复杂度，并判断是否可能 TLE 或 MLE。',
+      label: l('复杂度检查', 'Check complexity'),
+      text: l(
+        '请根据题目约束和当前代码分析时间、空间复杂度，并判断是否可能 TLE 或 MLE。',
+        'Analyze time and space complexity against the constraints and assess TLE or MLE risk.',
+      ),
     },
     {
       icon: '🧪',
-      label: '边界用例',
-      text: '请列出容易 WA 的边界情况，并给少量可手算的自测输入与预期现象。',
+      label: l('边界用例', 'Edge cases'),
+      text: l(
+        '请列出容易 WA 的边界情况，并给少量可手算的自测输入与预期现象。',
+        'List edge cases likely to cause WA and a few small manual tests.',
+      ),
     },
   ]
   if (props.runResult.trim()) {
     common.splice(3, 0, {
-      label: '分析运行结果',
+      label: l('分析运行结果', 'Review run result'),
       icon: '🩺',
-      text: '请分析最近一次运行结果：判断属于 CE、RE、WA、TLE 还是 MLE，并对照公开样例给出排查顺序和最小修改建议。',
+      text: l(
+        '请分析最近一次运行结果：判断属于 CE、RE、WA、TLE 还是 MLE，并对照公开样例给出排查顺序和最小修改建议。',
+        'Analyze my latest run: classify CE, RE, WA, TLE or MLE and suggest minimal debugging steps using public samples.',
+      ),
     })
   }
   if (props.questionType.startsWith('IMAGE_')) {
     common.splice(2, 0, {
-      label: '图像题协议',
+      label: l('图像题协议', 'Image I/O'),
       icon: '🖼️',
-      text: '请说明这道图像目标计数题在 OJ 中如何读取图片、加载模型、统计类别并按要求输出 JSON，只给步骤和关键片段。',
+      text: l(
+        '请说明这道图像目标计数题在 OJ 中如何读取图片、加载模型、统计类别并按要求输出 JSON，只给步骤和关键片段。',
+        'Explain how to read the image, load the model, count classes and output JSON in this OJ. Give only steps and key snippets.',
+      ),
     })
   }
   if (auth.isAdmin) {
     common.unshift({
       icon: '✓',
-      label: '写入完整答案',
+      label: l('写入完整答案', 'Write full solution'),
       mode: 'edit',
-      text: '请根据当前题面和公开样例，生成当前语言的完整可运行参考程序，并直接写入编辑器供管理员测试。',
+      text: l(
+        '请根据当前题面和公开样例，生成当前语言的完整可运行参考程序，并直接写入编辑器供管理员测试。',
+        'Generate a complete runnable reference program in the current language and write it into the editor for admin testing.',
+      ),
     })
   }
   return common
@@ -475,28 +531,50 @@ const runDiagnosis = computed(() => {
       }>
     }
     if (result.terminalError) {
-      const verdict = result.judgeInfo?.message || result.sandboxMessage || '运行失败'
+      const verdict =
+        result.judgeInfo?.message || result.sandboxMessage || l('运行失败', 'Run failed')
       return {
         title: verdict,
-        evidence: '依据：本次沙箱运行状态。',
-        next: '先查看编译或运行错误，再让助手结合当前代码定位原因。',
+        evidence: l('依据：本次沙箱运行状态。', 'Based on the execution status of this run.'),
+        next: l(
+          '先查看编译或运行错误，再让助手结合当前代码定位原因。',
+          'Check the compiler or runtime error, then ask the assistant to inspect your code.',
+        ),
       }
     }
     const failed = result.cases?.find((item) => item.passed === false)
     if (failed) {
       return {
-        title: `公开样例 ${failed.index || 1} 未通过`,
-        evidence: `依据：样例预期 ${String(failed.expectedOutput ?? '').slice(0, 100)}；当前输出 ${String(failed.actualOutput ?? '').slice(0, 100)}。`,
-        next: '先核对输入读取和输出格式，再检查计算逻辑。仅凭输出差异不能确定具体代码错误。',
+        title: l(
+          `公开样例 ${failed.index || 1} 未通过`,
+          `Public sample ${failed.index || 1} failed`,
+        ),
+        evidence: l(
+          `依据：样例预期 ${String(failed.expectedOutput ?? '').slice(0, 100)}；当前输出 ${String(failed.actualOutput ?? '').slice(0, 100)}。`,
+          `Expected: ${String(failed.expectedOutput ?? '').slice(0, 100)}; actual: ${String(failed.actualOutput ?? '').slice(0, 100)}.`,
+        ),
+        next: l(
+          '先核对输入读取和输出格式，再检查计算逻辑。仅凭输出差异不能确定具体代码错误。',
+          'Check input parsing and output format, then the algorithm. Output differences alone do not identify the exact bug.',
+        ),
       }
     }
     if (result.allSamplePassed) {
       return {
-        title: '公开样例已通过',
-        evidence: '依据：本次公开样例的运行与输出比对。',
+        title: l('公开样例已通过', 'Public samples passed'),
+        evidence: l(
+          '依据：本次公开样例的运行与输出比对。',
+          'Based on this run and output comparison.',
+        ),
         next: result.suspectedShortcut
-          ? '代码可能只输出固定值；请确认它会读取输入，并提交以验证隐藏用例。'
-          : '继续提交代码验证隐藏用例；样例通过不代表整题通过。',
+          ? l(
+              '代码可能只输出固定值；请确认它会读取输入，并提交以验证隐藏用例。',
+              'Your code may print a fixed value. Confirm that it reads input, then submit for hidden tests.',
+            )
+          : l(
+              '继续提交代码验证隐藏用例；样例通过不代表整题通过。',
+              'Submit to check hidden tests. Passing samples does not guarantee full acceptance.',
+            ),
       }
     }
   } catch {
@@ -509,7 +587,10 @@ function askRunDiagnosis() {
   if (inputDisabled.value) return
   activeTab.value = 'chat'
   void stream.sendUserMessage(
-    '请根据刚才的运行诊断、题面、公开样例和当前代码，说明最可能的问题、每项判断的依据，以及我下一步该检查什么。信息不足时明确说不确定，不要给完整可提交答案。',
+    l(
+      '请根据刚才的运行诊断、题面、公开样例和当前代码，说明最可能的问题、每项判断的依据，以及我下一步该检查什么。信息不足时明确说不确定，不要给完整可提交答案。',
+      'Based on the run diagnosis, problem, public samples and my code, explain likely issues, evidence and next checks. Say when evidence is insufficient; do not provide a complete submission.',
+    ),
     listRef.value,
   )
 }
@@ -517,7 +598,7 @@ function askRunDiagnosis() {
 function onModelChange() {
   stream.stopGeneration()
   store.clearChat()
-  Message.info('已切换模型，开始新的对话')
+  Message.info(l('已切换模型，开始新的对话', 'Model switched. Starting a new conversation.'))
 }
 
 function onSend() {
@@ -526,10 +607,21 @@ function onSend() {
   const route = attachment
     ? visionOptions.value.find((item) => item.value === selectedVisionRoute.value)
     : undefined
-  if (attachment && !route) return void Message.warning('请先在账号设置中配置支持看图的文字模型')
+  if (attachment && !route)
+    return void Message.warning(
+      l(
+        '请先在账号设置中配置支持看图的文字模型',
+        'Configure a vision-capable model in account settings first.',
+      ),
+    )
   const text =
     draft.value.trim() ||
-    (attachment ? '请结合当前题目和代码分析这张图片，指出我下一步该怎么做。' : '')
+    (attachment
+      ? l(
+          '请结合当前题目和代码分析这张图片，指出我下一步该怎么做。',
+          'Analyze this image together with the current problem and code. Tell me what to do next.',
+        )
+      : '')
   if (!text) return
   if (!attachment && shouldAutoEditCode(text, auth.isAdmin)) {
     draft.value = ''
@@ -560,8 +652,14 @@ const hasMessages = computed(() => messages.value.length > 0)
 const welcomeLine = ref('')
 const welcomeFull = computed(() =>
   auth.isAdmin
-    ? '可以直接索取完整题解与参考代码，用来核对题目。'
-    : '我会按提示层级引导你，也能分析最近一次运行结果。',
+    ? l(
+        '可以直接索取完整题解与参考代码，用来核对题目。',
+        'Ask for full solutions and reference code to test the problem.',
+      )
+    : l(
+        '我会按提示层级引导你，也能分析最近一次运行结果。',
+        'I can offer step-by-step hints and review your latest run.',
+      ),
 )
 let welcomeTimer: ReturnType<typeof setInterval> | null = null
 
@@ -606,6 +704,10 @@ watch(open, (v) => {
 
 watch(hasMessages, (h) => {
   if (h) clearWelcomeTimer()
+})
+
+watch(welcomeFull, () => {
+  if (open.value && !hasMessages.value) startWelcomeTypewriter()
 })
 
 watchEffect((onCleanup) => {
@@ -687,14 +789,14 @@ watchEffect((onCleanup) => {
           <button
             type="button"
             class="resize-handle resize-handle--right"
-            aria-label="拖动调整宽度"
+            :aria-label="l('拖动调整宽度', 'Drag to resize width')"
             :disabled="maximized"
             @pointerdown="onResizeHandlePointerDown($event, 'horizontal')"
           />
           <button
             type="button"
             class="resize-handle resize-handle--corner"
-            aria-label="拖动调整窗口宽度和高度"
+            :aria-label="l('拖动调整窗口宽度和高度', 'Drag to resize window')"
             :disabled="maximized"
             @pointerdown="onResizeHandlePointerDown($event, 'both')"
           >
@@ -703,7 +805,11 @@ watchEffect((onCleanup) => {
 
           <header
             class="assistant-header tw-relative tw-z-10 tw-flex tw-items-start tw-justify-between tw-gap-3 tw-border-b tw-border-black/[0.06] tw-px-4 tw-pb-3 tw-pt-3 dark:tw-border-white/10"
-            :title="maximized ? '双击还原窗口' : '按住拖动，双击放大窗口'"
+            :title="
+              maximized
+                ? l('双击还原窗口', 'Double-click to restore')
+                : l('按住拖动，双击放大窗口', 'Drag to move; double-click to maximize')
+            "
             @pointerdown="onHeaderPointerDown"
             @dblclick="onHeaderDoubleClick"
           >
@@ -714,12 +820,20 @@ watchEffect((onCleanup) => {
                   id="study-copilot-title"
                   class="tw-m-0 tw-truncate tw-text-base tw-font-extrabold tw-tracking-tight tw-text-zinc-900 dark:tw-text-zinc-50"
                 >
-                  智能做题助手
+                  {{ l('智能做题助手', 'Coding assistant') }}
                 </h2>
                 <small class="tw-text-[11px] tw-text-zinc-500 dark:tw-text-zinc-400"
-                  >{{ auth.isAdmin ? '管理员测试 · 可索取完整答案' : '学习模式 · 分层提示'
+                  >{{
+                    auth.isAdmin
+                      ? l('管理员测试 · 可索取完整答案', 'Admin test · full answers available')
+                      : l('学习模式 · 分层提示', 'Learning mode · guided hints')
                   }}<span class="drag-tip">
-                    · {{ maximized ? '双击标题栏还原' : '拖动标题栏移动' }}</span
+                    ·
+                    {{
+                      maximized
+                        ? l('双击标题栏还原', 'Double-click to restore')
+                        : l('拖动标题栏移动', 'Drag header to move')
+                    }}</span
                   ></small
                 >
               </div>
@@ -728,8 +842,12 @@ watchEffect((onCleanup) => {
               <button
                 type="button"
                 class="window-control"
-                :aria-label="maximized ? '还原窗口' : '放大窗口'"
-                :title="maximized ? '还原窗口' : '放大窗口'"
+                :aria-label="
+                  maximized ? l('还原窗口', 'Restore window') : l('放大窗口', 'Maximize window')
+                "
+                :title="
+                  maximized ? l('还原窗口', 'Restore window') : l('放大窗口', 'Maximize window')
+                "
                 @click="toggleMaximize"
               >
                 {{ maximized ? '❐' : '⛶' }}
@@ -740,12 +858,12 @@ watchEffect((onCleanup) => {
                 :disabled="!hasMessages"
                 @click="clearChat"
               >
-                清空
+                {{ l('清空', 'Clear') }}
               </button>
               <button
                 type="button"
                 class="tw-grid tw-h-9 tw-w-9 tw-place-items-center tw-rounded-lg tw-border tw-border-black/[0.08] tw-bg-white/70 tw-text-zinc-500 tw-backdrop-blur hover:tw-border-rose-300 hover:tw-text-rose-600 dark:tw-border-white/12 dark:tw-bg-zinc-900/50 dark:tw-text-zinc-300"
-                aria-label="关闭"
+                :aria-label="l('关闭', 'Close')"
                 @click="close"
               >
                 ✕
@@ -760,13 +878,14 @@ watchEffect((onCleanup) => {
           <div class="context-strip tw-relative tw-z-10 tw-mx-4 tw-my-2">
             <span class="context-strip__dot" />
             <div>
-              <strong>OJ 上下文已同步</strong
+              <strong>{{ l('OJ 上下文已同步', 'OJ context synced') }}</strong
               ><small
-                >题面 · 公开样例 · 当前代码<span v-if="props.runResult"> · 运行结果</span></small
+                >{{ l('题面 · 公开样例 · 当前代码', 'Problem · Public samples · Current code')
+                }}<span v-if="props.runResult"> · {{ l('运行结果', 'Run result') }}</span></small
               >
             </div>
             <span class="context-strip__type">{{
-              props.questionType.startsWith('IMAGE_') ? '图像题' : '编程题'
+              props.questionType.startsWith('IMAGE_') ? l('图像题', 'Image') : l('编程题', 'Code')
             }}</span>
           </div>
           <div
@@ -774,19 +893,19 @@ watchEffect((onCleanup) => {
             class="tw-relative tw-z-10 tw-mx-4 tw-mb-3 tw-rounded-xl tw-border tw-border-teal-500/25 tw-bg-teal-500/[0.07] tw-p-3 tw-text-xs tw-leading-relaxed tw-text-zinc-700 dark:tw-text-zinc-200"
           >
             <div class="tw-flex tw-items-center tw-justify-between tw-gap-2">
-              <strong>本次运行诊断 · {{ runDiagnosis.title }}</strong
+              <strong>{{ l('本次运行诊断', 'Run diagnosis') }} · {{ runDiagnosis.title }}</strong
               ><button
                 type="button"
                 class="tw-shrink-0 tw-font-semibold tw-text-teal-700 disabled:tw-opacity-40 dark:tw-text-teal-300"
                 :disabled="inputDisabled"
                 @click="askRunDiagnosis"
               >
-                让 AI 结合代码分析 →
+                {{ l('让 AI 结合代码分析', 'Analyze with AI') }} →
               </button>
             </div>
             <p class="tw-m-0 tw-mt-2">{{ runDiagnosis.evidence }}</p>
             <p class="tw-m-0 tw-mt-1 tw-text-zinc-500 dark:tw-text-zinc-400">
-              下一步：{{ runDiagnosis.next }}
+              {{ l('下一步：', 'Next: ') }}{{ runDiagnosis.next }}
             </p>
           </div>
           <div class="tw-relative tw-z-10 tw-mx-4 tw-mb-2">
@@ -794,11 +913,21 @@ watchEffect((onCleanup) => {
               v-if="aiAssistBanned"
               variant="ai"
               compact
-              title="学习助手已锁定"
-              description="检测到不当提问内容，本面板输入已暂停。"
+              :title="l('学习助手已锁定', 'Assistant locked')"
+              :description="
+                l(
+                  '检测到不当提问内容，本面板输入已暂停。',
+                  'Input is temporarily disabled due to a moderation restriction.',
+                )
+              "
               :countdown="aiBanCountdown"
               :reason="(auth.aiBanReason ?? auth.banReason ?? '').trim()"
-              footer="到期后自动恢复；如需提前解除请联系管理员。"
+              :footer="
+                l(
+                  '到期后自动恢复；如需提前解除请联系管理员。',
+                  'Access restores when the restriction expires. Contact an admin for help.',
+                )
+              "
             />
           </div>
 
@@ -812,7 +941,7 @@ watchEffect((onCleanup) => {
               :disabled="inputDisabled"
               @click="startCodeEdit('请结合当前题目、代码和公开运行结果，修复当前代码中的错误。')"
             >
-              修复当前代码
+              {{ l('修复当前代码', 'Fix current code') }}
             </button>
             <button
               v-if="editBusy && editStage !== 'running'"
@@ -820,10 +949,10 @@ watchEffect((onCleanup) => {
               class="code-edit-bar__stop"
               @click="stopCodeEdit"
             >
-              停止
+              {{ l('停止', 'Stop') }}
             </button>
             <button v-if="canUndoEdit && !editBusy" type="button" @click="undoCodeEdit">
-              撤销本次修改
+              {{ l('撤销本次修改', 'Undo changes') }}
             </button>
             <small v-if="editStatus" role="status">{{ editStatus }}</small>
           </div>
@@ -852,13 +981,19 @@ watchEffect((onCleanup) => {
                     <p
                       class="tw-m-0 tw-text-base tw-font-bold tw-text-zinc-800 dark:tw-text-zinc-100"
                     >
-                      从哪里开始？
+                      {{ l('从哪里开始？', 'Where to start?') }}
                     </p>
                     <p class="tw-m-0 tw-mt-1 tw-text-xs tw-text-zinc-500 dark:tw-text-zinc-400">
                       {{
                         auth.isAdmin
-                          ? '直接获取参考答案、检查代码，或附图分析'
-                          : '问解题思路、检查代码，或附图分析'
+                          ? l(
+                              '直接获取参考答案、检查代码，或附图分析',
+                              'Request a reference answer, review code or analyze an image',
+                            )
+                          : l(
+                              '问解题思路、检查代码，或附图分析',
+                              'Ask for hints, review code or analyze an image',
+                            )
                       }}
                     </p>
                   </div>
@@ -895,7 +1030,7 @@ watchEffect((onCleanup) => {
 
               <div class="tw-pb-3 tw-pt-1">
                 <div v-if="imageAttachment" class="vision-route tw-mb-2">
-                  <label for="vision-model">图片分析使用</label>
+                  <label for="vision-model">{{ l('图片分析使用', 'Image analysis model') }}</label>
                   <select
                     v-if="visionOptions.length"
                     id="vision-model"
@@ -906,10 +1041,18 @@ watchEffect((onCleanup) => {
                       {{ item.label }}
                     </option>
                   </select>
-                  <span v-else>还没有可看图的模型，请先到账号设置配置。</span>
-                  <small
-                    >图片由这里选中的模型分析，可能与顶部聊天模型不同。调用可能收费，附件不会保存。</small
-                  >
+                  <span v-else>{{
+                    l(
+                      '还没有可看图的模型，请先到账号设置配置。',
+                      'No vision model configured. Set one up in account settings.',
+                    )
+                  }}</span>
+                  <small>{{
+                    l(
+                      '图片由这里选中的模型分析，可能与顶部聊天模型不同。调用可能收费，附件不会保存。',
+                      'The selected model analyzes the image and may differ from the chat model. Calls may incur a charge. Attachments are not saved.',
+                    )
+                  }}</small>
                 </div>
                 <AiInput
                   :disabled="inputDisabled"
@@ -927,7 +1070,7 @@ watchEffect((onCleanup) => {
               class="tw-flex tw-h-full tw-min-h-[240px] tw-flex-col tw-gap-2 tw-overflow-y-auto tw-p-2"
             >
               <p class="tw-m-0 tw-text-xs tw-font-semibold tw-text-zinc-600 dark:tw-text-zinc-300">
-                快捷模板（点击填入并发送）
+                {{ l('快捷模板（点击填入并发送）', 'Quick prompts (click to send)') }}
               </p>
               <div class="tw-flex tw-flex-col tw-gap-2">
                 <button

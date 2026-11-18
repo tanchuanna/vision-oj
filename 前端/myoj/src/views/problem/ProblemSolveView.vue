@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Message } from '@arco-design/web-vue'
+import { Message, Modal } from '@arco-design/web-vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getBackendErrorMessage } from '@/api/httpError'
 import { isResultSuccess } from '@/api/result'
@@ -32,6 +32,8 @@ import {
 } from './solveEditorCompletions'
 import { renderMarkdownToHtml } from '@/utils/renderMarkdown'
 import { normalizeOjStatement } from '@/utils/normalizeOjStatement'
+import { pendingProblemId, pendingProblemTitle } from '@/composables/problemSharedTransition'
+import { localize as l } from '@/i18n/locale'
 
 type ProblemDetail = {
   id: string
@@ -58,6 +60,8 @@ type ProblemDetail = {
 }
 
 const route = useRoute()
+const transitionPreviewProblemTitle =
+  pendingProblemId.value === String(route.params.id || '') ? pendingProblemTitle.value : ''
 const router = useRouter()
 const auth = useAuthStore()
 const userScopeKey = computed(() => {
@@ -70,7 +74,7 @@ const running = ref(false)
 const runResult = ref<SolveRunResult | null>(null)
 /** 运行结果面板展开；每次有新运行结果时自动展开 */
 const runResultPanelExpanded = ref(true)
-const code = ref('// 请在此输入代码\n')
+const code = ref(l('// 请在此输入代码\n', '// Write your code here\n'))
 const language = ref('cpp')
 const EDITOR_THEME_KEY = 'myoj.solve.editor.theme'
 const editorTheme = ref<'dark-pro' | 'light-pro' | 'ocean-pro'>('dark-pro')
@@ -168,9 +172,16 @@ async function applyAiCodeEdits(
   signal: AbortSignal,
   onStep: (step: number, total: number, reason: string) => void,
 ) {
-  if (aiEditWriting.value) throw new Error('代码正在修改中')
-  if (currentEditorCode() !== base) throw new Error('你在生成期间修改了代码，请重新生成修改建议')
-  if (!edits.length) throw new Error('模型未给出可写入的修改')
+  if (aiEditWriting.value) throw new Error(l('代码正在修改中', 'Code editing is in progress'))
+  if (currentEditorCode() !== base)
+    throw new Error(
+      l(
+        '你在生成期间修改了代码，请重新生成修改建议',
+        'Your code changed while the proposal was being generated. Please regenerate it.',
+      ),
+    )
+  if (!edits.length)
+    throw new Error(l('模型未给出可写入的修改', 'The model did not return any applicable edits'))
   let cursor = 0
   for (const edit of edits) {
     if (
@@ -183,7 +194,12 @@ async function applyAiCodeEdits(
       base.slice(edit.startOffset, edit.endOffset) !== edit.oldText ||
       typeof edit.newText !== 'string'
     )
-      throw new Error('修改位置校验失败，编辑器未改变')
+      throw new Error(
+        l(
+          '修改位置校验失败，编辑器未改变',
+          'Edit positions could not be verified. The editor was not changed.',
+        ),
+      )
     cursor = edit.endOffset
   }
   aiEditWriting.value = true
@@ -197,13 +213,16 @@ async function applyAiCodeEdits(
   let delta = 0
   try {
     for (const [index, edit] of edits.entries()) {
-      if (signal.aborted) throw new DOMException('已停止修改', 'AbortError')
+      if (signal.aborted)
+        throw new DOMException(l('已停止修改', 'Code editing stopped'), 'AbortError')
       if (
         language.value !== startingLanguage ||
         editor?.getModel() !== targetModel ||
         currentEditorCode() !== expected
       ) {
-        throw new Error('代码在写入期间发生变化，已停止修改')
+        throw new Error(
+          l('代码在写入期间发生变化，已停止修改', 'Code changed during writing. Editing stopped.'),
+        )
       }
       const start = edit.startOffset + delta
       const end = edit.endOffset + delta
@@ -224,7 +243,13 @@ async function applyAiCodeEdits(
         )
         applied++
         expected = expected.slice(0, start) + edit.newText + expected.slice(end)
-        if (editor.getValue() !== expected) throw new Error('编辑器未按预期写入，已恢复原代码')
+        if (editor.getValue() !== expected)
+          throw new Error(
+            l(
+              '编辑器未按预期写入，已恢复原代码',
+              'The editor did not apply the edit as expected. Original code was restored.',
+            ),
+          )
         const afterPos = model.getPositionAt(start + edit.newText.length)
         aiEditDecorationIds = editor.deltaDecorations(aiEditDecorationIds, [
           {
@@ -248,13 +273,16 @@ async function applyAiCodeEdits(
       onStep(applied, edits.length, edit.reason)
       if (index < edits.length - 1) await new Promise((resolve) => setTimeout(resolve, 550))
     }
-    if (signal.aborted) throw new DOMException('已停止修改', 'AbortError')
+    if (signal.aborted)
+      throw new DOMException(l('已停止修改', 'Code editing stopped'), 'AbortError')
     if (
       language.value !== startingLanguage ||
       editor?.getModel() !== targetModel ||
       currentEditorCode() !== expected
     ) {
-      throw new Error('代码在写入期间发生变化，已停止修改')
+      throw new Error(
+        l('代码在写入期间发生变化，已停止修改', 'Code changed during writing. Editing stopped.'),
+      )
     }
     lastAiEdit = { before: base, after: expected }
     targetModel?.pushStackElement()
@@ -307,38 +335,41 @@ const visionModelPath = computed(() =>
 const visionModelLabel = computed(
   () =>
     ({
-      YOLO_GENERAL: 'YOLOv8n 通用检测',
-      YOLO_HELMET: '校园安全帽检测',
-      EASYOCR_ZH_EN: 'EasyOCR 中英文识别',
-      OPENCV_ANALYSIS: 'OpenCV 图像属性分析',
-    })[detail.value?.visionModelKey || 'YOLO_GENERAL'] || '图像识别模型',
+      YOLO_GENERAL: l('YOLOv8n 通用检测', 'YOLOv8n general detection'),
+      YOLO_HELMET: l('校园安全帽检测', 'Helmet detection'),
+      EASYOCR_ZH_EN: l('EasyOCR 中英文识别', 'EasyOCR Chinese and English'),
+      OPENCV_ANALYSIS: l('OpenCV 图像属性分析', 'OpenCV image analysis'),
+    })[detail.value?.visionModelKey || 'YOLO_GENERAL'] ||
+    l('图像识别模型', 'Image recognition model'),
 )
 
-const IMAGE_PYTHON_TEMPLATE = `from ultralytics import YOLO
+function imageCountPythonTemplate(): string {
+  return `from ultralytics import YOLO
 import json
 
 def solve(image_path: str) -> dict[str, int]:
-    # TODO: 使用 /models/yolov8n.pt 识别 image_path，统计每个类别的数量
-    # 可用库：ultralytics、cv2、Pillow、numpy
+    # TODO: ${l('使用 /models/yolov8n.pt 识别 image_path，统计每个类别的数量', 'Use /models/yolov8n.pt to detect and count objects in image_path')}
+    # ${l('可用库：ultralytics、cv2、Pillow、numpy', 'Available: ultralytics, cv2, Pillow, numpy')}
     return {}
 
 if __name__ == "__main__":
-    # 每个用例的 stdin 包含一个沙箱内只读图片路径
+    # ${l('每个用例的 stdin 包含一个沙箱内只读图片路径', 'Each test case provides a read-only image path on stdin')}
     image_path = input().strip()
     print(json.dumps(solve(image_path), sort_keys=True))
 `
+}
 
 function imagePythonTemplate(): string {
   const type = detail.value?.questionType
   if (type === 'IMAGE_OCR')
     return `import easyocr\n\nimage_path = input().strip()\nreader = easyocr.Reader(["ch_sim", "en"], gpu=False)\nlines = reader.readtext(image_path, detail=0, paragraph=True)\nprint(" ".join(lines))\n`
   if (type === 'IMAGE_ANALYSIS')
-    return `from PIL import Image\nimport numpy as np\nimport json\n\nimage_path = input().strip()\nimage = Image.open(image_path).convert("RGB")\n# TODO: 计算 width、height、mode、mean_gray、edge_strength\n# 提示：将图像转为灰度；边缘强度为水平与垂直相邻像素差的均值之和。\nresult = {}\nprint(json.dumps(result, sort_keys=True))\n`
+    return `from PIL import Image\nimport numpy as np\nimport json\n\nimage_path = input().strip()\nimage = Image.open(image_path).convert("RGB")\n# TODO: ${l('计算 width、height、mode、mean_gray、edge_strength', 'Compute width, height, mode, mean_gray and edge_strength')}\n# ${l('提示：将图像转为灰度；边缘强度为水平与垂直相邻像素差的均值之和。', 'Hint: convert to grayscale; edge strength is the sum of mean horizontal and vertical pixel differences.')}\nresult = {}\nprint(json.dumps(result, sort_keys=True))\n`
   if (type === 'IMAGE_CLASSIFICATION')
     return `from ultralytics import YOLO\n\nimage_path = input().strip()\nresult = YOLO("${visionModelPath.value}").predict(image_path, verbose=False)[0]\nif result.boxes is None or len(result.boxes) == 0:\n    print("unknown")\nelse:\n    best = int(result.boxes.conf.argmax())\n    print(result.names[int(result.boxes.cls[best])])\n`
   if (type === 'IMAGE_OBJECT_DETECTION')
     return `from ultralytics import YOLO\nfrom PIL import Image\nimport json\n\nimage_path = input().strip()\nw, h = Image.open(image_path).size\nr = YOLO("${visionModelPath.value}").predict(image_path, verbose=False)[0]\nboxes = []\nfor xyxy, cls in zip(r.boxes.xyxy.tolist(), r.boxes.cls.tolist()):\n    x1, y1, x2, y2 = xyxy\n    boxes.append({"label": r.names[int(cls)], "x1": round(x1/w, 6), "y1": round(y1/h, 6), "x2": round(x2/w, 6), "y2": round(y2/h, 6)})\nprint(json.dumps(boxes))\n`
-  return IMAGE_PYTHON_TEMPLATE.replace('/models/yolov8n.pt', visionModelPath.value)
+  return imageCountPythonTemplate().replace('/models/yolov8n.pt', visionModelPath.value)
 }
 
 function filterLanguageOption(inputValue: string, option: { label?: string }) {
@@ -367,7 +398,16 @@ const splitStyle = computed(() => {
 
 const difficultyLabel = computed(() => {
   const tags = detail.value?.tags ?? []
-  return ['入门', '简单', '中等', '困难'].find((item) => tags.includes(item)) ?? '练习'
+  const value = ['入门', '简单', '中等', '困难'].find((item) => tags.includes(item)) ?? '练习'
+  return (
+    {
+      入门: l('入门', 'Beginner'),
+      简单: l('简单', 'Easy'),
+      中等: l('中等', 'Medium'),
+      困难: l('困难', 'Hard'),
+      练习: l('练习', 'Practice'),
+    } as Record<string, string>
+  )[value]
 })
 
 const passRate = computed(() => {
@@ -552,7 +592,12 @@ function clearContestBindForProblem(silent = false) {
   void router.replace({ path: route.path, query: q })
   contestStorageRev.value++
   if (!silent) {
-    Message.success('已切换为练习提交（不再计入比赛）')
+    Message.success(
+      l(
+        '已切换为练习提交（不再计入比赛）',
+        'Switched to practice submissions. This will not count toward the contest.',
+      ),
+    )
   }
 }
 
@@ -564,7 +609,12 @@ function applyContestClosedStrip() {
   if (firstNotice) strippedEndedContestIds.add(cid)
   clearContestBindForProblem(true)
   if (firstNotice) {
-    Message.info('本场比赛已结束，提交将作为练习（不计入比赛榜）')
+    Message.info(
+      l(
+        '本场比赛已结束，提交将作为练习（不计入比赛榜）',
+        'The contest has ended. New submissions will count as practice only.',
+      ),
+    )
   }
 }
 
@@ -632,13 +682,13 @@ const headingAnchors = computed(() => {
     if (m) {
       list.push({
         id: `h-${list.length + 1}`,
-        title: m[2]?.trim() || '小节',
+        title: m[2]?.trim() || l('小节', 'Section'),
         start: cursor,
       })
     }
     cursor += line.length + 1
   }
-  return list.length ? list : [{ id: 'h-1', title: '题目描述', start: 0 }]
+  return list.length ? list : [{ id: 'h-1', title: l('题目描述', 'Description'), start: 0 }]
 })
 
 function normalizeSampleJudgeCases(
@@ -664,7 +714,10 @@ function normalizeSampleJudgeCases(
     .map((item, index) => ({
       id: `case-${index + 1}`,
       input: raw.questionType?.startsWith('IMAGE_')
-        ? '[系统题图：运行时以只读路径提供]'
+        ? l(
+            '[系统题图：运行时以只读路径提供]',
+            '[Problem image: provided as a read-only path at runtime]',
+          )
         : String(item?.input ?? '').trim(),
       output: String(item?.output ?? '').trim(),
     }))
@@ -688,12 +741,14 @@ watch(
   },
 )
 
-async function copyToClipboard(text: string, okMsg = '已复制到剪贴板') {
+async function copyToClipboard(text: string, okMsg = l('已复制到剪贴板', 'Copied to clipboard')) {
   try {
     await navigator.clipboard.writeText(text)
     Message.success(okMsg)
   } catch {
-    Message.error('复制失败，请手动选择文本复制')
+    Message.error(
+      l('复制失败，请手动选择文本复制', 'Copy failed. Select and copy the text manually.'),
+    )
   }
 }
 
@@ -733,11 +788,14 @@ const aiJudgeContext = computed(() =>
     countTolerance: detail.value?.countTolerance ?? 0,
     imageProtocol: isImageQuestion.value
       ? {
-          stdin: '沙箱内只读图片路径',
+          stdin: l('沙箱内只读图片路径', 'Read-only image path in the execution environment'),
           language: 'python',
           model: '/models/yolov8n.pt',
           libraries: ['ultralytics', 'cv2', 'Pillow', 'numpy'],
-          output: '只输出目标类别到数量的 JSON 对象',
+          output: l(
+            '只输出目标类别到数量的 JSON 对象',
+            'Output only a JSON object mapping labels to counts',
+          ),
           network: false,
         }
       : undefined,
@@ -747,9 +805,9 @@ const aiSampleCases = computed(() => JSON.stringify(displayJudgeCases.value.slic
 const aiRunResult = computed(() => (runResult.value ? JSON.stringify(runResult.value) : ''))
 const statementHtml = computed(() => renderStatementToHtml(detail.value?.content || ''))
 const editorThemeLabel = computed(() => {
-  if (editorTheme.value === 'light-pro') return '浅色'
-  if (editorTheme.value === 'ocean-pro') return '海洋'
-  return '深色'
+  if (editorTheme.value === 'light-pro') return l('浅色', 'Light')
+  if (editorTheme.value === 'ocean-pro') return l('海洋', 'Ocean')
+  return l('深色', 'Dark')
 })
 
 function draftStorageKey(targetLanguage = language.value) {
@@ -780,7 +838,7 @@ function formatDateTime(raw?: string): string {
 }
 
 function renderStatementToHtml(raw: string): string {
-  if (!raw.trim()) return '<p>暂无题面描述</p>'
+  if (!raw.trim()) return `<p>${l('暂无题面描述', 'No problem description yet')}</p>`
   return renderMarkdownToHtml(normalizeOjStatement(raw))
 }
 
@@ -788,7 +846,9 @@ function loadDraft(targetLanguage = language.value) {
   if (typeof window === 'undefined') return
   const raw = window.localStorage.getItem(draftStorageKey(targetLanguage))
   if (raw == null) {
-    code.value = isImageQuestion.value ? imagePythonTemplate() : '// 请在此输入代码\n'
+    code.value = isImageQuestion.value
+      ? imagePythonTemplate()
+      : l('// 请在此输入代码\n', '// Write your code here\n')
   } else {
     code.value = raw
   }
@@ -832,7 +892,7 @@ function applyCodeTemplate() {
   if (isImageQuestion.value) {
     language.value = 'python'
     code.value = imagePythonTemplate()
-    Message.success('已应用图像识别 Python 模板')
+    Message.success(l('已应用图像识别 Python 模板', 'Image recognition Python template applied'))
     return
   }
   const templates: Record<string, string> = {
@@ -843,7 +903,7 @@ int main() {
   ios::sync_with_stdio(false);
   cin.tie(nullptr);
 
-  // TODO: 在这里实现你的算法
+  // TODO: ${l('在这里实现你的算法', 'Implement your algorithm here')}
 
   return 0;
 }
@@ -856,37 +916,56 @@ public class Main {
     BufferedReader br = new BufferedReader(new InputStreamReader(System.in));
     StringTokenizer st;
 
-    // TODO: 在这里实现你的算法
+    // TODO: ${l('在这里实现你的算法', 'Implement your algorithm here')}
   }
 }
 `,
     python: `import sys
 
 def solve():
-    # TODO: 在这里实现你的算法
+    # TODO: ${l('在这里实现你的算法', 'Implement your algorithm here')}
     pass
 
 if __name__ == "__main__":
     solve()
 `,
   }
-  code.value = templates[language.value] ?? '// TODO: 在这里实现你的算法\n'
-  Message.success('已应用代码模板')
+  code.value =
+    templates[language.value] ??
+    `// TODO: ${l('在这里实现你的算法', 'Implement your algorithm here')}\n`
+  Message.success(l('已应用代码模板', 'Code template applied'))
 }
 
-function toggleEditorTheme() {
-  const order: Array<'dark-pro' | 'light-pro' | 'ocean-pro'> = [
-    'dark-pro',
-    'light-pro',
-    'ocean-pro',
-  ]
-  const idx = order.indexOf(editorTheme.value)
-  const next = order[(idx + 1) % order.length] ?? 'dark-pro'
-  editorTheme.value = next
+function setEditorTheme(theme: 'dark-pro' | 'light-pro' | 'ocean-pro') {
+  editorTheme.value = theme
   if (typeof window !== 'undefined') {
     window.localStorage.setItem(EDITOR_THEME_KEY, editorTheme.value)
   }
-  Message.success(`编辑器主题：${editorThemeLabel.value}`)
+}
+
+function toggleEditorSettings() {
+  editorSettingsOpen.value = !editorSettingsOpen.value
+  if (editorSettingsOpen.value) {
+    void nextTick(() =>
+      editorSettingsRef.value?.querySelector<HTMLElement>('.editor-theme-choice')?.focus(),
+    )
+  }
+}
+
+function confirmClearCode() {
+  editorSettingsOpen.value = false
+  if (!currentEditorCode().trim()) return
+  Modal.confirm({
+    title: l('清空当前代码？', 'Clear current code?'),
+    content: l(
+      '当前语言的代码会被清空。建议先复制需要保留的内容。',
+      'The code for this language will be cleared. Copy anything you want to keep first.',
+    ),
+    okText: l('确认清空', 'Clear code'),
+    cancelText: l('保留代码', 'Keep code'),
+    okButtonProps: { status: 'danger' },
+    onOk: clearCode,
+  })
 }
 
 function toMonacoLanguage(lang: string): string {
@@ -1153,7 +1232,7 @@ async function runSyntaxValidation(api: LoadedMonaco) {
         startColumn: startCol,
         endLineNumber: endLine,
         endColumn: endCol,
-        message: String(d.message ?? '语法/编译错误'),
+        message: String(d.message ?? l('语法/编译错误', 'Syntax/compiler error')),
       }
     })
 
@@ -1165,7 +1244,7 @@ async function runSyntaxValidation(api: LoadedMonaco) {
       return {
         line,
         column: col,
-        message: String(d.message ?? '语法/编译错误'),
+        message: String(d.message ?? l('语法/编译错误', 'Syntax/compiler error')),
         severity,
       }
     })
@@ -1263,7 +1342,12 @@ async function initMonacoEditor() {
     monacoInstance = null
     monacoApi = null
     console.error('[solve] monaco init failed, fallback to textarea', error)
-    Message.warning('高级编辑器加载失败，已切换为基础编辑器')
+    Message.warning(
+      l(
+        '高级编辑器加载失败，已切换为基础编辑器',
+        'Advanced editor failed to load. Switched to the basic editor.',
+      ),
+    )
   }
 }
 
@@ -1273,7 +1357,7 @@ async function loadDetail() {
     const id = String(route.params.id || '').trim()
     const data = await Service.getPublicQuestionDetail(id)
     if (!isResultSuccess(data.code)) {
-      Message.error(data.message || '题目加载失败')
+      Message.error(data.message || l('题目加载失败', 'Failed to load problem'))
       return
     }
     detail.value = (data.data as unknown as ProblemDetail) ?? null
@@ -1283,7 +1367,12 @@ async function loadDetail() {
     loadDraft()
     void loadSubmissionHistory()
   } catch (error) {
-    Message.error(mapApiError(error, getBackendErrorMessage(error, '题目加载失败')))
+    Message.error(
+      mapApiError(
+        error,
+        getBackendErrorMessage(error, l('题目加载失败', 'Failed to load problem')),
+      ),
+    )
   } finally {
     loading.value = false
   }
@@ -1387,7 +1476,7 @@ function clearCode() {
   if (aiEditWriting.value) return
   code.value = ''
   saveDraft()
-  Message.success('已清空代码草稿')
+  Message.success(l('已清空代码草稿', 'Code draft cleared'))
 }
 
 /** 始终取编辑器最新内容（避免 Monaco 与 code 不同步时运行/提交发旧代码） */
@@ -1401,23 +1490,37 @@ function currentEditorCode(): string {
 async function runCode(mode: 'SAMPLE' | 'CUSTOM' = 'SAMPLE') {
   if (aiEditWriting.value) return
   if (running.value) return
+  if (mode === 'SAMPLE' && displayJudgeCases.value.length === 0) {
+    Message.info(
+      l(
+        '这道题暂无公开样例；你可以提交代码进行完整评测',
+        'No public samples are available. You can submit your code for full judging.',
+      ),
+    )
+    return
+  }
   if (mode === 'CUSTOM' && isImageQuestion.value) {
-    Message.info('图像题由评测环境提供只读图片路径，不支持自定义输入')
+    Message.info(
+      l(
+        '图像题由评测环境提供只读图片路径，不支持自定义输入',
+        'Image paths are provided by the judge. Custom input is unavailable.',
+      ),
+    )
     return
   }
   if (!currentEditorCode().trim()) {
-    Message.warning('请先输入代码')
+    Message.warning(l('请先输入代码', 'Enter your code first'))
     return
   }
   const token = getToken()
   if (!token) {
-    Message.warning('请先登录后再运行代码')
+    Message.warning(l('请先登录后再运行代码', 'Sign in before running code'))
     router.push({ path: '/', query: { openAuth: '1' } })
     return
   }
   const questionId = String(route.params.id || '').trim()
   if (!/^\d+$/.test(questionId)) {
-    Message.error('题目 ID 无效')
+    Message.error(l('题目 ID 无效', 'Invalid problem ID'))
     return
   }
   running.value = true
@@ -1432,11 +1535,11 @@ async function runCode(mode: 'SAMPLE' | 'CUSTOM' = 'SAMPLE') {
       ...(mode === 'CUSTOM' ? { customInput: customInput.value } : {}),
     })
     if (!isResultSuccess(data.code)) {
-      Message.error(data.message || '运行失败')
+      Message.error(data.message || l('运行失败', 'Run failed'))
       return
     }
     if (!data.data) {
-      Message.error('未获取到运行结果')
+      Message.error(l('未获取到运行结果', 'No run result was returned'))
       return
     }
     runResult.value = data.data as unknown as SolveRunResult
@@ -1445,24 +1548,40 @@ async function runCode(mode: 'SAMPLE' | 'CUSTOM' = 'SAMPLE') {
     }
     if (runResult.value.terminalError) {
       Message.warning(
-        runResult.value.judgeInfo?.message || runResult.value.sandboxMessage || '运行未成功完成',
+        runResult.value.judgeInfo?.message ||
+          runResult.value.sandboxMessage ||
+          l('运行未成功完成', 'Run did not finish successfully'),
       )
     } else if (mode === 'CUSTOM') {
-      Message.success('自定义输入运行完成')
+      Message.success(l('自定义输入运行完成', 'Custom input run finished'))
     } else if (runResult.value.allSamplePassed && runResult.value.suspectedShortcut) {
-      Message.warning('输出与公开样例文本一致，但代码可能未读入或未按题意计算；请以提交评测为准。')
+      Message.warning(
+        l(
+          '输出与公开样例文本一致，但代码可能未读入或未按题意计算；请以提交评测为准。',
+          'Output matches the public samples, but your code may not read input or compute the result. Submit for full judging.',
+        ),
+      )
     } else if (runResult.value.allSamplePassed && !runResult.value.warning) {
-      Message.success('样例全部通过（提交仍会评测全部隐藏用例）')
+      Message.success(
+        l(
+          '样例全部通过（提交仍会评测全部隐藏用例）',
+          'All public samples passed. Submission will also run hidden tests.',
+        ),
+      )
     } else if (!runResult.value.terminalError && !runResult.value.allSamplePassed) {
-      Message.info('部分样例未通过，请查看下方对比')
+      Message.info(
+        l('部分样例未通过，请查看下方对比', 'Some samples failed. Check the comparison below.'),
+      )
     }
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
-      Message.error('登录已失效，请重新登录')
+      Message.error(l('登录已失效，请重新登录', 'Your session expired. Please sign in again.'))
       router.push({ path: '/', query: { openAuth: '1' } })
       return
     }
-    Message.error(mapApiError(e, getBackendErrorMessage(e, '运行请求失败')))
+    Message.error(
+      mapApiError(e, getBackendErrorMessage(e, l('运行请求失败', 'Run request failed'))),
+    )
   } finally {
     running.value = false
   }
@@ -1487,11 +1606,11 @@ function parseSubmitJudgeInfo(raw?: string) {
 }
 
 function submissionVerdict(item: SolveSubmitItem): string {
-  if (item.status === 0) return '等待判题'
-  if (item.status === 1) return '判题中'
+  if (item.status === 0) return l('等待判题', 'Pending')
+  if (item.status === 1) return l('判题中', 'Judging')
   const message = parseSubmitJudgeInfo(item.judgeInfo).message
   if (message) return message
-  return item.status === 2 ? 'Accepted' : '未通过'
+  return item.status === 2 ? 'Accepted' : l('未通过', 'Not accepted')
 }
 
 async function loadNextRecommendation() {
@@ -1516,7 +1635,7 @@ async function loadNextRecommendation() {
     if (next?.questionId)
       nextRecommendation.value = {
         questionId: String(next.questionId),
-        title: next.title || '推荐下一题',
+        title: next.title || l('推荐下一题', 'Next recommended problem'),
       }
   } catch {
     // 推荐失败时保留“返回题库”，不影响 AC 结果。
@@ -1554,7 +1673,12 @@ async function pollSubmitResult(questionId: string, submitNo: number) {
     if (Date.now() - startedAt > 120_000) {
       submitPolling.value = false
       submitting.value = false
-      Message.warning('评测时间较长，可稍后在“提交记录”中查看结果')
+      Message.warning(
+        l(
+          '评测时间较长，可稍后在“提交记录”中查看结果',
+          'Judging is taking longer than expected. Check Submission History later.',
+        ),
+      )
       return
     }
     try {
@@ -1586,7 +1710,13 @@ async function pollSubmitResult(questionId: string, submitNo: number) {
               acceptedCelebration.value = null
             }, 1200)
           } else {
-            Message.warning(judge.message || '本次提交未通过，请查看提交记录')
+            Message.warning(
+              judge.message ||
+                l(
+                  '本次提交未通过，请查看提交记录',
+                  'This submission did not pass. Check Submission History.',
+                ),
+            )
           }
           await loadSubmissionHistory()
           return
@@ -1608,18 +1738,18 @@ async function submitCode() {
   if (aiEditWriting.value) return
   if (submitting.value) return
   if (!currentEditorCode().trim()) {
-    Message.warning('请先输入代码')
+    Message.warning(l('请先输入代码', 'Enter your code first'))
     return
   }
   const token = getToken()
   if (!token) {
-    Message.warning('请先登录后再提交代码')
+    Message.warning(l('请先登录后再提交代码', 'Sign in before submitting code'))
     router.push({ path: '/', query: { openAuth: '1' } })
     return
   }
   const questionId = String(route.params.id || '').trim()
   if (!/^\d+$/.test(questionId)) {
-    Message.error('题目 ID 无效，无法提交')
+    Message.error(l('题目 ID 无效，无法提交', 'Invalid problem ID. Cannot submit.'))
     return
   }
   submitting.value = true
@@ -1635,24 +1765,28 @@ async function submitCode() {
     }
     const data = await QuestionSubmitControllerService.doQuestionSubmit(submitBody)
     if (!isResultSuccess(data.code)) {
-      Message.error(data.message || '提交失败')
+      Message.error(data.message || l('提交失败', 'Submission failed'))
       return
     }
     const payload = data.data
     if (payload?.submitNo == null || payload.questionId == null || payload.globalSubmitNo == null) {
-      Message.error('未获取到提交序号')
+      Message.error(l('未获取到提交序号', 'No submission number was returned'))
       return
     }
 
-    Message.success('提交成功，正在评测')
+    Message.success(l('提交成功，正在评测', 'Submitted. Judging is in progress.'))
     await pollSubmitResult(String(payload.questionId), Number(payload.submitNo))
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) {
-      Message.error('登录已失效，请重新登录后提交')
+      Message.error(
+        l('登录已失效，请重新登录后提交', 'Your session expired. Sign in again before submitting.'),
+      )
       router.push({ path: '/', query: { openAuth: '1' } })
       return
     }
-    Message.error(mapApiError(error, getBackendErrorMessage(error, '提交失败')))
+    Message.error(
+      mapApiError(error, getBackendErrorMessage(error, l('提交失败', 'Submission failed'))),
+    )
   } finally {
     if (!submitPolling.value) submitting.value = false
   }
@@ -1665,12 +1799,13 @@ function onResize() {
 function onWorkbenchShortcut(event: KeyboardEvent) {
   if (event.key === 'Escape' && editorSettingsOpen.value) {
     editorSettingsOpen.value = false
+    editorSettingsRef.value?.querySelector<HTMLElement>('.editor-settings-trigger')?.focus()
     return
   }
   if (!(event.ctrlKey || event.metaKey) || event.key !== 'Enter') return
   event.preventDefault()
   if (event.shiftKey) void submitCode()
-  else void runCode('SAMPLE')
+  else void runCode(displayJudgeCases.value.length ? 'SAMPLE' : 'CUSTOM')
 }
 
 function onEditorSettingsOutsidePointer(event: PointerEvent) {
@@ -1769,10 +1904,29 @@ function toggleRunResultPanel() {
 const runResultStatusShort = computed(() => {
   const r = runResult.value
   if (!r) return ''
-  if (r.terminalError) return r.judgeInfo?.message || '执行异常'
-  if (r.allSamplePassed && r.suspectedShortcut) return '输出匹配样例（请核对）'
-  if (r.allSamplePassed) return '样例全部通过'
-  return '部分样例未通过'
+  if (r.terminalError) return r.judgeInfo?.message || l('执行异常', 'Execution error')
+  if (r.allSamplePassed && r.suspectedShortcut)
+    return l('输出匹配样例（请核对）', 'Sample output matches (please verify)')
+  if (r.allSamplePassed) return l('样例全部通过', 'All samples passed')
+  return l('部分样例未通过', 'Some samples failed')
+})
+const runActionHint = computed(() => {
+  if (submitting.value) return l('正在评测隐藏用例，请稍候…', 'Judging hidden cases…')
+  if (running.value)
+    return l(
+      '正在运行代码，结果将在控制台显示…',
+      'Running code; results will appear in the console…',
+    )
+  if (!displayJudgeCases.value.length)
+    return isImageQuestion.value
+      ? l('这道图像题暂无公开样例，请联系出题人补充', 'No public image sample. Contact the author.')
+      : l(
+          '暂无公开样例；可在控制台填写输入后运行，或直接提交评测',
+          'No public samples. Run custom input or submit for judging.',
+        )
+  return runResult.value?.allSamplePassed === true
+    ? l('公开样例已通过，可以提交隐藏评测', 'Public samples passed. Ready to submit.')
+    : l('运行公开样例后，再提交隐藏评测', 'Run public samples before submitting.')
 })
 watch(code, (next) => {
   if (!monacoInstance || isSyncingFromEditor || aiEditWriting.value) return
@@ -1816,6 +1970,7 @@ watch(
     await nextTick()
     await nextTick()
     if (typeof window === 'undefined') return
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return
     const els = document.querySelectorAll('.solve-page .solve-stagger')
     if (!els.length) return
     gsap.fromTo(
@@ -1839,47 +1994,58 @@ watch(
     <section class="topbar panel solve-stagger">
       <div class="topbar-left">
         <div class="title-wrap">
-          <h1>{{ detail?.title || '作答页面' }}</h1>
+          <h1>
+            {{ detail?.title || transitionPreviewProblemTitle || l('作答页面', 'Solve problem') }}
+          </h1>
           <div class="problem-quick-meta">
             <span class="difficulty-pill">{{ difficultyLabel }}</span>
-            <span>通过率 {{ passRate }}</span>
-            <span>{{ Math.round((judgeConfigDisplay?.timeLimit ?? 0) / 1000) || 0 }} 秒</span>
+            <span>{{ l('通过率', 'Acceptance') }} {{ passRate }}</span>
+            <span
+              >{{ Math.round((judgeConfigDisplay?.timeLimit ?? 0) / 1000) || 0 }}
+              {{ l('秒', 's') }}</span
+            >
             <span>{{ Math.round((judgeConfigDisplay?.memoryLimit ?? 0) / 1024) }} MB</span>
           </div>
         </div>
       </div>
       <div class="stat-chips">
-        <span v-if="contestIdForSubmit" class="chip chip--contest">比赛作答</span>
-        <span v-else class="chip chip--practice">练习模式</span>
+        <span v-if="contestIdForSubmit" class="chip chip--contest">{{
+          l('比赛作答', 'Contest')
+        }}</span>
+        <span v-else class="chip chip--practice">{{ l('练习模式', 'Practice') }}</span>
         <button
           v-if="contestIdForSubmit"
           type="button"
           class="chip-link"
           @click="() => clearContestBindForProblem()"
         >
-          改为练习提交
+          {{ l('改为练习提交', 'Switch to practice') }}
         </button>
-        <div v-if="isDesktop" class="workspace-mode-switch" aria-label="工作区布局">
+        <div
+          v-if="isDesktop"
+          class="workspace-mode-switch"
+          :aria-label="l('工作区布局', 'Workspace layout')"
+        >
           <button
             type="button"
             :class="{ active: workspaceMode === 'split' }"
             @click="setWorkspaceMode('split')"
           >
-            分屏
+            {{ l('分屏', 'Split') }}
           </button>
           <button
             type="button"
             :class="{ active: workspaceMode === 'problem' }"
             @click="setWorkspaceMode('problem')"
           >
-            专注题面
+            {{ l('专注题面', 'Problem focus') }}
           </button>
           <button
             type="button"
             :class="{ active: workspaceMode === 'editor' }"
             @click="setWorkspaceMode('editor')"
           >
-            专注编码
+            {{ l('专注编码', 'Code focus') }}
           </button>
         </div>
       </div>
@@ -1889,7 +2055,7 @@ watch(
       v-if="contestIdForSubmit && contestDetailEndIso"
       class="contest-clock panel"
       :class="`contest-clock--${contestCountdownTone}`"
-      aria-label="赛场剩余时间"
+      :aria-label="l('赛场剩余时间', 'Contest time remaining')"
     >
       <div class="contest-clock__grid" aria-hidden="true" />
       <div class="contest-clock__glow contest-clock__glow--a" aria-hidden="true" />
@@ -1903,11 +2069,18 @@ watch(
               <span class="contest-clock__badge-dot" />
               LIVE ARENA
             </span>
-            <span class="contest-clock__badge-cn">赛场倒计时</span>
+            <span class="contest-clock__badge-cn">{{ l('赛场倒计时', 'Contest countdown') }}</span>
           </div>
-          <h2 class="contest-clock__title">{{ contestDetailName || '本场比赛' }}</h2>
+          <h2 class="contest-clock__title">
+            {{ contestDetailName || l('本场比赛', 'This contest') }}
+          </h2>
           <p class="contest-clock__hint">
-            剩余赛程可视化；顶部「评测限时」为单题程序运行上限，与本场比赛时长无关。
+            {{
+              l(
+                '剩余赛程可视化；顶部「评测限时」为单题程序运行上限，与本场比赛时长无关。',
+                'The time limit above applies to a single program run, not the whole contest.',
+              )
+            }}
           </p>
           <div class="contest-clock__progress contest-clock__progress--bar" aria-hidden="true">
             <div
@@ -1916,7 +2089,8 @@ watch(
             />
           </div>
           <p class="contest-clock__progress-label">
-            赛程进度 <strong>{{ Math.round(contestProgressPct) }}%</strong>
+            {{ l('赛程进度', 'Contest progress') }}
+            <strong>{{ Math.round(contestProgressPct) }}%</strong>
           </p>
         </div>
 
@@ -1937,7 +2111,7 @@ watch(
             </svg>
             <div class="contest-clock__ring-caption">
               <span class="contest-clock__ring-pct">{{ Math.round(contestRemainingPct) }}%</span>
-              <span class="contest-clock__ring-sub">剩余</span>
+              <span class="contest-clock__ring-sub">{{ l('剩余', 'left') }}</span>
             </div>
           </div>
 
@@ -1947,21 +2121,21 @@ watch(
             :aria-live="contestCountdownTone === 'critical' ? 'polite' : 'off'"
           >
             <div class="contest-clock__unit">
-              <span class="contest-clock__unit-label">时</span>
+              <span class="contest-clock__unit-label">{{ l('时', 'h') }}</span>
               <span class="contest-clock__block">{{
                 String(contestCountdownParts.h).padStart(2, '0')
               }}</span>
             </div>
             <span class="contest-clock__sep">:</span>
             <div class="contest-clock__unit">
-              <span class="contest-clock__unit-label">分</span>
+              <span class="contest-clock__unit-label">{{ l('分', 'm') }}</span>
               <span class="contest-clock__block">{{
                 String(contestCountdownParts.m).padStart(2, '0')
               }}</span>
             </div>
             <span class="contest-clock__sep">:</span>
             <div class="contest-clock__unit">
-              <span class="contest-clock__unit-label">秒</span>
+              <span class="contest-clock__unit-label">{{ l('秒', 's') }}</span>
               <span class="contest-clock__block">{{
                 String(contestCountdownParts.s).padStart(2, '0')
               }}</span>
@@ -1975,7 +2149,7 @@ watch(
       v-if="detail && isMobileLayout"
       class="workspace-mobile-tabs solve-stagger"
       role="tablist"
-      aria-label="题目与编辑器切换"
+      :aria-label="l('题目与编辑器切换', 'Switch between problem and editor')"
     >
       <button
         type="button"
@@ -1985,7 +2159,7 @@ watch(
         :aria-selected="mobileWorkspaceTab === 'problem'"
         @click="mobileWorkspaceTab = 'problem'"
       >
-        题目
+        {{ l('题目', 'Problem') }}
       </button>
       <button
         type="button"
@@ -1995,7 +2169,7 @@ watch(
         :aria-selected="mobileWorkspaceTab === 'editor'"
         @click="mobileWorkspaceTab = 'editor'"
       >
-        代码
+        {{ l('代码', 'Code') }}
       </button>
     </nav>
 
@@ -2023,28 +2197,28 @@ watch(
             :class="{ active: activeTab === 'statement' }"
             @click="activeTab = 'statement'"
           >
-            题目描述
+            {{ l('题目描述', 'Description') }}
           </button>
           <button
             class="tab-btn tab-btn--solution"
             :class="{ active: activeTab === 'solution' }"
             @click="activeTab = 'solution'"
           >
-            题解
+            {{ l('题解', 'Solutions') }}
           </button>
           <button
             class="tab-btn tab-btn--submissions"
             :class="{ active: activeTab === 'submissions' }"
             @click="activeTab = 'submissions'"
           >
-            提交记录
+            {{ l('提交记录', 'Submissions') }}
           </button>
           <button
             class="tab-btn tab-btn--stats"
             :class="{ active: activeTab === 'stats' }"
             @click="activeTab = 'stats'"
           >
-            统计
+            {{ l('统计', 'Statistics') }}
           </button>
         </div>
 
@@ -2074,26 +2248,60 @@ watch(
                 class="vision-problem"
               >
                 <div class="vision-problem__head">
-                  <strong>图像智能编程题</strong>
-                  <span>{{ visionModelLabel }} · 判题参数 {{ detail.countTolerance ?? 0 }}</span>
+                  <strong>{{ l('图像智能编程题', 'Image programming problem') }}</strong>
+                  <span
+                    >{{ visionModelLabel }} · {{ l('判题参数', 'Judging parameter') }}
+                    {{ detail.countTolerance ?? 0 }}</span
+                  >
                 </div>
-                <img :src="detail.imageUrl" alt="待识别题图" class="vision-problem__image" />
-                <p>请严格按照题目约定输出结果，避免额外日志影响判题。</p>
+                <img
+                  :src="detail.imageUrl"
+                  :alt="l('待识别题图', 'Problem image')"
+                  class="vision-problem__image"
+                />
                 <p>
-                  评测时会通过 stdin 提供沙箱内题图路径；可使用 Ultralytics、EasyOCR、OpenCV、Pillow
-                  和 NumPy<span
+                  {{
+                    l(
+                      '请严格按照题目约定输出结果，避免额外日志影响判题。',
+                      'Follow the required output format. Extra logging can cause a wrong answer.',
+                    )
+                  }}
+                </p>
+                <p>
+                  {{
+                    l(
+                      '评测时会通过 stdin 提供沙箱内题图路径；可使用',
+                      'The judge provides an image path through stdin. You can use',
+                    )
+                  }}
+                  {{
+                    l(
+                      'Ultralytics、EasyOCR、OpenCV、Pillow',
+                      'Ultralytics, EasyOCR, OpenCV, Pillow',
+                    )
+                  }}
+                  {{ l('和', 'and') }} NumPy<span
                     v-if="detail.visionModelKey?.startsWith('YOLO') || !detail.visionModelKey"
-                    >，本题模型位于 <code>{{ visionModelPath }}</code></span
-                  >。
+                    >{{ l('，本题模型位于', '. Model path:') }}
+                    <code>{{ visionModelPath }}</code></span
+                  >{{ l('。', '.') }}
                 </p>
               </section>
               <div ref="statementRef" class="statement oj-statement" v-html="statementHtml"></div>
             </div>
             <section class="judge-cases oj-card oj-card--samples">
               <header class="judge-cases__head">
-                <h3>输入输出样例</h3>
-                <span v-if="displayJudgeCases.length">共 {{ displayJudgeCases.length }} 组</span>
-                <span v-else>当前题目暂无样例</span>
+                <h3>{{ l('输入输出样例', 'Sample cases') }}</h3>
+                <span v-if="displayJudgeCases.length"
+                  >{{ l('共', 'Total') }} {{ displayJudgeCases.length }}
+                  {{ l('组', 'cases') }}</span
+                >
+                <span v-else>{{
+                  l(
+                    '暂无公开样例，仍可提交代码评测',
+                    'No public samples; code can still be submitted',
+                  )
+                }}</span>
               </header>
               <div v-if="displayJudgeCases.length" class="judge-cases__accordion">
                 <article
@@ -2109,52 +2317,62 @@ watch(
                     :aria-expanded="isSampleExpanded(idx)"
                     @click="toggleSampleAccordion(idx)"
                   >
-                    <span class="judge-case-card__toggle-title">样例 {{ idx + 1 }}</span>
+                    <span class="judge-case-card__toggle-title"
+                      >{{ l('样例', 'Sample') }} {{ idx + 1 }}</span
+                    >
                     <span class="judge-case-card__chev" aria-hidden="true">{{
                       isSampleExpanded(idx) ? '▾' : '▸'
                     }}</span>
                   </button>
-                  <p v-else class="judge-case-card__title">样例 {{ idx + 1 }}</p>
+                  <p v-else class="judge-case-card__title">
+                    {{ l('样例', 'Sample') }} {{ idx + 1 }}
+                  </p>
                   <div v-show="isSampleExpanded(idx)" class="judge-case-card__body">
                     <div class="judge-case-io judge-case-io--in">
                       <div class="judge-case-io__row">
-                        <span class="judge-case-io__label">输入</span>
+                        <span class="judge-case-io__label">{{ l('输入', 'Input') }}</span>
                         <button
                           type="button"
                           class="judge-case-io__copy btn-tap"
-                          @click="copyToClipboard(item.input, '已复制输入')"
+                          @click="copyToClipboard(item.input, l('已复制输入', 'Input copied'))"
                         >
-                          复制
+                          {{ l('复制', 'Copy') }}
                         </button>
                       </div>
-                      <pre class="judge-case-io__pre">{{ item.input || '(空)' }}</pre>
+                      <pre class="judge-case-io__pre">{{ item.input || l('(空)', '(empty)') }}</pre>
                     </div>
                     <div class="judge-case-io judge-case-io--out">
                       <div class="judge-case-io__row">
-                        <span class="judge-case-io__label">输出</span>
+                        <span class="judge-case-io__label">{{ l('输出', 'Output') }}</span>
                         <button
                           type="button"
                           class="judge-case-io__copy btn-tap"
-                          @click="copyToClipboard(item.output, '已复制输出')"
+                          @click="copyToClipboard(item.output, l('已复制输出', 'Output copied'))"
                         >
-                          复制
+                          {{ l('复制', 'Copy') }}
                         </button>
                       </div>
-                      <pre class="judge-case-io__pre">{{ item.output || '(空)' }}</pre>
+                      <pre class="judge-case-io__pre">{{
+                        item.output || l('(空)', '(empty)')
+                      }}</pre>
                     </div>
                   </div>
                 </article>
               </div>
-              <div v-else class="judge-cases__empty">请在题目编辑页配置判题用例后重试。</div>
+              <div v-else class="judge-cases__empty">
+                {{
+                  l('请在题目编辑页配置判题用例后重试。', 'Ask the author to add public samples.')
+                }}
+              </div>
             </section>
             <section class="judge-config oj-card oj-card--limits">
               <header class="judge-config__head">
-                <h3>判题配置</h3>
+                <h3>{{ l('判题配置', 'Judging limits') }}</h3>
               </header>
               <div v-if="judgeConfigDisplay" class="judge-config__grid">
                 <div class="judge-config__item judge-limit-card">
                   <span class="judge-limit-card__icon" aria-hidden="true">⏱️</span>
-                  <span class="judge-limit-card__key">时间限制</span>
+                  <span class="judge-limit-card__key">{{ l('时间限制', 'Time limit') }}</span>
                   <p class="judge-limit-card__val">
                     <strong>{{
                       Math.round((judgeConfigDisplay.timeLimit || 0) / 100) / 10
@@ -2165,7 +2383,7 @@ watch(
                 </div>
                 <div class="judge-config__item judge-limit-card">
                   <span class="judge-limit-card__icon" aria-hidden="true">💾</span>
-                  <span class="judge-limit-card__key">内存限制</span>
+                  <span class="judge-limit-card__key">{{ l('内存限制', 'Memory limit') }}</span>
                   <p class="judge-limit-card__val">
                     <strong>{{ Math.round((judgeConfigDisplay.memoryLimit || 0) / 1024) }}</strong>
                     <span class="judge-limit-card__unit">MB</span>
@@ -2173,14 +2391,16 @@ watch(
                 </div>
                 <div class="judge-config__item judge-limit-card">
                   <span class="judge-limit-card__icon" aria-hidden="true">📚</span>
-                  <span class="judge-limit-card__key">栈限制</span>
+                  <span class="judge-limit-card__key">{{ l('栈限制', 'Stack limit') }}</span>
                   <p class="judge-limit-card__val">
                     <strong>{{ Math.round((judgeConfigDisplay.stackLimit || 0) / 1024) }}</strong>
                     <span class="judge-limit-card__unit">MB</span>
                   </p>
                 </div>
               </div>
-              <div v-else class="judge-config__empty">当前题目未配置判题参数</div>
+              <div v-else class="judge-config__empty">
+                {{ l('当前题目未配置判题参数', 'No judging limits configured') }}
+              </div>
             </section>
           </template>
           <section
@@ -2199,16 +2419,23 @@ watch(
           >
             <header class="problem-tab-page__head">
               <div>
-                <h3>本题提交记录</h3>
-                <p>仅展示当前账号在这道题中的最近提交。</p>
+                <h3>{{ l('本题提交记录', 'Your submissions') }}</h3>
+                <p>
+                  {{
+                    l(
+                      '仅展示当前账号在这道题中的最近提交。',
+                      'Recent submissions for this problem and account.',
+                    )
+                  }}
+                </p>
               </div>
-              <span>{{ submissionHistory.length }} 条</span>
+              <span>{{ submissionHistory.length }} {{ l('条', 'records') }}</span>
             </header>
             <div v-if="!auth.isLoggedIn" class="problem-tab-empty">
-              <p>登录后可查看自己的提交记录。</p>
+              <p>{{ l('登录后可查看自己的提交记录。', 'Sign in to see your submissions.') }}</p>
             </div>
             <div v-else-if="!submissionHistory.length" class="problem-tab-empty">
-              <p>你还没有提交过这道题。</p>
+              <p>{{ l('你还没有提交过这道题。', 'You have not submitted this problem yet.') }}</p>
             </div>
             <div v-else class="problem-submit-list">
               <article
@@ -2219,7 +2446,7 @@ watch(
                   :class="{ 'is-accepted': /accept|通过|成功/i.test(submissionVerdict(item)) }"
                   >{{ submissionVerdict(item) }}</strong
                 >
-                <span>第 {{ item.submitNo ?? '-' }} 次</span>
+                <span>{{ l('第', 'Attempt') }} {{ item.submitNo ?? '-' }} {{ l('次', '') }}</span>
                 <span>{{ item.language || '-' }}</span>
                 <time>{{ formatDateTime(item.createTime) }}</time>
               </article>
@@ -2256,7 +2483,16 @@ watch(
       >
         <div class="answer-panel__editor-section">
           <div class="editor-head">
-            <h2 title="Ctrl+Space 打开补全；↑↓ 选择；Enter 或 Tab 插入。">代码编辑器</h2>
+            <h2
+              :title="
+                l(
+                  'Ctrl+Space 打开补全；↑↓ 选择；Enter 或 Tab 插入。',
+                  'Ctrl+Space for completion; arrows to select; Enter or Tab to insert.',
+                )
+              "
+            >
+              {{ l('代码编辑器', 'Code editor') }}
+            </h2>
             <div class="editor-tools">
               <a-select
                 v-model="language"
@@ -2264,103 +2500,154 @@ watch(
                 :options="availableLanguageOptions"
                 :disabled="isImageQuestion"
                 :filter-option="filterLanguageOption"
-                placeholder="语言"
+                :placeholder="l('语言', 'Language')"
                 style="width: 156px"
               />
               <a-button
                 class="ghost-btn editor-text-btn btn-tap study-copilot-launch"
                 :class="{ 'editor-icon-btn--on': studyCopilotOpen }"
                 @click="studyCopilotOpen = true"
-                >AI 助手</a-button
+                >{{ l('AI 助手', 'AI assistant') }}</a-button
               >
-              <a-button class="ghost-btn editor-text-btn btn-tap" @click="applyCodeTemplate"
-                >插入模板</a-button
-              >
+              <a-button class="ghost-btn editor-text-btn btn-tap" @click="applyCodeTemplate">{{
+                l('插入模板', 'Insert template')
+              }}</a-button>
               <div ref="editorSettingsRef" class="editor-settings">
                 <button
                   type="button"
                   class="editor-settings-trigger"
-                  aria-haspopup="menu"
+                  aria-haspopup="dialog"
                   :aria-expanded="editorSettingsOpen"
-                  @click.stop="editorSettingsOpen = !editorSettingsOpen"
+                  @click.stop="toggleEditorSettings"
                 >
-                  编辑器设置
+                  {{ l('编辑器设置', 'Editor settings') }}
                   <span aria-hidden="true">⌄</span>
                 </button>
                 <div
                   v-if="editorSettingsOpen"
                   class="editor-settings-popover"
-                  role="menu"
-                  aria-label="编辑器设置"
+                  role="dialog"
+                  :aria-label="l('编辑器设置', 'Editor settings')"
                 >
-                  <p class="editor-settings-popover__title">显示与布局</p>
-                  <button type="button" role="menuitem" @click="toggleEditorTheme">
-                    <span>编辑器主题</span><strong>{{ editorThemeLabel }}</strong>
+                  <p class="editor-settings-popover__title">{{ l('编辑器外观', 'Appearance') }}</p>
+                  <div
+                    class="editor-theme-options"
+                    role="group"
+                    :aria-label="l('编辑器主题', 'Editor theme')"
+                  >
+                    <button
+                      type="button"
+                      class="editor-theme-choice"
+                      :aria-pressed="editorTheme === 'light-pro'"
+                      @click="setEditorTheme('light-pro')"
+                    >
+                      {{ l('浅色', 'Light') }}
+                    </button>
+                    <button
+                      type="button"
+                      class="editor-theme-choice"
+                      :aria-pressed="editorTheme === 'dark-pro'"
+                      @click="setEditorTheme('dark-pro')"
+                    >
+                      {{ l('深色', 'Dark') }}
+                    </button>
+                    <button
+                      type="button"
+                      class="editor-theme-choice"
+                      :aria-pressed="editorTheme === 'ocean-pro'"
+                      @click="setEditorTheme('ocean-pro')"
+                    >
+                      {{ l('海蓝', 'Ocean') }}
+                    </button>
+                  </div>
+                  <p class="editor-settings-popover__title">{{ l('显示选项', 'Display') }}</p>
+                  <button
+                    type="button"
+                    :aria-pressed="showMinimap"
+                    @click="showMinimap = !showMinimap"
+                  >
+                    <span>{{ l('代码缩略图', 'Minimap') }}</span
+                    ><strong
+                      class="editor-setting-state"
+                      :class="{ 'editor-setting-state--on': showMinimap }"
+                      >{{ showMinimap ? l('已开启', 'On') : l('已关闭', 'Off') }}</strong
+                    >
                   </button>
-                  <button type="button" role="menuitem" @click="showMinimap = !showMinimap">
-                    <span>代码缩略图</span><strong>{{ showMinimap ? '显示' : '隐藏' }}</strong>
-                  </button>
-                  <button type="button" role="menuitem" @click="showWhitespace = !showWhitespace">
-                    <span>空白字符</span><strong>{{ showWhitespace ? '显示' : '隐藏' }}</strong>
+                  <button
+                    type="button"
+                    :aria-pressed="showWhitespace"
+                    @click="showWhitespace = !showWhitespace"
+                  >
+                    <span>{{ l('显示空白字符', 'Whitespace') }}</span
+                    ><strong
+                      class="editor-setting-state"
+                      :class="{ 'editor-setting-state--on': showWhitespace }"
+                      >{{ showWhitespace ? l('已开启', 'On') : l('已关闭', 'Off') }}</strong
+                    >
                   </button>
                   <div class="editor-settings-popover__divider" />
                   <button
                     v-if="isDesktop"
                     type="button"
-                    role="menuitem"
                     @click="
                       resetSplit()
                       editorSettingsOpen = false
                     "
                   >
-                    <span>恢复默认分栏</span><strong>50 / 50</strong>
+                    <span>{{ l('恢复默认分栏', 'Reset split') }}</span
+                    ><strong>50 / 50</strong>
                   </button>
                   <button
                     type="button"
-                    role="menuitem"
                     class="editor-settings-popover__danger"
-                    @click="
-                      clearCode()
-                      editorSettingsOpen = false
-                    "
+                    @click="confirmClearCode"
                   >
-                    <span>清空当前代码</span><strong>清空</strong>
+                    <span>{{ l('清空当前代码', 'Clear code') }}</span
+                    ><strong>{{ l('清空', 'Clear') }}</strong>
                   </button>
                 </div>
               </div>
-              <a-button class="ghost-btn editor-text-btn btn-tap" @click="toggleEditorFullscreen"
-                >全屏</a-button
-              >
+              <a-button class="ghost-btn editor-text-btn btn-tap" @click="toggleEditorFullscreen">{{
+                l('全屏', 'Fullscreen')
+              }}</a-button>
             </div>
           </div>
           <div v-if="!monacoLoadFailed" class="editor-hint-inline">
             <span
-              ><kbd>Ctrl</kbd>+<kbd>Enter</kbd> 运行 · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd
-                >Enter</kbd
-              >
-              提交</span
+              ><kbd>Ctrl</kbd>+<kbd>Enter</kbd> {{ l('运行', 'Run') }} ·
+              <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> {{ l('提交', 'Submit') }}</span
             >
             <span class="editor-live-status"
-              >{{ draftStatus === 'saving' ? '保存中…' : '草稿已保存' }} · 行
-              {{ cursorPosition.line }}，列 {{ cursorPosition.column }}</span
+              >{{
+                draftStatus === 'saving' ? l('保存中…', 'Saving…') : l('草稿已保存', 'Draft saved')
+              }}
+              · {{ l('行', 'Line') }} {{ cursorPosition.line }}，{{ l('列', 'column') }}
+              {{ cursorPosition.column }}</span
             >
           </div>
           <div v-else class="editor-hint-inline editor-hint-inline--warn">
-            Monaco 未加载，请刷新后使用补全。
+            {{
+              l(
+                'Monaco 未加载，请刷新后使用补全。',
+                'The editor did not load. Refresh to use code completion.',
+              )
+            }}
           </div>
           <div v-show="!monacoLoadFailed" ref="editorRef" class="code-area" />
           <div
             v-if="false && !monacoLoadFailed && syntaxIssues.length > 0"
             class="syntax-issues-panel"
             role="region"
-            aria-label="语法与编译问题"
+            :aria-label="l('语法与编译问题', 'Syntax and compiler issues')"
           >
             <div class="syntax-issues-panel__bar">
               <span class="syntax-issues-panel__title">
                 <span class="syntax-issues-panel__count">{{ syntaxIssues.length }}</span>
-                个问题
+                {{ l('个问题', 'issues') }}
               </span>
-              <span class="syntax-issues-panel__hint">点击条目定位到对应行</span>
+              <span class="syntax-issues-panel__hint">{{
+                l('点击条目定位到对应行', 'Click an issue to jump to its line')
+              }}</span>
             </div>
             <ul class="syntax-issues-panel__list">
               <li
@@ -2374,7 +2661,9 @@ watch(
                 @keydown.enter.prevent="jumpToSyntaxIssue(it.line, it.column)"
               >
                 <span class="syntax-issues-panel__loc">
-                  {{ it.severity === 'WARNING' ? '警告' : '错误' }} · L{{ it.line }}:{{ it.column }}
+                  {{ it.severity === 'WARNING' ? l('警告', 'Warning') : l('错误', 'Error') }} · L{{
+                    it.line
+                  }}:{{ it.column }}
                 </span>
                 <span class="syntax-issues-panel__msg">{{ it.message }}</span>
               </li>
@@ -2396,6 +2685,7 @@ watch(
           :style="{ height: consoleCollapsed ? '45px' : `${consoleHeight}px` }"
           :result="runResult"
           :running="running"
+          :has-public-samples="displayJudgeCases.length > 0"
           :image-question="isImageQuestion"
           :syntax-issues="syntaxIssues"
           @run-samples="runCode('SAMPLE')"
@@ -2405,9 +2695,19 @@ watch(
         />
 
         <div class="editor-primary-actions">
-          <span class="editor-primary-actions__hint">运行公开样例后，再提交隐藏评测</span>
-          <a-button class="run-btn btn-tap" :loading="running" @click="runCode('SAMPLE')"
-            >运行</a-button
+          <span class="editor-primary-actions__hint" role="status" aria-live="polite">{{
+            runActionHint
+          }}</span>
+          <a-button
+            class="run-btn btn-tap"
+            :loading="running"
+            :disabled="isImageQuestion && !displayJudgeCases.length"
+            @click="runCode(displayJudgeCases.length ? 'SAMPLE' : 'CUSTOM')"
+            >{{
+              !displayJudgeCases.length && !isImageQuestion
+                ? l('运行自定义输入', 'Run custom input')
+                : l('运行', 'Run')
+            }}</a-button
           >
           <a-button
             type="primary"
@@ -2415,20 +2715,26 @@ watch(
             :loading="submitting"
             @click="submitCode"
           >
-            {{ submitting ? '评测中…' : '提交代码' }}
+            {{ submitting ? l('评测中…', 'Judging…') : l('提交代码', 'Submit code') }}
           </a-button>
         </div>
 
         <div class="answer-panel__footer legacy-run-footer">
           <div class="submit-row">
-            <a-button class="run-btn btn-tap" :loading="running" @click="runCode()">运行</a-button>
+            <a-button
+              class="run-btn btn-tap"
+              :loading="running"
+              :disabled="isImageQuestion && !displayJudgeCases.length"
+              @click="runCode(displayJudgeCases.length ? 'SAMPLE' : 'CUSTOM')"
+              >{{ l('运行', 'Run') }}</a-button
+            >
             <a-button
               type="primary"
               class="submit-code-btn btn-tap"
               :loading="submitting"
               @click="submitCode"
             >
-              {{ submitting ? '评测中…' : '提交代码' }}
+              {{ submitting ? l('评测中…', 'Judging…') : l('提交代码', 'Submit code') }}
             </a-button>
           </div>
 
@@ -2461,19 +2767,27 @@ watch(
                     />
                   </svg>
                 </span>
-                <span class="run-result-shell__heading">运行结果</span>
+                <span class="run-result-shell__heading">{{ l('运行结果', 'Run result') }}</span>
                 <span class="run-result-shell__pill">{{ runResultStatusShort }}</span>
               </button>
               <div class="run-result-shell__actions">
                 <a-tooltip
-                  :content="runResultPanelExpanded ? '收起详情，腾出编辑区' : '展开查看完整对比'"
+                  :content="
+                    runResultPanelExpanded
+                      ? l('收起详情，腾出编辑区', 'Collapse details')
+                      : l('展开查看完整对比', 'Expand comparison')
+                  "
                 >
                   <button
                     type="button"
                     class="run-result-shell__toggle btn-tap"
                     :aria-expanded="runResultPanelExpanded"
                     aria-controls="run-result-detail-panel"
-                    :aria-label="runResultPanelExpanded ? '收起运行结果详情' : '展开运行结果详情'"
+                    :aria-label="
+                      runResultPanelExpanded
+                        ? l('收起运行结果详情', 'Collapse run details')
+                        : l('展开运行结果详情', 'Expand run details')
+                    "
                     @click.stop="toggleRunResultPanel"
                   >
                     <svg
@@ -2505,7 +2819,7 @@ watch(
                       />
                     </svg>
                     <span class="run-result-shell__toggle-text">{{
-                      runResultPanelExpanded ? '收起' : '展开'
+                      runResultPanelExpanded ? l('收起', 'Collapse') : l('展开', 'Expand')
                     }}</span>
                   </button>
                 </a-tooltip>
@@ -2517,36 +2831,41 @@ watch(
                 id="run-result-detail-panel"
                 class="run-result run-result--nested run-result--slide"
                 role="region"
-                aria-label="运行结果详情"
+                :aria-label="l('运行结果详情', 'Run details')"
               >
                 <div class="run-result__head run-result__head--chips-only">
                   <span
                     v-if="runResult.terminalError"
                     class="run-result__badge run-result__badge--err"
                   >
-                    {{ runResult.judgeInfo?.message || '执行异常' }}
+                    {{ runResult.judgeInfo?.message || l('执行异常', 'Execution error') }}
                   </span>
                   <span
                     v-else-if="runResult.allSamplePassed && runResult.suspectedShortcut"
                     class="run-result__badge run-result__badge--soft-warn"
-                    title="输出文本与公开样例一致，但代码可能未按题意读入或计算"
+                    :title="
+                      l(
+                        '输出文本与公开样例一致，但代码可能未按题意读入或计算',
+                        'Output matches samples, but the code may not read or compute as required',
+                      )
+                    "
                   >
-                    输出匹配样例（请核对逻辑）
+                    {{ l('输出匹配样例（请核对逻辑）', 'Sample output matches (check logic)') }}
                   </span>
                   <span
                     v-else-if="runResult.allSamplePassed"
                     class="run-result__badge run-result__badge--ok"
                   >
-                    样例全部通过
+                    {{ l('样例全部通过', 'All samples passed') }}
                   </span>
-                  <span v-else class="run-result__badge run-result__badge--warn"
-                    >样例未全部通过</span
-                  >
+                  <span v-else class="run-result__badge run-result__badge--warn">{{
+                    l('样例未全部通过', 'Some samples failed')
+                  }}</span>
                   <span v-if="runResult.judgeInfo?.time != null" class="run-result__meta">
-                    用时 {{ runResult.judgeInfo.time }} ms
+                    {{ l('用时', 'Time') }} {{ runResult.judgeInfo.time }} ms
                   </span>
                   <span v-if="runResult.judgeInfo?.memory != null" class="run-result__meta">
-                    内存 {{ runResult.judgeInfo.memory }} KB
+                    {{ l('内存', 'Memory') }} {{ runResult.judgeInfo.memory }} KB
                   </span>
                 </div>
                 <p v-if="runResult.warning" class="run-result__warn">
@@ -2556,9 +2875,12 @@ watch(
                   <li v-for="(h, hi) in runResult.hints" :key="hi">{{ h }}</li>
                 </ul>
                 <p v-if="!runResult.terminalError" class="run-result__hint">
-                  说明：「运行」仅在<strong>公开样例</strong>上对比<strong>标准输出</strong>与<strong>预期输出</strong>（右侧已列出<strong
-                    >输入 / 预期 / 你的输出</strong
-                  >）；无法代替对算法正确性的证明。隐藏用例请以<strong>提交代码</strong>评测为准。
+                  {{
+                    l(
+                      '运行仅验证公开样例，不能证明算法对隐藏用例也正确；完整评测请提交代码。',
+                      'Run checks only public samples. Submit code for judging against hidden cases.',
+                    )
+                  }}
                 </p>
                 <p
                   v-if="runResult.terminalError && runResult.sandboxMessage"
@@ -2579,20 +2901,22 @@ watch(
                     :class="{ 'run-case--fail': !c.passed }"
                   >
                     <div class="run-case__label">
-                      样例 {{ c.index }}
-                      <span class="run-case__tag">{{ c.passed ? '通过' : '未通过' }}</span>
+                      {{ l('样例', 'Sample') }} {{ c.index }}
+                      <span class="run-case__tag">{{
+                        c.passed ? l('通过', 'Passed') : l('未通过', 'Failed')
+                      }}</span>
                     </div>
                     <div class="run-case__grid">
                       <div>
-                        <span class="run-case__k">输入</span>
+                        <span class="run-case__k">{{ l('输入', 'Input') }}</span>
                         <pre class="run-case__pre">{{ c.input }}</pre>
                       </div>
                       <div>
-                        <span class="run-case__k">预期输出</span>
+                        <span class="run-case__k">{{ l('预期输出', 'Expected output') }}</span>
                         <pre class="run-case__pre">{{ c.expectedOutput }}</pre>
                       </div>
                       <div>
-                        <span class="run-case__k">你的输出</span>
+                        <span class="run-case__k">{{ l('你的输出', 'Your output') }}</span>
                         <pre class="run-case__pre">{{ c.actualOutput }}</pre>
                       </div>
                     </div>
@@ -2604,7 +2928,13 @@ watch(
         </div>
       </article>
     </section>
-    <div v-else class="empty-inline">{{ loading ? '题目加载中...' : '题目不存在或已删除' }}</div>
+    <div v-else class="empty-inline">
+      {{
+        loading
+          ? l('题目加载中...', 'Loading problem...')
+          : l('题目不存在或已删除', 'Problem not found')
+      }}
+    </div>
 
     <transition name="ac-pop">
       <aside v-if="acceptedCelebration" class="ac-celebration" role="status" aria-live="polite">
@@ -2612,8 +2942,11 @@ watch(
         <div>
           <strong>{{
             acceptedCelebration.attempt === 1
-              ? '一次通过！'
-              : `第 ${acceptedCelebration.attempt} 次提交通过`
+              ? l('一次通过！', 'Accepted on the first try!')
+              : l(
+                  `第 ${acceptedCelebration.attempt} 次提交通过`,
+                  `Accepted on attempt ${acceptedCelebration.attempt}`,
+                )
           }}</strong>
           <p>
             Accepted
@@ -2632,7 +2965,7 @@ watch(
             router.push({ name: 'contest-rank-detail', params: { contestId: contestIdForSubmit } })
           "
         >
-          返回比赛
+          {{ l('返回比赛', 'Back to contest') }}
         </button>
         <button
           v-else-if="nextRecommendation"
@@ -2641,9 +2974,11 @@ watch(
             router.push({ name: 'problem-solve', params: { id: nextRecommendation.questionId } })
           "
         >
-          下一题：{{ nextRecommendation.title }}
+          {{ l('下一题：', 'Next: ') }}{{ nextRecommendation.title }}
         </button>
-        <button v-else type="button" @click="router.push({ name: 'problems' })">返回题库</button>
+        <button v-else type="button" @click="router.push({ name: 'problems' })">
+          {{ l('返回题库', 'Back to problems') }}
+        </button>
       </aside>
     </transition>
 
@@ -5208,20 +5543,38 @@ watch(
   top: calc(100% + 8px);
   right: 0;
   box-sizing: border-box;
-  width: 236px;
+  width: min(300px, calc(100vw - 24px));
   overflow: hidden;
   border: 1px solid var(--app-border);
-  border-radius: 14px;
-  padding: 7px;
-  background: var(--app-surface);
-  box-shadow: 0 18px 45px rgba(40, 33, 24, 0.18);
+  border-radius: 16px;
+  padding: 10px;
+  background: var(--color-bg-1);
+  box-shadow: 0 16px 40px rgba(40, 33, 24, 0.16);
 }
 .editor-settings-popover__title {
   margin: 0;
-  padding: 6px 9px 7px;
+  padding: 8px 9px;
   color: var(--app-text-muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
+}
+.editor-theme-options {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  padding: 0 4px 8px;
+}
+.editor-settings-popover .editor-theme-choice {
+  justify-content: center;
+  min-height: 44px;
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+  font-weight: 700;
+}
+.editor-settings-popover .editor-theme-choice[aria-pressed='true'] {
+  border-color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 12%, var(--color-bg-1));
+  color: var(--app-accent);
 }
 .editor-settings-popover button {
   display: flex;
@@ -5229,7 +5582,7 @@ watch(
   justify-content: space-between;
   gap: 12px;
   width: 100%;
-  min-height: 42px;
+  min-height: 44px;
   border: 0;
   border-radius: 9px;
   padding: 0 10px;
@@ -5237,7 +5590,7 @@ watch(
   color: var(--app-text);
   cursor: pointer;
   text-align: left;
-  font-size: 12px;
+  font-size: 13px;
 }
 .editor-settings-popover button:hover,
 .editor-settings-popover button:focus-visible {
@@ -5248,6 +5601,12 @@ watch(
   flex: 0 0 auto;
   color: var(--app-accent);
   font-size: 11px;
+}
+.editor-settings-popover button .editor-setting-state {
+  color: var(--app-text-muted);
+}
+.editor-settings-popover button .editor-setting-state--on {
+  color: var(--app-accent);
 }
 .editor-settings-popover__divider {
   height: 1px;

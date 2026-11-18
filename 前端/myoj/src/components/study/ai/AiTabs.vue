@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { inject } from 'vue'
 import { AI_COPILOT_ACTIVE_TAB_KEY, type AiCopilotTabId } from './keys'
+import { localize as l } from '@/i18n/locale'
 
 const activeTab = inject(AI_COPILOT_ACTIVE_TAB_KEY)!
 if (!activeTab) throw new Error('AiTabs: missing AI_COPILOT_ACTIVE_TAB_KEY')
@@ -12,7 +13,7 @@ const tabs: Array<{ id: AiCopilotTabId; label: string }> = [
 </script>
 
 <template>
-  <nav class="chat-tabs" aria-label="助手视图">
+  <nav class="chat-tabs" :aria-label="l('助手视图', 'Assistant views')">
     <button
       v-for="tab in tabs"
       :key="tab.id"
@@ -21,7 +22,7 @@ const tabs: Array<{ id: AiCopilotTabId; label: string }> = [
       :aria-current="activeTab === tab.id ? 'page' : undefined"
       @click="activeTab = tab.id"
     >
-      {{ tab.label }}
+      {{ tab.id === 'chat' ? l('对话', 'Chat') : l('快捷提问', 'Quick prompts') }}
     </button>
   </nav>
 </template>

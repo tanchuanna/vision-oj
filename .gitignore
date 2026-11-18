@@ -17,6 +17,7 @@ Thumbs.db
 .env.*
 !.env.example
 DELIVERY_MANIFEST.json
+/package-lock.json
 
 **/application-local.yml
 **/*.private-backup.yml
@@ -60,6 +61,7 @@ pnpm-debug.log*
 
 # Sandbox temp code
 **/tmpCode/
+.data-sources/
 
 # Accidental deps under Java module
 spingboot-init/node_modules/

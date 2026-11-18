@@ -1,21 +1,17 @@
 -- =============================================================================
--- 码跃 OJ · 完整数据库（tan 库、业务表、管理员、40 道题、示例竞赛）
+-- 码跃 OJ · 完整数据库（业务表、管理员、40 道题、示例竞赛）
 --
--- 执行一次即可：
---   mysql -u root -p < schema.sql
+-- 先创建目标库，再明确指定数据库执行：
+--   mysql -u root -p test < schema.sql     -- 本地测试库
+--   mysql -u root -p tan < schema.sql      -- 新建正式库
 --
 -- 预置管理员：admin / 123456（需 app.security.pepper 为空，见 application.yml 默认）
--- 已有 tan 库可重复执行：缺表会创建，已列出的缺列会补齐；已有题目不覆盖
+-- 已有库可重复执行：缺表会创建，已列出的缺列会补齐；已有题目不覆盖
+-- 不使用 USE 语句，目标数据库由执行命令指定。
 -- =============================================================================
 
 SET NAMES utf8mb4;
 SET FOREIGN_KEY_CHECKS = 0;
-
-CREATE DATABASE IF NOT EXISTS `tan`
-  DEFAULT CHARACTER SET utf8mb4
-  DEFAULT COLLATE utf8mb4_unicode_ci;
-
-USE `tan`;
 
 -- ---------------------------------------------------------------------------
 -- 用户
@@ -128,6 +124,19 @@ CREATE TABLE IF NOT EXISTS `question` (
     KEY `idx_question_title` (`title`(64)),
     KEY `idx_question_stats` (`is_delete`, `accepted_num` DESC, `submit_num` DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='题目';
+
+-- 外部题目来源；不将外部平台的提交数或参与者写入本站业务表。
+CREATE TABLE IF NOT EXISTS `question_import_source` (
+    `question_id` BIGINT NOT NULL,
+    `source_key` VARCHAR(80) NOT NULL,
+    `external_id` VARCHAR(255) NOT NULL,
+    `source_url` VARCHAR(1024) NOT NULL,
+    `license_id` VARCHAR(64) NOT NULL,
+    `source_commit` CHAR(40) NOT NULL,
+    `imported_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`question_id`),
+    UNIQUE KEY `uk_question_import_source` (`source_key`, `external_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='题目来源';
 
 CREATE TABLE IF NOT EXISTS `question_submit` (
     `id` BIGINT NOT NULL COMMENT '提交 id',
@@ -400,7 +409,46 @@ CREATE TABLE IF NOT EXISTS `site_announcement` (
     KEY `idx_sa_list` (`status`, `is_delete`, `published_at` DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='全站公告';
 
+-- 老师一键布置练习：一次布置 = 一条 assignment + N 条 item；完成度按提交记录实时计算，不回写
+CREATE TABLE IF NOT EXISTS `practice_assignment` (
+    `id` BIGINT NOT NULL,
+    `teacher_id` BIGINT NOT NULL,
+    `student_id` BIGINT NOT NULL,
+    `title` VARCHAR(120) NOT NULL,
+    `remark` VARCHAR(500) DEFAULT NULL,
+    `due_time` DATETIME DEFAULT NULL,
+    `item_count` INT NOT NULL DEFAULT 0,
+    `status` TINYINT NOT NULL DEFAULT 1 COMMENT '1进行中 2已结束',
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `is_delete` TINYINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`id`),
+    KEY `idx_pa_student` (`student_id`, `is_delete`, `create_time` DESC),
+    KEY `idx_pa_teacher` (`teacher_id`, `is_delete`, `create_time` DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='老师布置的个性化练习';
+
+CREATE TABLE IF NOT EXISTS `practice_assignment_item` (
+    `id` BIGINT NOT NULL,
+    `assignment_id` BIGINT NOT NULL,
+    `question_id` BIGINT NOT NULL,
+    `sort_order` INT NOT NULL DEFAULT 0,
+    `focus_tag` VARCHAR(64) DEFAULT NULL,
+    `reason` VARCHAR(255) DEFAULT NULL,
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    `is_delete` TINYINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uk_pai_assignment_question` (`assignment_id`, `question_id`),
+    KEY `idx_pai_assignment` (`assignment_id`, `sort_order`),
+    KEY `idx_pai_question` (`question_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='练习题目明细';
+
 SET FOREIGN_KEY_CHECKS = 1;
+
+-- 历史角色值归一化：只处理已知旧值，未知角色保持原样供人工核对。
+UPDATE `user` SET `user_role` = 'admin' WHERE `user_role` = '管理员';
+UPDATE `user` SET `user_role` = 'user' WHERE `user_role` IN ('普通用户', '学生', 'student');
+UPDATE `user` SET `user_role` = 'teacher' WHERE `user_role` IN ('教师', '老师');
 
 -- ---------------------------------------------------------------------------
 -- 旧库兼容：user 表缺列时自动补齐（新库已含下列字段，执行无影响）

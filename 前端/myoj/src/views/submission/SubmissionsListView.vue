@@ -8,11 +8,14 @@ import { BarChart, LineChart, PieChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
 import { useAuthStore } from '@/stores/auth'
+import { aiModelsApi, type AiSavedConfig } from '@/api/aiModels'
 import {
+  diagnoseSubmission,
   getSubmissionDetail,
   getSubmissionOverview,
   getSubmissionPage,
   type SubmissionDetail,
+  type SubmissionDiagnosis,
   type SubmissionFilters,
   type SubmissionListItem,
   type SubmissionOverview,
@@ -32,7 +35,8 @@ use([
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
-const routeQueryText = (value: unknown) => Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '')
+const routeQueryText = (value: unknown) =>
+  Array.isArray(value) ? String(value[0] ?? '') : String(value ?? '')
 const requestedScope = routeQueryText(route.query.scope).trim().toUpperCase()
 const initialScope: SubmissionScope = requestedScope === 'MANAGED' ? 'MANAGED' : 'SELF'
 const requestedStudentId = routeQueryText(route.query.userId).trim()
@@ -47,7 +51,9 @@ const current = ref(1)
 const pageSize = ref(15)
 const rangeDays = ref<7 | 30 | 90>(30)
 const scope = ref<SubmissionScope>(initialScope)
-const selectedUserId = ref(initialScope === 'MANAGED' && /^\d+$/.test(requestedStudentId) ? requestedStudentId : '')
+const selectedUserId = ref(
+  initialScope === 'MANAGED' && /^\d+$/.test(requestedStudentId) ? requestedStudentId : '',
+)
 const selectedStudentName = ref(routeQueryText(route.query.studentName).trim())
 const questionKeyword = ref('')
 const userKeyword = ref('')
@@ -59,6 +65,13 @@ const sort = ref<'ASC' | 'DESC'>('DESC')
 const filterOpen = ref(false)
 const detailOpen = ref(false)
 const detailFullscreen = ref(false)
+const diagnosis = ref<SubmissionDiagnosis | null>(null)
+const diagnosisLoading = ref(false)
+const diagnosisError = ref('')
+type DiagnosisModelOption = { value: string; label: string }
+const modelOptions = ref<DiagnosisModelOption[]>([])
+const selectedModel = ref('')
+const modelLoading = ref(false)
 const highlightedIds = ref(new Set<string>())
 const liveNow = ref(Date.now())
 const lastSyncAt = ref(Date.now())
@@ -84,9 +97,13 @@ const verdictMeta: Record<string, { label: string; abbr: string; tone: string; i
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 const canManage = computed(() => auth.isAdmin === true || auth.isTeacher === true)
-const managedScopeLabel = computed(() => selectedUserId.value
-  ? selectedStudentName.value || `学生 ${selectedUserId.value}`
-  : (auth.isAdmin ? '全部学生' : '我的学生'))
+const managedScopeLabel = computed(() =>
+  selectedUserId.value
+    ? selectedStudentName.value || `学生 ${selectedUserId.value}`
+    : auth.isAdmin
+      ? '全部学生'
+      : '我的学生',
+)
 const hasPending = computed(() => rows.value.some((row) => row.status === 0 || row.status === 1))
 const metricCards = computed(() => {
   const data = overview.value
@@ -329,6 +346,9 @@ async function openDetail(row: SubmissionListItem) {
   detailOpen.value = true
   detail.value = null
   detailLoading.value = true
+  diagnosis.value = null
+  diagnosisError.value = ''
+  void loadDiagnosisModels()
   await router.replace({ query: { ...route.query, submissionId: row.submissionId } })
   try {
     detail.value = await getSubmissionDetail(row.submissionId)
@@ -346,9 +366,56 @@ function closeDetail() {
   detailOpen.value = false
   detailFullscreen.value = false
   detail.value = null
+  diagnosis.value = null
+  diagnosisLoading.value = false
+  diagnosisError.value = ''
   const query = { ...route.query }
   delete query.submissionId
   void router.replace({ query })
+}
+
+async function runDiagnosis() {
+  if (!detail.value || diagnosisLoading.value) return
+  diagnosisLoading.value = true
+  diagnosisError.value = ''
+  const picked = selectedModel.value
+  const model =
+    !picked || picked === 'SITE_DEFAULT'
+      ? { providerCode: picked || undefined }
+      : { providerCode: picked.split('::')[0], modelId: picked.split('::')[1] }
+  try {
+    diagnosis.value = await diagnoseSubmission(detail.value.submissionId, model)
+  } catch (error) {
+    diagnosisError.value = error instanceof Error ? error.message : 'AI 诊断失败，请稍后重试'
+  } finally {
+    diagnosisLoading.value = false
+  }
+}
+
+/** 诊断模型下拉：个人已保存平台 + 站点默认，个人配置排在前面。 */
+async function loadDiagnosisModels() {
+  modelLoading.value = true
+  try {
+    const [catalog, mine] = await Promise.all([
+      aiModelsApi.catalog().catch(() => null),
+      aiModelsApi.mine().catch(() => [] as AiSavedConfig[]),
+    ])
+    const nameOf = new Map((catalog?.providers ?? []).map((p) => [p.code, p.name]))
+    const saved = Array.isArray(mine) ? mine : []
+    const options: DiagnosisModelOption[] = saved.map((cfg) => ({
+      value: `${cfg.providerCode}::${cfg.modelId}`,
+      label: `${nameOf.get(cfg.providerCode) || cfg.providerCode} · ${cfg.modelId}`,
+    }))
+    if (catalog?.siteDefaultAvailable) {
+      options.push({ value: 'SITE_DEFAULT', label: `站点默认 · ${catalog.siteDefaultModel}` })
+    }
+    modelOptions.value = options
+    if (!options.some((option) => option.value === selectedModel.value)) {
+      selectedModel.value = options[0]?.value ?? ''
+    }
+  } finally {
+    modelLoading.value = false
+  }
 }
 
 async function highlightCode() {
@@ -514,8 +581,13 @@ onBeforeUnmount(() => {
     </div>
 
     <div v-if="scope === 'MANAGED' && selectedUserId" class="student-scope-banner">
-      <div><span>当前查看</span><strong>{{ managedScopeLabel }}</strong><small>ID：{{ selectedUserId }}</small></div>
-      <button type="button" @click="clearSelectedStudent">查看{{ auth.isAdmin ? '全部学生' : '我的全部学生' }}</button>
+      <div>
+        <span>当前查看</span><strong>{{ managedScopeLabel }}</strong
+        ><small>ID：{{ selectedUserId }}</small>
+      </div>
+      <button type="button" @click="clearSelectedStudent">
+        查看{{ auth.isAdmin ? '全部学生' : '我的全部学生' }}
+      </button>
     </div>
 
     <section class="metrics-grid" :aria-busy="overviewLoading">
@@ -713,7 +785,7 @@ onBeforeUnmount(() => {
             type="button"
             :disabled="current <= 1"
             @click="
-              current--;
+              current--
               loadPage()
             "
           >
@@ -723,7 +795,7 @@ onBeforeUnmount(() => {
             type="button"
             :disabled="current >= totalPages"
             @click="
-              current++;
+              current++
               loadPage()
             "
           >
@@ -786,6 +858,71 @@ onBeforeUnmount(() => {
                 <button type="button" @click="copyCode">复制代码</button>
               </div>
               <pre><code id="submission-code">{{ detail.code }}</code></pre>
+            </section>
+            <section v-if="(detail.status ?? 0) >= 2" class="ai-diagnosis">
+              <div class="ai-diagnosis__head">
+                <div>
+                  <h3>AI 判题诊断</h3>
+                  <p>定位错因并给出三层提示，不会直接给完整答案</p>
+                </div>
+                <div class="ai-diagnosis__actions">
+                  <select
+                    v-if="modelOptions.length"
+                    v-model="selectedModel"
+                    class="ai-diagnosis__model"
+                    :disabled="diagnosisLoading"
+                    aria-label="选择诊断模型"
+                  >
+                    <option
+                      v-for="option in modelOptions"
+                      :key="option.value"
+                      :value="option.value"
+                    >
+                      {{ option.label }}
+                    </option>
+                  </select>
+                  <RouterLink
+                    v-else-if="!modelLoading"
+                    class="ai-diagnosis__setup"
+                    :to="{ name: 'account-settings' }"
+                  >
+                    先配置模型
+                  </RouterLink>
+                  <button
+                    class="ai-diagnosis__btn"
+                    type="button"
+                    :disabled="diagnosisLoading || modelLoading"
+                    @click="runDiagnosis"
+                  >
+                    {{ diagnosisLoading ? '分析中…' : diagnosis ? '重新分析' : '开始诊断' }}
+                  </button>
+                </div>
+              </div>
+              <p v-if="diagnosisLoading" class="ai-diagnosis__loading">
+                正在结合题面、代码和评测信息分析，请稍候…
+              </p>
+              <p v-if="diagnosisError" class="ai-diagnosis__error">{{ diagnosisError }}</p>
+              <div v-if="diagnosis" class="ai-diagnosis__result">
+                <p class="ai-diagnosis__headline">{{ diagnosis.headline }}</p>
+                <p v-if="diagnosis.rootCause" class="ai-diagnosis__root">
+                  {{ diagnosis.rootCause }}
+                </p>
+                <ul v-if="diagnosis.evidence?.length" class="ai-diagnosis__evidence">
+                  <li v-for="(item, index) in diagnosis.evidence" :key="`e-${index}`">
+                    {{ item }}
+                  </li>
+                </ul>
+                <ol v-if="diagnosis.hints?.length" class="ai-diagnosis__hints">
+                  <li v-for="(item, index) in diagnosis.hints" :key="`h-${index}`">{{ item }}</li>
+                </ol>
+                <p v-if="diagnosis.nextStep" class="ai-diagnosis__next">
+                  下一步：{{ diagnosis.nextStep }}
+                </p>
+                <pre
+                  v-if="diagnosis.snippet"
+                  class="ai-diagnosis__snippet"
+                ><code>{{ diagnosis.snippet }}</code></pre>
+              </div>
             </section>
           </div>
           <footer class="drawer-footer">
@@ -924,10 +1061,33 @@ onBeforeUnmount(() => {
   background: #eef8f6;
   color: #31504b;
 }
-.student-scope-banner > div { display: flex; align-items: baseline; gap: 9px; min-width: 0; }
-.student-scope-banner span,.student-scope-banner small { color: #6c7d79; font-size: 12px; }
-.student-scope-banner strong { overflow: hidden; color: #0a756a; text-overflow: ellipsis; white-space: nowrap; }
-.student-scope-banner button { min-height: 36px; padding: 0 13px; border: 1px solid #9bcfc6; border-radius: 9px; background: #fff; color: #087b6e; font-weight: 700; cursor: pointer; }
+.student-scope-banner > div {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  min-width: 0;
+}
+.student-scope-banner span,
+.student-scope-banner small {
+  color: #6c7d79;
+  font-size: 12px;
+}
+.student-scope-banner strong {
+  overflow: hidden;
+  color: #0a756a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.student-scope-banner button {
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid #9bcfc6;
+  border-radius: 9px;
+  background: #fff;
+  color: #087b6e;
+  font-weight: 700;
+  cursor: pointer;
+}
 .metrics-grid {
   max-width: 1600px;
   margin: 16px auto;
@@ -1039,10 +1199,9 @@ onBeforeUnmount(() => {
 }
 .filter-bar {
   display: grid;
-  grid-template-columns: minmax(180px, 1.3fr) minmax(130px, 0.8fr) minmax(120px, 0.75fr) repeat(
-      2,
-      minmax(130px, 0.8fr)
-    ) minmax(120px, 0.7fr) auto;
+  grid-template-columns:
+    minmax(180px, 1.3fr) minmax(130px, 0.8fr) minmax(120px, 0.75fr) repeat(2, minmax(130px, 0.8fr))
+    minmax(120px, 0.7fr) auto;
   gap: 10px;
   align-items: end;
   padding: 16px 0;
@@ -1648,5 +1807,205 @@ td small {
     transform: scale(1.2);
     opacity: 1;
   }
+}
+
+/* AI 判题诊断 */
+.ai-diagnosis {
+  margin: 0 0 18px;
+  padding: 18px;
+  border-radius: 16px;
+  border: 1px solid #d5e8e2;
+  background: linear-gradient(160deg, #f0f9f6 0%, #fbfdfc 62%);
+}
+.ai-diagnosis__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.ai-diagnosis__head h3 {
+  margin: 0;
+  font-size: 15px;
+  color: #134e46;
+}
+.ai-diagnosis__head p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #6b7c78;
+}
+.ai-diagnosis__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ai-diagnosis__model {
+  max-width: 210px;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid #cfe2dc;
+  border-radius: 9px;
+  background: #fff;
+  color: #1f3a34;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.ai-diagnosis__model:focus {
+  outline: 2px solid rgba(18, 143, 128, 0.25);
+  outline-offset: 1px;
+  border-color: #128f80;
+}
+.ai-diagnosis__setup {
+  color: #128f80;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.ai-diagnosis__setup:hover {
+  text-decoration: underline;
+}
+.ai-diagnosis__btn {
+  flex: none;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 9px;
+  background: #128f80;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    transform 0.1s ease;
+}
+.ai-diagnosis__btn:hover:not(:disabled) {
+  background: #0f7a6d;
+}
+.ai-diagnosis__btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.ai-diagnosis__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.ai-diagnosis__loading,
+.ai-diagnosis__error {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+.ai-diagnosis__loading {
+  color: #4b6b64;
+}
+.ai-diagnosis__error {
+  color: #b42318;
+}
+.ai-diagnosis__result {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ai-diagnosis__headline {
+  margin: 0;
+  padding-left: 10px;
+  border-left: 3px solid #128f80;
+  font-size: 14px;
+  font-weight: 700;
+  color: #11463f;
+}
+.ai-diagnosis__root {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #33413e;
+  white-space: pre-wrap;
+}
+.ai-diagnosis__evidence {
+  margin: 0;
+  padding: 10px 12px 10px 26px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: #4d5c58;
+}
+.ai-diagnosis__hints {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  counter-reset: ai-hint;
+}
+.ai-diagnosis__hints li {
+  position: relative;
+  padding: 9px 12px 9px 38px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #e2eeea;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #2f3d39;
+  counter-increment: ai-hint;
+}
+.ai-diagnosis__hints li::before {
+  content: counter(ai-hint);
+  position: absolute;
+  left: 11px;
+  top: 9px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #128f80;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+.ai-diagnosis__next {
+  margin: 0;
+  font-size: 12.5px;
+  color: #146f65;
+  font-weight: 600;
+}
+.ai-diagnosis__snippet {
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: #16211f;
+  color: #d5e7e1;
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+:global(html[data-theme='dark']) .ai-diagnosis {
+  background: #19211f;
+  border-color: #2e3a36;
+}
+:global(html[data-theme='dark']) .ai-diagnosis__head h3,
+:global(html[data-theme='dark']) .ai-diagnosis__headline {
+  color: #d8efe9;
+}
+:global(html[data-theme='dark']) .ai-diagnosis__root,
+:global(html[data-theme='dark']) .ai-diagnosis__evidence,
+:global(html[data-theme='dark']) .ai-diagnosis__hints li {
+  color: #bac6c1;
+}
+:global(html[data-theme='dark']) .ai-diagnosis__evidence {
+  background: #202a27;
+}
+:global(html[data-theme='dark']) .ai-diagnosis__hints li {
+  background: #202a27;
+  border-color: #2e3a36;
+}
+:global(html[data-theme='dark']) .ai-diagnosis__model {
+  background: #202a27;
+  border-color: #2e3a36;
+  color: #d5e7e1;
 }
 </style>

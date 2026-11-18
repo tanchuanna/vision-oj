@@ -9,6 +9,7 @@ import com.spingbootinit.judo.codesandbox.CodeSandboxFactory;
 import com.spingbootinit.judo.codesandbox.CodeSandboxProxy;
 import com.spingbootinit.judo.codesandbox.model.ExecuteCodeRequest;
 import com.spingbootinit.judo.codesandbox.model.ExecuteCodeResponse;
+import com.spingbootinit.judo.strategy.ImageJudgeConfigPolicy;
 import com.spingbootinit.judo.strategy.ImageOutputJudgeStrategy;
 import com.spingbootinit.judo.strategy.ObjectCountJudgeStrategy;
 import com.spingbootinit.model.dto.question.JudgeCase;
@@ -212,12 +213,18 @@ public class QuestionRunServiceImpl implements QuestionRunService {
             boolean passed;
             if ("IMAGE_OBJECT_COUNT".equalsIgnoreCase(question.getQuestionType())) {
                 int tolerance = question.getCountTolerance() == null ? 0 : question.getCountTolerance();
-                passed = ObjectCountJudgeStrategy.outputsMatch(jc.getOutput(), actual, tolerance);
+                passed = ObjectCountJudgeStrategy.outputsMatch(jc.getOutput(), actual,
+                        ImageJudgeConfigPolicy.countTolerance(question.getJudgeConfig(), tolerance));
             } else if (question.getQuestionType() != null && question.getQuestionType().toUpperCase().startsWith("IMAGE_")) {
                 int tolerance = question.getCountTolerance() == null ? 0 : question.getCountTolerance();
-                passed = ImageOutputJudgeStrategy.outputsMatch(question.getQuestionType(), jc.getOutput(), actual, tolerance);
+                passed = ImageOutputJudgeStrategy.outputsMatch(question.getQuestionType(), jc.getOutput(), actual,
+                        tolerance, question.getJudgeConfig());
             } else {
-                passed = Objects.equals(normalize(jc.getOutput()), normalize(actual));
+                Double floatTolerance = question.getJudgeConfig() == null
+                        ? null : question.getJudgeConfig().getFloatTolerance();
+                passed = floatTolerance == null
+                        ? Objects.equals(normalize(jc.getOutput()), normalize(actual))
+                        : com.spingbootinit.judo.strategy.TextOutputMatcher.matches(jc.getOutput(), actual, floatTolerance);
             }
             if (!passed) {
                 allPass = false;

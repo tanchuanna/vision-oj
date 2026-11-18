@@ -4,6 +4,7 @@ import { Message } from '@arco-design/web-vue'
 import { RouterLink } from 'vue-router'
 import { useAiModelsStore } from '@/stores/aiModels'
 import AiProviderAvatar from './AiProviderAvatar.vue'
+import { localize as l } from '@/i18n/locale'
 
 const props = defineProps<{ disabled?: boolean; compact?: boolean }>()
 const emit = defineEmits<{ change: [] }>()
@@ -26,14 +27,20 @@ const hasUsableModel = computed(() =>
     ? models.catalog.siteDefaultAvailable
     : readyProviders.value.some((item) => item.providerCode === models.selectedProvider),
 )
-const currentLabel = computed(() => (hasUsableModel.value ? models.currentLabel : '选择模型'))
+const currentLabel = computed(() =>
+  hasUsableModel.value ? models.currentLabel : l('选择模型', 'Choose model'),
+)
 
 function onOutsidePointer(event: PointerEvent) {
   if (pickerRef.value && !pickerRef.value.contains(event.target as Node)) menuOpen.value = false
 }
 onMounted(() => {
   document.addEventListener('pointerdown', onOutsidePointer)
-  void models.load().catch(() => Message.error('模型列表加载失败，请稍后重试'))
+  void models
+    .load()
+    .catch(() =>
+      Message.error(l('模型列表加载失败，请稍后重试', 'Could not load models. Try again later.')),
+    )
 })
 onBeforeUnmount(() => document.removeEventListener('pointerdown', onOutsidePointer))
 watch(
@@ -63,7 +70,9 @@ function pickProvider(code: string, modelId: string) {
 function changeModel() {
   const value = draftModel.value.trim()
   if (!/^[A-Za-z0-9_./:-]{1,100}$/.test(value)) {
-    Message.warning('请输入有效的模型名称，最多 100 字符')
+    Message.warning(
+      l('请输入有效的模型名称，最多 100 字符', 'Enter a valid model name, up to 100 characters'),
+    )
     draftModel.value = models.selectedModel
     return
   }
@@ -90,7 +99,10 @@ function changeModel() {
       ><span class="compact-chevron" aria-hidden="true">⌄</span>
     </button>
     <div v-if="menuOpen" class="compact-menu" role="menu">
-      <div class="compact-menu-title">选择聊天模型 <small>仅显示本账号已配置的厂商</small></div>
+      <div class="compact-menu-title">
+        {{ l('选择聊天模型', 'Choose chat model') }}
+        <small>{{ l('仅显示本账号已配置的厂商', 'Configured providers only') }}</small>
+      </div>
       <button
         v-if="models.catalog.siteDefaultAvailable"
         type="button"
@@ -99,7 +111,9 @@ function changeModel() {
         :aria-checked="models.selectedProvider === 'SITE_DEFAULT'"
         @click="pickProvider('SITE_DEFAULT', '')"
       >
-        <AiProviderAvatar provider-code="SITE_DEFAULT" :size="22" /><span>站点默认</span
+        <AiProviderAvatar provider-code="SITE_DEFAULT" :size="22" /><span>{{
+          l('站点默认', 'Site default')
+        }}</span
         ><small>{{ models.catalog.siteDefaultModel }}</small>
       </button>
       <button
@@ -120,15 +134,15 @@ function changeModel() {
         v-if="models.selectedProvider !== 'SITE_DEFAULT' && hasUsableModel"
         class="compact-custom"
       >
-        <label for="compact-model-id">其他模型 ID</label>
+        <label for="compact-model-id">{{ l('其他模型 ID', 'Other model ID') }}</label>
         <div>
           <input
             id="compact-model-id"
             v-model="draftModel"
             :list="`ai-models-${models.selectedProvider}`"
-            placeholder="输入模型 ID"
+            :placeholder="l('输入模型 ID', 'Enter model ID')"
             @keydown.enter.prevent="changeModel"
-          /><button type="button" @click="changeModel">使用</button>
+          /><button type="button" @click="changeModel">{{ l('使用', 'Use') }}</button>
         </div>
         <datalist :id="`ai-models-${models.selectedProvider}`">
           <option v-for="name in options" :key="name" :value="name" />
@@ -140,23 +154,23 @@ function changeModel() {
         @click="menuOpen = false"
         >{{
           readyProviders.length || models.catalog.siteDefaultAvailable
-            ? '管理模型与 API Key'
-            : '先添加自己的模型'
+            ? l('管理模型与 API Key', 'Manage models and API keys')
+            : l('先添加自己的模型', 'Add your own model')
         }}
         ↗</RouterLink
       >
     </div>
   </div>
   <div v-else class="ai-model-picker">
-    <span class="ai-model-picker__label">当前模型</span>
+    <span class="ai-model-picker__label">{{ l('当前模型', 'Current model') }}</span>
     <select
       :value="models.selectedProvider"
       :disabled="disabled || models.loading"
-      aria-label="选择 AI 平台"
+      :aria-label="l('选择 AI 平台', 'Choose AI platform')"
       @change="changeProvider"
     >
       <option v-if="models.catalog.siteDefaultAvailable" value="SITE_DEFAULT">
-        站点默认 · {{ models.catalog.siteDefaultModel || 'AI' }}
+        {{ l('站点默认', 'Site default') }} · {{ models.catalog.siteDefaultModel || 'AI' }}
       </option>
       <option v-for="item in models.saved" :key="item.providerCode" :value="item.providerCode">
         {{
@@ -170,8 +184,8 @@ function changeModel() {
         v-model="draftModel"
         :list="`ai-models-${models.selectedProvider}`"
         :disabled="disabled"
-        aria-label="模型名称"
-        placeholder="模型名称"
+        :aria-label="l('模型名称', 'Model name')"
+        :placeholder="l('模型名称', 'Model name')"
         @change="changeModel"
         @keydown.enter="changeModel"
       />
@@ -179,7 +193,9 @@ function changeModel() {
         <option v-for="name in options" :key="name" :value="name" />
       </datalist>
     </template>
-    <RouterLink :to="{ name: 'account-settings', query: { tab: 'ai' } }">管理 API Key</RouterLink>
+    <RouterLink :to="{ name: 'account-settings', query: { tab: 'ai' } }">{{
+      l('管理 API Key', 'Manage API keys')
+    }}</RouterLink>
   </div>
 </template>
 

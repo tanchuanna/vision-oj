@@ -1,0 +1,733 @@
+source_path,status
+codejam/2008/amer_semifinal/code_sequence,imported
+codejam/2008/amer_semifinal/king,imported
+codejam/2008/amer_semifinal/mixing_bowls,imported
+codejam/2008/amer_semifinal/test_passing_probability,imported
+codejam/2008/apac_semifinal/apocalypse_soon,imported
+codejam/2008/apac_semifinal/millionaire,imported
+codejam/2008/apac_semifinal/modern_art_plagiarism,imported
+codejam/2008/apac_semifinal/what_are_birds,imported
+codejam/2008/emea_semifinal/bus_stops,imported
+codejam/2008/emea_semifinal/painting_a_fence,imported
+codejam/2008/emea_semifinal/rainbow_trees,imported
+codejam/2008/emea_semifinal/scaled_triangle,imported
+codejam/2008/qualification_round/fly_swatter,imported
+codejam/2008/qualification_round/saving_the_universe,imported
+codejam/2008/qualification_round/train_timetable,imported
+codejam/2008/round_1a/milkshakes,missing usable public or hidden case
+codejam/2008/round_1a/minimum_scalar_product,missing usable public or hidden case
+codejam/2008/round_1a/numbers,imported
+codejam/2008/round_1b/crop_triangles,imported
+codejam/2008/round_1b/mousetrap,imported
+codejam/2008/round_1b/number_sets,imported
+codejam/2008/round_1c/increasing_speed_limits,imported
+codejam/2008/round_1c/text_messaging_outrage,imported
+codejam/2008/round_1c/ugly_numbers,imported
+codejam/2008/round_2/cheating_a_boolean_tree,imported
+codejam/2008/round_2/permrle,imported
+codejam/2008/round_2/star_wars,imported
+codejam/2008/round_2/triangle_areas,custom or interactive validator
+codejam/2008/round_3/endless_knight,imported
+codejam/2008/round_3/how_big_are_the_pockets,missing usable public or hidden case
+codejam/2008/round_3/no_cheating,imported
+codejam/2008/round_3/portal,imported
+codejam/2008/world_finals/bridge_builders,missing usable public or hidden case
+codejam/2008/world_finals/juice,imported
+codejam/2008/world_finals/mine_layer,imported
+codejam/2008/world_finals/ping_pong_balls,imported
+codejam/2008/world_finals/the_year_of_code_jam,imported
+codejam/2009/qualification_round/alien_language,imported
+codejam/2009/qualification_round/watersheds,imported
+codejam/2009/qualification_round/welcome_to_code_jam,imported
+codejam/2009/round_1a/collecting_cards,imported
+codejam/2009/round_1a/crossing_the_road,imported
+codejam/2009/round_1a/multi-base_happiness,imported
+codejam/2009/round_1b/decision_tree,imported
+codejam/2009/round_1b/square_math,imported
+codejam/2009/round_1b/the_next_number,imported
+codejam/2009/round_1c/all_your_base,imported
+codejam/2009/round_1c/bribe_the_prisoners,imported
+codejam/2009/round_1c/center_of_mass,imported
+codejam/2009/round_2/a_digging_problem,imported
+codejam/2009/round_2/crazy_rows,imported
+codejam/2009/round_2/stock_charts,missing usable public or hidden case
+codejam/2009/round_2/watering_plants,imported
+codejam/2009/round_3/alphabetomials,missing usable public or hidden case
+codejam/2009/round_3/ez-sokoban,imported
+codejam/2009/round_3/football_team,missing usable public or hidden case
+codejam/2009/round_3/interesting_ranges,imported
+codejam/2009/world_finals/doubly-sorted_grid,imported
+codejam/2009/world_finals/lights,imported
+codejam/2009/world_finals/marbles,imported
+codejam/2009/world_finals/min_perimeter,missing usable public or hidden case
+codejam/2009/world_finals/wi-fi_towers,imported
+codejam/2009/world_finals/year_of_more_code_jam,imported
+codejam/2010/qualification_round/fair_warning,imported
+codejam/2010/qualification_round/snapper_chain,missing usable public or hidden case
+codejam/2010/qualification_round/theme_park,imported
+codejam/2010/round_1a/make_it_smooth,imported
+codejam/2010/round_1a/number_game,imported
+codejam/2010/round_1a/rotate,imported
+codejam/2010/round_1b/file_fix-it,imported
+codejam/2010/round_1b/picking_up_chicks,imported
+codejam/2010/round_1b/your_rank_is_pure,imported
+codejam/2010/round_1c/load_testing,imported
+codejam/2010/round_1c/making_chess_boards,imported
+codejam/2010/round_1c/rope_intranet,imported
+codejam/2010/round_2/bacteria,imported
+codejam/2010/round_2/elegant_diamond,imported
+codejam/2010/round_2/grazing_google_goats,imported
+codejam/2010/round_2/world_cup_2010,missing usable public or hidden case
+codejam/2010/round_3/de-rng-ed,imported
+codejam/2010/round_3/different_sum,imported
+codejam/2010/round_3/fence,imported
+codejam/2010/round_3/hot_dog_proliferation,imported
+codejam/2010/world_finals/candy_store,imported
+codejam/2010/world_finals/city_tour,imported
+codejam/2010/world_finals/letter_stamper,imported
+codejam/2010/world_finals/ninjutsu,imported
+codejam/2010/world_finals/the_paths_of_yin_yang,imported
+codejam/2010/world_finals/travel_plan,imported
+codejam/2011/qualification_round/bot_trust,imported
+codejam/2011/qualification_round/candy_splitting,imported
+codejam/2011/qualification_round/gorosort,imported
+codejam/2011/qualification_round/magicka,imported
+codejam/2011/round_1a/freecell_statistics,imported
+codejam/2011/round_1a/pseudominion,missing usable public or hidden case
+codejam/2011/round_1a/the_killer_word,imported
+codejam/2011/round_1b/house_of_kittens,custom or interactive validator
+codejam/2011/round_1b/revenge_of_the_hot_dogs,imported
+codejam/2011/round_1b/rpi,imported
+codejam/2011/round_1c/perfect_harmony,imported
+codejam/2011/round_1c/space_emergency,missing usable public or hidden case
+codejam/2011/round_1c/square_tiles,imported
+codejam/2011/round_2/ai_war,missing usable public or hidden case
+codejam/2011/round_2/airport_walkways,imported
+codejam/2011/round_2/expensive_dinner,imported
+codejam/2011/round_2/spinning_blade,imported
+codejam/2011/round_3/dire_straights,imported
+codejam/2011/round_3/irregular_cakes,missing usable public or hidden case
+codejam/2011/round_3/mystery_square,imported
+codejam/2011/round_3/perpetual_motion,imported
+codejam/2011/world_finals/ace_in_the_hole,imported
+codejam/2011/world_finals/google_royale,imported
+codejam/2011/world_finals/program_within_a_program,custom or interactive validator
+codejam/2011/world_finals/rains_over_atlantis,imported
+codejam/2011/world_finals/runs,imported
+codejam/2012/qualification_round/dancing_with_the_googlers,imported
+codejam/2012/qualification_round/hall_of_mirrors,missing usable public or hidden case
+codejam/2012/qualification_round/recycled_numbers,imported
+codejam/2012/qualification_round/speaking_in_tongues,imported
+codejam/2012/round_1a/cruise_control,imported
+codejam/2012/round_1a/kingdom_rush,imported
+codejam/2012/round_1a/password_problem,imported
+codejam/2012/round_1b/equal_sums,custom or interactive validator
+codejam/2012/round_1b/safety_in_numbers,imported
+codejam/2012/round_1b/tide_goes_in_tide_goes_out,missing usable public or hidden case
+codejam/2012/round_1c/box_factory,missing usable public or hidden case
+codejam/2012/round_1c/diamond_inheritance,imported
+codejam/2012/round_1c/out_of_gas,imported
+codejam/2012/round_2/aerobics,custom or interactive validator
+codejam/2012/round_2/descending_in_the_dark,imported
+codejam/2012/round_2/mountain_view,custom or interactive validator
+codejam/2012/round_2/swinging_wild,missing usable public or hidden case
+codejam/2012/round_3/havannah,missing usable public or hidden case
+codejam/2012/round_3/lost_password,imported
+codejam/2012/round_3/perfect_game,imported
+codejam/2012/round_3/quality_food,missing usable public or hidden case
+codejam/2012/world_finals/shifting_paths,imported
+codejam/2012/world_finals/twirling_towards_freedom,imported
+codejam/2012/world_finals/upstairsdownstairs,missing usable public or hidden case
+codejam/2012/world_finals/xeno-archaeology,imported
+codejam/2012/world_finals/zombie_smash,imported
+codejam/2013/qualification_round/fair_and_square,imported
+codejam/2013/qualification_round/lawnmower,imported
+codejam/2013/qualification_round/tic-tac-toe-tomek,imported
+codejam/2013/qualification_round/treasure,imported
+codejam/2013/round_1a/bullseye,imported
+codejam/2013/round_1a/good_luck,custom or interactive validator
+codejam/2013/round_1a/manage_your_energy,imported
+codejam/2013/round_1b/falling_diamonds,imported
+codejam/2013/round_1b/garbled_email,missing usable public or hidden case
+codejam/2013/round_1b/osmos,imported
+codejam/2013/round_1c/consonants,imported
+codejam/2013/round_1c/pogo,custom or interactive validator
+codejam/2013/round_1c/the_great_wall,imported
+codejam/2013/round_2/erdsszekeres,imported
+codejam/2013/round_2/many_prizes,imported
+codejam/2013/round_2/multiplayer_pong,imported
+codejam/2013/round_2/ticket_swapping,imported
+codejam/2013/round_3/are_we_lost_yet,imported
+codejam/2013/round_3/cheaters,custom or interactive validator
+codejam/2013/round_3/observation_wheel,custom or interactive validator
+codejam/2013/round_3/rural_planning,custom or interactive validator
+codejam/2013/world_finals/cant_stop,missing usable public or hidden case
+codejam/2013/world_finals/drummer,custom or interactive validator
+codejam/2013/world_finals/graduation_requirements,imported
+codejam/2013/world_finals/let_me_tell_you_a_story,missing usable public or hidden case
+codejam/2013/world_finals/x_marks_the_spot,custom or interactive validator
+codejam/2014/qualification_round/cookie_clicker_alpha,imported
+codejam/2014/qualification_round/deceitful_war,imported
+codejam/2014/qualification_round/magic_trick,imported
+codejam/2014/qualification_round/minesweeper_master,custom or interactive validator
+codejam/2014/round_1a/charging_chaos,imported
+codejam/2014/round_1a/full_binary_tree,imported
+codejam/2014/round_1a/proper_shuffle,custom or interactive validator
+codejam/2014/round_1b/new_lottery_game,imported
+codejam/2014/round_1b/the_bored_traveling_salesman,imported
+codejam/2014/round_1b/the_repeater,imported
+codejam/2014/round_1c/enclosure,imported
+codejam/2014/round_1c/part_elf,imported
+codejam/2014/round_1c/reordering_train_cars,missing usable public or hidden case
+codejam/2014/round_2/data_packing,imported
+codejam/2014/round_2/dont_break_the_nile,imported
+codejam/2014/round_2/trie_sharding,imported
+codejam/2014/round_2/up_and_down,imported
+codejam/2014/round_3/crime_house,imported
+codejam/2014/round_3/last_hit,imported
+codejam/2014/round_3/magical_marvelous_tour,imported
+codejam/2014/round_3/willow,imported
+codejam/2014/world_finals/allergy_testing,imported
+codejam/2014/world_finals/aram,missing usable public or hidden case
+codejam/2014/world_finals/checkerboard_matrix,imported
+codejam/2014/world_finals/paradox_sort,imported
+codejam/2014/world_finals/power_swapper,imported
+codejam/2014/world_finals/symmetric_trees,imported
+codejam/2015/qualification_round/dijkstra,missing usable public or hidden case
+codejam/2015/qualification_round/infinite_house_of_pancakes,imported
+codejam/2015/qualification_round/ominous_omino,imported
+codejam/2015/qualification_round/standing_ovation,imported
+codejam/2015/round_1a/haircut,imported
+codejam/2015/round_1a/logging,imported
+codejam/2015/round_1a/mushroom_monster,imported
+codejam/2015/round_1b/counter_culture,imported
+codejam/2015/round_1b/hiking_deer,imported
+codejam/2015/round_1b/noisy_neighbors,imported
+codejam/2015/round_1c/brattleship,imported
+codejam/2015/round_1c/less_money_more_problems,imported
+codejam/2015/round_1c/typewriter_monkey,imported
+codejam/2015/round_2/bilingual,missing usable public or hidden case
+codejam/2015/round_2/drum_decorator,imported
+codejam/2015/round_2/kiddie_pool,imported
+codejam/2015/round_2/pegman,imported
+codejam/2015/round_3/fairland,imported
+codejam/2015/round_3/log_set,missing usable public or hidden case
+codejam/2015/round_3/river_flow,imported
+codejam/2015/round_3/runaway_quail,imported
+codejam/2015/round_3/smoothing_window,missing usable public or hidden case
+codejam/2015/world_finals/campinatorics,imported
+codejam/2015/world_finals/costly_binary_search,missing usable public or hidden case
+codejam/2015/world_finals/crane_truck,missing usable public or hidden case
+codejam/2015/world_finals/merlin_qa,missing usable public or hidden case
+codejam/2015/world_finals/pretty_good_proportion,missing usable public or hidden case
+codejam/2015/world_finals/taking_over_the_world,missing usable public or hidden case
+codejam/2016/qualification_round/coin_jam,custom or interactive validator
+codejam/2016/qualification_round/counting_sheep,imported
+codejam/2016/qualification_round/fractiles,custom or interactive validator
+codejam/2016/qualification_round/revenge_of_the_pancakes,imported
+codejam/2016/round_1a/bffs,imported
+codejam/2016/round_1a/rank_and_file,imported
+codejam/2016/round_1a/the_last_word,imported
+codejam/2016/round_1b/close_match,imported
+codejam/2016/round_1b/getting_the_digits,imported
+codejam/2016/round_1b/technobabble,imported
+codejam/2016/round_1c/fashion_police,custom or interactive validator
+codejam/2016/round_1c/senate_evacuation,custom or interactive validator
+codejam/2016/round_1c/slides,custom or interactive validator
+codejam/2016/round_2/freeform_factory,imported
+codejam/2016/round_2/rather_perplexing_showdown,imported
+codejam/2016/round_2/red_tape_committee,imported
+codejam/2016/round_2/the_gardener_of_seville,custom or interactive validator
+codejam/2016/round_3/forest_university,missing usable public or hidden case
+codejam/2016/round_3/go,custom or interactive validator
+codejam/2016/round_3/rebel_against_the_empire,missing usable public or hidden case
+codejam/2016/round_3/teaching_assistant,imported
+codejam/2016/world_finals/family_hotel,imported
+codejam/2016/world_finals/gallery_of_pillars,imported
+codejam/2016/world_finals/integeregex,imported
+codejam/2016/world_finals/map_reduce,custom or interactive validator
+codejam/2016/world_finals/radioactive_islands,imported
+codejam/2017/qualification_round/bathroom_stalls,imported
+codejam/2017/qualification_round/fashion_show,custom or interactive validator
+codejam/2017/qualification_round/oversized_pancake_flipper,imported
+codejam/2017/qualification_round/tidy_numbers,imported
+codejam/2017/round_1a/alphabet_cake,custom or interactive validator
+codejam/2017/round_1a/play_the_dragon,imported
+codejam/2017/round_1a/ratatouille,imported
+codejam/2017/round_1b/pony_express,missing usable public or hidden case
+codejam/2017/round_1b/stable_neigh-bors,custom or interactive validator
+codejam/2017/round_1b/steed_2_cruise_control,imported
+codejam/2017/round_1c/ample_syrup,imported
+codejam/2017/round_1c/core_training,missing usable public or hidden case
+codejam/2017/round_1c/parenting_partnering,imported
+codejam/2017/round_2/beaming_with_joy,custom or interactive validator
+codejam/2017/round_2/fresh_chocolate,imported
+codejam/2017/round_2/roller_coaster_scheduling,missing usable public or hidden case
+codejam/2017/round_2/shoot_the_turrets,custom or interactive validator
+codejam/2017/round_3/good_news_and_bad_news,custom or interactive validator
+codejam/2017/round_3/googlements,imported
+codejam/2017/round_3/mountain_tour,imported
+codejam/2017/round_3/slate_modern,missing usable public or hidden case
+codejam/2017/world_finals/dice_straight,missing usable public or hidden case
+codejam/2017/world_finals/omnicircumnavigation,missing usable public or hidden case
+codejam/2017/world_finals/operation,imported
+codejam/2017/world_finals/spanning_planning,custom or interactive validator
+codejam/2017/world_finals/stack_management,imported
+codejam/2017/world_finals/teleporters,missing usable public or hidden case
+codejam/2018/practice_session/bathroom_stalls,imported
+codejam/2018/practice_session/number_guessing,custom or interactive validator
+codejam/2018/practice_session/senate_evacuation,custom or interactive validator
+codejam/2018/practice_session/steed_2_cruise_control,imported
+codejam/2018/qualification_round/cubic_ufo,custom or interactive validator
+codejam/2018/qualification_round/go_gopher,custom or interactive validator
+codejam/2018/qualification_round/saving_the_universe_again,imported
+codejam/2018/qualification_round/trouble_sort,missing usable public or hidden case
+codejam/2018/round_1a/bit_party,imported
+codejam/2018/round_1a/edgy_baking,missing usable public or hidden case
+codejam/2018/round_1a/waffle_choppers,imported
+codejam/2018/round_1b/mysterious_road_signs,missing usable public or hidden case
+codejam/2018/round_1b/rounding_error,imported
+codejam/2018/round_1b/transmutation,imported
+codejam/2018/round_1c/a_whole_new_word,custom or interactive validator
+codejam/2018/round_1c/ant_stack,imported
+codejam/2018/round_1c/lollipop_shop,custom or interactive validator
+codejam/2018/round_2/costume_change,imported
+codejam/2018/round_2/falling_balls,custom or interactive validator
+codejam/2018/round_2/graceful_chainsaw_jugglers,imported
+codejam/2018/round_2/gridception,imported
+codejam/2018/round_3/fence_construction,custom or interactive validator
+codejam/2018/round_3/field_trip,imported
+codejam/2018/round_3/name-preserving_network,custom or interactive validator
+codejam/2018/round_3/raise_the_roof,custom or interactive validator
+codejam/2018/world_finals/go_gophers,custom or interactive validator
+codejam/2018/world_finals/jurisdiction_restrictions,imported
+codejam/2018/world_finals/swordmaster,missing usable public or hidden case
+codejam/2018/world_finals/the_cartesian_job,imported
+codejam/2018/world_finals/two-tiling,custom or interactive validator
+codejam/2019/qualification_round/cryptopangrams,missing usable public or hidden case
+codejam/2019/qualification_round/dat_bae,custom or interactive validator
+codejam/2019/qualification_round/foregone_solution,custom or interactive validator
+codejam/2019/qualification_round/you_can_go_your_own_way,custom or interactive validator
+codejam/2019/round_1a/alien_rhyme,imported
+codejam/2019/round_1a/golf_gophers,custom or interactive validator
+codejam/2019/round_1a/pylons,custom or interactive validator
+codejam/2019/round_1b/draupnir,custom or interactive validator
+codejam/2019/round_1b/fair_fight,missing usable public or hidden case
+codejam/2019/round_1b/manhattan_crepe_cart,missing usable public or hidden case
+codejam/2019/round_1c/bacterial_tactics,imported
+codejam/2019/round_1c/power_arrangers,custom or interactive validator
+codejam/2019/round_1c/robot_programming_strategy,custom or interactive validator
+codejam/2019/round_2/contransmutation,imported
+codejam/2019/round_2/new_elements_part_1,imported
+codejam/2019/round_2/new_elements_part_2,imported
+codejam/2019/round_2/pottery_lottery,custom or interactive validator
+codejam/2019/round_3/datacenter_duplex,custom or interactive validator
+codejam/2019/round_3/napkin_folding,custom or interactive validator
+codejam/2019/round_3/pancake_pyramid,missing usable public or hidden case
+codejam/2019/round_3/zillionim,custom or interactive validator
+codejam/2019/world_finals/board_meeting,custom or interactive validator
+codejam/2019/world_finals/go_to_considered_helpful,imported
+codejam/2019/world_finals/juggle_struggle_part_1,missing usable public or hidden case
+codejam/2019/world_finals/juggle_struggle_part_2,missing usable public or hidden case
+codejam/2019/world_finals/sorting_permutation_unit,custom or interactive validator
+codejam/2019/world_finals/wont_sum_must_now,custom or interactive validator
+codejam/2020/qualification_round/esab_atad,custom or interactive validator
+codejam/2020/qualification_round/indicium,custom or interactive validator
+codejam/2020/qualification_round/nesting_depth,imported
+codejam/2020/qualification_round/parenting_partnering_returns,custom or interactive validator
+codejam/2020/qualification_round/vestigium,missing usable public or hidden case
+codejam/2020/round_1a/pascal_walk,custom or interactive validator
+codejam/2020/round_1a/pattern_matching,custom or interactive validator
+codejam/2020/round_1a/square_dance,missing usable public or hidden case
+codejam/2020/round_1b/blindfolded_bullseye,custom or interactive validator
+codejam/2020/round_1b/expogo,imported
+codejam/2020/round_1b/join_the_ranks,custom or interactive validator
+codejam/2020/round_1c/overexcited_fan,imported
+codejam/2020/round_1c/overrandomized,missing usable public or hidden case
+codejam/2020/round_1c/oversized_pancake_choppers,missing usable public or hidden case
+codejam/2020/round_2/emacs,missing usable public or hidden case
+codejam/2020/round_2/incremental_house_of_pancakes,imported
+codejam/2020/round_2/security_update,custom or interactive validator
+codejam/2020/round_2/wormhole_in_one,imported
+codejam/2020/round_3/naming_compromise,custom or interactive validator
+codejam/2020/round_3/pen_testing,custom or interactive validator
+codejam/2020/round_3/recalculating,imported
+codejam/2020/round_3/thermometers,imported
+codejam/2020/virtual_world_finals/adjacent_and_consecutive,imported
+codejam/2020/virtual_world_finals/hexacoin_jam,missing usable public or hidden case
+codejam/2020/virtual_world_finals/musical_cords,missing usable public or hidden case
+codejam/2020/virtual_world_finals/pack_the_slopes,missing usable public or hidden case
+codejam/2020/virtual_world_finals/replace_all,missing usable public or hidden case
+codejam/2021/qualification_round/cheating_detection,custom or interactive validator
+codejam/2021/qualification_round/median_sort,custom or interactive validator
+codejam/2021/qualification_round/moons_and_umbrellas,imported
+codejam/2021/qualification_round/reversort,missing usable public or hidden case
+codejam/2021/qualification_round/reversort_engineering,custom or interactive validator
+codejam/2021/round_1a/append_sort,imported
+codejam/2021/round_1a/hacked_exam,custom or interactive validator
+codejam/2021/round_1a/prime_time,imported
+codejam/2021/round_1b/broken_clock,custom or interactive validator
+codejam/2021/round_1b/digit_blocks,custom or interactive validator
+codejam/2021/round_1b/subtransmutation,imported
+codejam/2021/round_1c/closest_pick,imported
+codejam/2021/round_1c/double_or_noting,imported
+codejam/2021/round_1c/roaring_years,imported
+codejam/2021/round_2/hidden_pancakes,imported
+codejam/2021/round_2/matrygons,imported
+codejam/2021/round_2/minimum_sort,custom or interactive validator
+codejam/2021/round_2/retiling,imported
+codejam/2021/round_3/binary_search_game,imported
+codejam/2021/round_3/build-a-pair,imported
+codejam/2021/round_3/fence_design,custom or interactive validator
+codejam/2021/round_3/square_free,custom or interactive validator
+codejam/2021/world_finals/cutting_cake,missing usable public or hidden case
+codejam/2021/world_finals/divisible_divisions,missing usable public or hidden case
+codejam/2021/world_finals/infinitree,missing usable public or hidden case
+codejam/2021/world_finals/ropes,custom or interactive validator
+codejam/2021/world_finals/slide_circuits,missing usable public or hidden case
+codejam/2022/qualification_round/3d_printing,custom or interactive validator
+codejam/2022/qualification_round/chain_reactions,imported
+codejam/2022/qualification_round/d1000000,imported
+codejam/2022/qualification_round/punched_cards,imported
+codejam/2022/qualification_round/twisty_little_passages,custom or interactive validator
+codejam/2022/round_1a/double_or_one_thing,imported
+codejam/2022/round_1a/equal_sum,custom or interactive validator
+codejam/2022/round_1a/weightlifting,imported
+codejam/2022/round_1b/asedatab,custom or interactive validator
+codejam/2022/round_1b/controlled_inflation,imported
+codejam/2022/round_1b/pancake_deque,imported
+codejam/2022/round_1c/intranets,imported
+codejam/2022/round_1c/letter_blocks,custom or interactive validator
+codejam/2022/round_1c/squary,custom or interactive validator
+codejam/2022/round_2/i_o_bot,missing usable public or hidden case
+codejam/2022/round_2/pixelated_circle,imported
+codejam/2022/round_2/saving_the_jelly,custom or interactive validator
+codejam/2022/round_2/spiraling_into_control,custom or interactive validator
+codejam/2022/round_3/duck_duck_geese,missing usable public or hidden case
+codejam/2022/round_3/mascot_maze,custom or interactive validator
+codejam/2022/round_3/revenge_of_gorosort,custom or interactive validator
+codejam/2022/round_3/win_as_second,custom or interactive validator
+codejam/2022/world_finals/goose_goose_ducks,missing usable public or hidden case
+codejam/2022/world_finals/schrdinger_and_pavlov,missing usable public or hidden case
+codejam/2022/world_finals/slide_parade,custom or interactive validator
+codejam/2022/world_finals/triangles,custom or interactive validator
+codejam/2022/world_finals/wonderland_chase,imported
+codejam_to_io/2014/code_jam_to_io_for_women/saturnalia,missing usable public or hidden case
+codejam_to_io/2014/code_jam_to_io_for_women/seating_chart,missing usable public or hidden case
+codejam_to_io/2014/code_jam_to_io_for_women/zathras,missing usable public or hidden case
+codejam_to_io/2015/code_jam_to_io_for_women/dreary_design,missing usable public or hidden case
+codejam_to_io/2015/code_jam_to_io_for_women/googlander,missing usable public or hidden case
+codejam_to_io/2015/code_jam_to_io_for_women/io_error,missing usable public or hidden case
+codejam_to_io/2015/code_jam_to_io_for_women/power_levels,missing usable public or hidden case
+codejam_to_io/2016/code_jam_to_io_for_women/codys_jams,missing usable public or hidden case
+codejam_to_io/2016/code_jam_to_io_for_women/dance_around_the_clock,missing usable public or hidden case
+codejam_to_io/2016/code_jam_to_io_for_women/password_security,custom or interactive validator
+codejam_to_io/2016/code_jam_to_io_for_women/polynesiaglot,missing usable public or hidden case
+codejam_to_io/2017/code_jam_to_io_for_women/ticket_trouble,missing usable public or hidden case
+codejam_to_io/2017/code_jam_to_io_for_women/understudies,missing usable public or hidden case
+codejam_to_io/2017/code_jam_to_io_for_women/where_ya_gonna_call,missing usable public or hidden case
+codejam_to_io/2017/code_jam_to_io_for_women/word_search,custom or interactive validator
+codejam_to_io/2018/code_jam_to_io_for_women/burger_optimization,missing usable public or hidden case
+codejam_to_io/2018/code_jam_to_io_for_women/centrists,missing usable public or hidden case
+codejam_to_io/2018/code_jam_to_io_for_women/ceo_search,missing usable public or hidden case
+codejam_to_io/2018/code_jam_to_io_for_women/tricky_trios,missing usable public or hidden case
+codejam_to_io/2019/code_jam_to_io_for_women/grid_escape,custom or interactive validator
+codejam_to_io/2019/code_jam_to_io_for_women/parcel_posts,imported
+codejam_to_io/2019/code_jam_to_io_for_women/sheepwalking,imported
+codejam_to_io/2019/code_jam_to_io_for_women/war_of_the_words,custom or interactive validator
+codejam_to_io/2020/code_jam_to_io_for_women/imbalance_obviation,custom or interactive validator
+codejam_to_io/2020/code_jam_to_io_for_women/impromptu_outdoor_gallery,imported
+codejam_to_io/2020/code_jam_to_io_for_women/interleaved_output_part_1,imported
+codejam_to_io/2020/code_jam_to_io_for_women/interleaved_output_part_2,imported
+codejam_to_io/2021/code_jam_to_io_for_women/impartial_offerings,imported
+codejam_to_io/2021/code_jam_to_io_for_women/inconstant_ordering,imported
+codejam_to_io/2021/code_jam_to_io_for_women/introductions_organization,imported
+codejam_to_io/2021/code_jam_to_io_for_women/irrefutable_outcome,imported
+codejam_to_io/2022/code_jam_to_io_for_women/ingredient_optimization,missing usable public or hidden case
+codejam_to_io/2022/code_jam_to_io_for_women/interesting_outing,imported
+codejam_to_io/2022/code_jam_to_io_for_women/inventor_outlasting,imported
+codejam_to_io/2022/code_jam_to_io_for_women/inversions_organize,imported
+farewell/round_a/ascii_art,imported
+farewell/round_a/colliding_encoding,missing usable public or hidden case
+farewell/round_a/illumination_optimization,imported
+farewell/round_a/rainbow_sort,imported
+farewell/round_a/untie,imported
+farewell/round_b/collecting_pancakes,missing usable public or hidden case
+farewell/round_b/intruder_outsmarting,imported
+farewell/round_b/railroad_maintenance,missing usable public or hidden case
+farewell/round_b/railroad_management,imported
+farewell/round_b/spacious_sets,imported
+farewell/round_c/evolutionary_algorithms,missing usable public or hidden case
+farewell/round_c/game_sort_part_1,custom or interactive validator
+farewell/round_c/game_sort_part_2,custom or interactive validator
+farewell/round_c/immunization_operation,missing usable public or hidden case
+farewell/round_c/the_decades_of_coding_competitions,missing usable public or hidden case
+farewell/round_d/genetic_sequences,missing usable public or hidden case
+farewell/round_d/hey_google_drive,missing usable public or hidden case
+farewell/round_d/indispensable_overpass,missing usable public or hidden case
+farewell/round_d/old_gold,imported
+farewell/round_d/ring-preserving_networks,custom or interactive validator
+kickstart/2013/practice_round/bad_horse,imported
+kickstart/2013/practice_round/captain_hammer,missing usable public or hidden case
+kickstart/2013/practice_round/moist,imported
+kickstart/2013/round_a/cross_the_maze,imported
+kickstart/2013/round_a/rational_number_tree,imported
+kickstart/2013/round_a/read_phone_number,imported
+kickstart/2013/round_a/sorting,imported
+kickstart/2013/round_a/spaceship_defence,missing usable public or hidden case
+kickstart/2013/round_b/dragon_maze,imported
+kickstart/2013/round_b/hex,imported
+kickstart/2013/round_b/ignore_all_my_comments,imported
+kickstart/2013/round_b/meet_and_party,imported
+kickstart/2013/round_b/sudoku_checker,imported
+kickstart/2014/round_a/addition,imported
+kickstart/2014/round_a/cut_tiles,imported
+kickstart/2014/round_a/seven-segment_display,imported
+kickstart/2014/round_a/super_2048,imported
+kickstart/2014/round_b/card_game,missing usable public or hidden case
+kickstart/2014/round_b/new_years_eve,imported
+kickstart/2014/round_b/parentheses_order,imported
+kickstart/2014/round_b/password_attacker,imported
+kickstart/2014/round_c/broken_calculator,imported
+kickstart/2014/round_c/minesweeper,missing usable public or hidden case
+kickstart/2014/round_c/taking_metro,missing usable public or hidden case
+kickstart/2014/round_c/tetris,missing usable public or hidden case
+kickstart/2014/round_d/cube_iv,imported
+kickstart/2014/round_d/gbus_count,imported
+kickstart/2014/round_d/itz_chess,imported
+kickstart/2014/round_d/sort_a_scrambled_itinerary,imported
+kickstart/2015/practice_round/bad_horse,imported
+kickstart/2015/practice_round/captain_hammer,missing usable public or hidden case
+kickstart/2015/practice_round/moist,imported
+kickstart/2015/round_a/gcampus,imported
+kickstart/2015/round_a/gcube,imported
+kickstart/2015/round_a/googol_string,imported
+kickstart/2015/round_a/gsnake,imported
+kickstart/2015/round_b/albocede_dna,imported
+kickstart/2015/round_b/gnumbers,imported
+kickstart/2015/round_b/gwheels,missing usable public or hidden case
+kickstart/2015/round_b/travel,missing usable public or hidden case
+kickstart/2015/round_c/gfiles,imported
+kickstart/2015/round_c/ggames,imported
+kickstart/2015/round_c/gmatrix,missing usable public or hidden case
+kickstart/2015/round_c/granks,imported
+kickstart/2015/round_d/dynamic_grid,missing usable public or hidden case
+kickstart/2015/round_d/gballoon,imported
+kickstart/2015/round_d/ip_address_summarization,imported
+kickstart/2015/round_d/virtual_rabbit,imported
+kickstart/2015/round_e/lazy_spelling_bee,imported
+kickstart/2015/round_e/not_so_random,imported
+kickstart/2015/round_e/robot_rock_band,imported
+kickstart/2015/round_e/sums_of_sums,imported
+kickstart/2016/round_a/clash_royale,missing usable public or hidden case
+kickstart/2016/round_a/country_leader,missing usable public or hidden case
+kickstart/2016/round_a/janes_flower_shop,imported
+kickstart/2016/round_a/rain,imported
+kickstart/2016/round_b/sherlock_and_parentheses,imported
+kickstart/2016/round_b/sherlock_and_permutation_sorting,imported
+kickstart/2016/round_b/sherlock_and_watson_gym_secrets,imported
+kickstart/2016/round_b/watson_and_intervals,imported
+kickstart/2016/round_c/evaluation,missing usable public or hidden case
+kickstart/2016/round_c/monster_path,imported
+kickstart/2016/round_c/safe_squares,imported
+kickstart/2016/round_c/soldiers,imported
+kickstart/2016/round_d/codejamon_cipher,imported
+kickstart/2016/round_d/sitting,imported
+kickstart/2016/round_d/stretch_rope,imported
+kickstart/2016/round_d/vote,imported
+kickstart/2016/round_e/beautiful_numbers,imported
+kickstart/2016/round_e/diwali_lightings,imported
+kickstart/2016/round_e/partioning_number,imported
+kickstart/2016/round_e/sorting_array,missing usable public or hidden case
+kickstart/2017/round_a/pattern_overlap,imported
+kickstart/2017/round_a/square_counting,imported
+kickstart/2017/round_a/two_cubes,missing usable public or hidden case
+kickstart/2017/round_b/center,imported
+kickstart/2017/round_b/christmas_tree,missing usable public or hidden case
+kickstart/2017/round_b/math_encoder,imported
+kickstart/2017/round_c/ambiguous_cipher,imported
+kickstart/2017/round_c/magical_thinking_v2,imported
+kickstart/2017/round_c/the_4m_corporation,imported
+kickstart/2017/round_c/x_squared,imported
+kickstart/2017/round_d/sherlock_and_matrix_game,imported
+kickstart/2017/round_d/sightseeing,imported
+kickstart/2017/round_d/trash,imported
+kickstart/2017/round_e/blackhole,imported
+kickstart/2017/round_e/copy__paste,imported
+kickstart/2017/round_e/trapezoid_counting,missing usable public or hidden case
+kickstart/2017/round_f/cake,imported
+kickstart/2017/round_f/catch_them_all,missing usable public or hidden case
+kickstart/2017/round_f/dance_battle,imported
+kickstart/2017/round_f/kicksort,imported
+kickstart/2017/round_g/cards_game,imported
+kickstart/2017/round_g/huge_numbers,imported
+kickstart/2017/round_g/matrix_cutting,imported
+kickstart/2018/round_a/even_digits,imported
+kickstart/2018/round_a/lucky_dip,missing usable public or hidden case
+kickstart/2018/round_a/scrambled_words,missing usable public or hidden case
+kickstart/2018/round_b/kings_circle,imported
+kickstart/2018/round_b/no_nine,imported
+kickstart/2018/round_b/sherlock_and_the_bit_strings,imported
+kickstart/2018/round_c/fairies_and_witches,imported
+kickstart/2018/round_c/kickstart_alarm,imported
+kickstart/2018/round_c/planet_distance,imported
+kickstart/2018/round_d/candies,imported
+kickstart/2018/round_d/funniest_word_search,missing usable public or hidden case
+kickstart/2018/round_d/paragliding,imported
+kickstart/2018/round_e/board_game,imported
+kickstart/2018/round_e/milk_tea,imported
+kickstart/2018/round_e/yogurt,missing usable public or hidden case
+kickstart/2018/round_f/common_anagrams,imported
+kickstart/2018/round_f/palindromic_sequence,imported
+kickstart/2018/round_f/specializing_villages,missing usable public or hidden case
+kickstart/2018/round_g/cave_escape,missing usable public or hidden case
+kickstart/2018/round_g/combining_classes,imported
+kickstart/2018/round_g/product_triplets,missing usable public or hidden case
+kickstart/2018/round_h/big_buttons,missing usable public or hidden case
+kickstart/2018/round_h/let_me_count_the_ways,imported
+kickstart/2018/round_h/mural,imported
+kickstart/2019/practice_round/kickstart_alarm,imported
+kickstart/2019/practice_round/mural,imported
+kickstart/2019/practice_round/number_guessing,custom or interactive validator
+kickstart/2019/round_a/contention,missing usable public or hidden case
+kickstart/2019/round_a/parcels,imported
+kickstart/2019/round_a/training,missing usable public or hidden case
+kickstart/2019/round_b/building_palindromes,imported
+kickstart/2019/round_b/diverse_subarray,missing usable public or hidden case
+kickstart/2019/round_b/energy_stones,missing usable public or hidden case
+kickstart/2019/round_c/catch_some,missing usable public or hidden case
+kickstart/2019/round_c/circuit_board,missing usable public or hidden case
+kickstart/2019/round_c/wiggle_walk,imported
+kickstart/2019/round_d/food_stalls,missing usable public or hidden case
+kickstart/2019/round_d/latest_guests,missing usable public or hidden case
+kickstart/2019/round_d/x_or_what,missing usable public or hidden case
+kickstart/2019/round_e/cherries_mesh,missing usable public or hidden case
+kickstart/2019/round_e/code-eat_switcher,imported
+kickstart/2019/round_e/street_checkers,imported
+kickstart/2019/round_f/flattening,imported
+kickstart/2019/round_f/spectating_villages,imported
+kickstart/2019/round_f/teach_me,missing usable public or hidden case
+kickstart/2019/round_g/book_reading,missing usable public or hidden case
+kickstart/2019/round_g/shifts,imported
+kickstart/2019/round_g/the_equation,missing usable public or hidden case
+kickstart/2019/round_h/diagonal_puzzle,imported
+kickstart/2019/round_h/elevanagram,imported
+kickstart/2019/round_h/h-index,missing usable public or hidden case
+kickstart/2020/round_a/allocation,missing usable public or hidden case
+kickstart/2020/round_a/bundling,missing usable public or hidden case
+kickstart/2020/round_a/plates,imported
+kickstart/2020/round_a/workout,missing usable public or hidden case
+kickstart/2020/round_b/bike_tour,imported
+kickstart/2020/round_b/bus_routes,missing usable public or hidden case
+kickstart/2020/round_b/robot_path_decoding,missing usable public or hidden case
+kickstart/2020/round_b/wandering_robot,imported
+kickstart/2020/round_c/candies,missing usable public or hidden case
+kickstart/2020/round_c/countdown,missing usable public or hidden case
+kickstart/2020/round_c/perfect_subarray,missing usable public or hidden case
+kickstart/2020/round_c/stable_wall,custom or interactive validator
+kickstart/2020/round_d/alien_piano,imported
+kickstart/2020/round_d/beauty_of_tree,missing usable public or hidden case
+kickstart/2020/round_d/locked_doors,missing usable public or hidden case
+kickstart/2020/round_d/record_breaker,missing usable public or hidden case
+kickstart/2020/round_e/golden_stone,missing usable public or hidden case
+kickstart/2020/round_e/high_buildings,custom or interactive validator
+kickstart/2020/round_e/longest_arithmetic,missing usable public or hidden case
+kickstart/2020/round_e/toys,imported
+kickstart/2020/round_f/atm_queue,imported
+kickstart/2020/round_f/metal_harvest,missing usable public or hidden case
+kickstart/2020/round_f/painters_duel,imported
+kickstart/2020/round_f/yeetzhee,imported
+kickstart/2020/round_g/combination_lock,missing usable public or hidden case
+kickstart/2020/round_g/kick_start,missing usable public or hidden case
+kickstart/2020/round_g/maximum_coins,missing usable public or hidden case
+kickstart/2020/round_g/merge_cards,imported
+kickstart/2020/round_h/boring_numbers,imported
+kickstart/2020/round_h/friends,missing usable public or hidden case
+kickstart/2020/round_h/retype,imported
+kickstart/2020/round_h/rugby,imported
+kickstart/2021/round_a/checksum,imported
+kickstart/2021/round_a/k-goodness_string,imported
+kickstart/2021/round_a/l_shaped_plots,missing usable public or hidden case
+kickstart/2021/round_a/rabbit_house,missing usable public or hidden case
+kickstart/2021/round_b/consecutive_primes,imported
+kickstart/2021/round_b/increasing_substring,imported
+kickstart/2021/round_b/longest_progression,missing usable public or hidden case
+kickstart/2021/round_b/truck_delivery,missing usable public or hidden case
+kickstart/2021/round_c/alien_generator,imported
+kickstart/2021/round_c/binary_operator,missing usable public or hidden case
+kickstart/2021/round_c/rock_paper_scissors,custom or interactive validator
+kickstart/2021/round_c/smaller_strings,imported
+kickstart/2021/round_d/arithmetic_square,imported
+kickstart/2021/round_d/cutting_intervals,missing usable public or hidden case
+kickstart/2021/round_d/final_exam,missing usable public or hidden case
+kickstart/2021/round_d/primes_and_queries,missing usable public or hidden case
+kickstart/2021/round_e/birthday_cake,imported
+kickstart/2021/round_e/increasing_sequence_card_game,imported
+kickstart/2021/round_e/palindromic_crossword,missing usable public or hidden case
+kickstart/2021/round_e/shuffled_anagrams,custom or interactive validator
+kickstart/2021/round_f/festival,missing usable public or hidden case
+kickstart/2021/round_f/graph_travel,imported
+kickstart/2021/round_f/star_trappers,imported
+kickstart/2021/round_f/trash_bins,imported
+kickstart/2021/round_g/banana_bunches,missing usable public or hidden case
+kickstart/2021/round_g/dogs_and_cats,missing usable public or hidden case
+kickstart/2021/round_g/simple_polygon,custom or interactive validator
+kickstart/2021/round_g/staying_hydrated,missing usable public or hidden case
+kickstart/2021/round_h/dependent_events,missing usable public or hidden case
+kickstart/2021/round_h/painter,missing usable public or hidden case
+kickstart/2021/round_h/silly_substitutions,imported
+kickstart/2021/round_h/transform_the_string,missing usable public or hidden case
+kickstart/2022/coding_practice_with_kick_start_session_1/centauri_prime,imported
+kickstart/2022/coding_practice_with_kick_start_session_1/h-index,missing usable public or hidden case
+kickstart/2022/coding_practice_with_kick_start_session_1/hex,imported
+kickstart/2022/coding_practice_with_kick_start_session_1/milk_tea,imported
+kickstart/2022/coding_practice_with_kick_start_session_1/sample_problem,missing usable public or hidden case
+kickstart/2022/coding_practice_with_kick_start_session_2/building_palindromes,imported
+kickstart/2022/coding_practice_with_kick_start_session_2/irregular_expressions,imported
+kickstart/2022/coding_practice_with_kick_start_session_2/parcels,imported
+kickstart/2022/coding_practice_with_kick_start_session_2/sample_problem,missing usable public or hidden case
+kickstart/2022/coding_practice_with_kick_start_session_2/sherlock_and_parentheses,imported
+kickstart/2022/coding_practice_with_kick_start_session_3/gbus_count,imported
+kickstart/2022/coding_practice_with_kick_start_session_3/record_breaker,missing usable public or hidden case
+kickstart/2022/coding_practice_with_kick_start_session_3/sample_problem,missing usable public or hidden case
+kickstart/2022/coding_practice_with_kick_start_session_3/sherlock_and_watson_gym_secrets,imported
+kickstart/2022/coding_practice_with_kick_start_session_3/wiggle_walk,imported
+kickstart/2022/round_a/challenge_nine,imported
+kickstart/2022/round_a/interesting_integers,imported
+kickstart/2022/round_a/palindrome_free_strings,imported
+kickstart/2022/round_a/speed_typing,missing usable public or hidden case
+kickstart/2022/round_b/hamiltonian_tour,custom or interactive validator
+kickstart/2022/round_b/infinity_area,imported
+kickstart/2022/round_b/palindromic_factors,imported
+kickstart/2022/round_b/unlock_the_padlock,imported
+kickstart/2022/round_c/ants_on_a_stick,imported
+kickstart/2022/round_c/new_password,custom or interactive validator
+kickstart/2022/round_c/palindromic_deletions,imported
+kickstart/2022/round_c/range_partition,custom or interactive validator
+kickstart/2022/round_d/image_labeler,missing usable public or hidden case
+kickstart/2022/round_d/maximum_gain,missing usable public or hidden case
+kickstart/2022/round_d/suspects_and_witnesses,missing usable public or hidden case
+kickstart/2022/round_d/touchbar_typing,missing usable public or hidden case
+kickstart/2022/round_e/coloring_game,imported
+kickstart/2022/round_e/matching_palindrome,missing usable public or hidden case
+kickstart/2022/round_e/pizza_delivery,imported
+kickstart/2022/round_e/students_and_mentors,missing usable public or hidden case
+kickstart/2022/round_f/scheduling_a_meeting,imported
+kickstart/2022/round_f/sort_the_fabrics,imported
+kickstart/2022/round_f/story_of_seasons,imported
+kickstart/2022/round_f/water_container_system,missing usable public or hidden case
+kickstart/2022/round_g/curling,imported
+kickstart/2022/round_g/cute_little_butterfly,imported
+kickstart/2022/round_g/happy_subarrays,missing usable public or hidden case
+kickstart/2022/round_g/walktober,missing usable public or hidden case
+kickstart/2022/round_h/electricity,missing usable public or hidden case
+kickstart/2022/round_h/level_design,missing usable public or hidden case
+kickstart/2022/round_h/magical_well_of_lilies,imported
+kickstart/2022/round_h/running_in_circles,missing usable public or hidden case
+kickstart/coding_practice/2020/coding_practice_with_kick_start/allocation,missing usable public or hidden case
+kickstart/coding_practice/2020/coding_practice_with_kick_start/big_buttons,missing usable public or hidden case
+kickstart/coding_practice/2020/coding_practice_with_kick_start/bike_tour,imported
+kickstart/coding_practice/2020/coding_practice_with_kick_start/even_digits,imported
+kickstart/coding_practice/2020/coding_practice_with_kick_start/training,missing usable public or hidden case
+kickstart/coding_practice/2022/coding_practice_with_kick_start_2022_-_centauri_prime/centauri_prime,imported
+kickstart/coding_practice/2022/coding_practice_with_kick_start_2022_-_hex/hex,imported

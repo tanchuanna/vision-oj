@@ -176,4 +176,24 @@ public interface QuestionSubmitMapper extends BaseMapper<QuestionSubmit> {
             )
             """)
     boolean existsAccepted(@Param("userId") long userId, @Param("questionId") long questionId);
+
+    /** 用户通过（AC）的题目去重数 */
+    @Select("""
+            SELECT COUNT(DISTINCT qs.question_id)
+            FROM question_submit qs
+            WHERE qs.user_id = #{userId}
+              AND qs.is_delete = 0
+              AND qs.status = 2
+              AND qs.verdict = 'Accepted'
+            """)
+    long countSolvedQuestions(@Param("userId") long userId);
+
+    /** 用户累计提交次数 */
+    @Select("""
+            SELECT COUNT(*)
+            FROM question_submit qs
+            WHERE qs.user_id = #{userId}
+              AND qs.is_delete = 0
+            """)
+    long countSubmitRecords(@Param("userId") long userId);
 }

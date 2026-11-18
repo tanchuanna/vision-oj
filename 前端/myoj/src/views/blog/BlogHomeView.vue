@@ -2,16 +2,56 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
-import { Service } from '@generated'
 import type { BlogPostListItemVO } from '@generated'
+import { Service } from '@generated'
 import { mapApiError } from '@/api/mapApiError'
 import { isResultSuccess } from '@/api/result'
 import { useAuthStore } from '@/stores/auth'
 import { resolveMediaUrl } from '@/utils/resolveMediaUrl'
 import BlogCyberShell from '@/components/blog/BlogCyberShell.vue'
+import {
+  beginBlogSharedTransition,
+  blogSharedTransitionActive,
+  endBlogSharedTransition,
+} from '@/composables/blogSharedTransition'
+import { formatSiteDate, localize as l } from '@/i18n/locale'
 
 const router = useRouter()
 const auth = useAuthStore()
+
+function openArticle(event: MouseEvent, item: BlogPostListItemVO) {
+  if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return
+  const id = String(item.id || '')
+  if (!id) return
+  event.preventDefault()
+  if (blogSharedTransitionActive) return
+  const destination = { name: 'blog-detail', params: { id } }
+  const title = (event.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>(
+    '.blog-card__title',
+  )
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  if (!title || reduceMotion || !document.startViewTransition) {
+    void router.push(destination)
+    return
+  }
+  title.style.viewTransitionName = 'selected-blog-title'
+  beginBlogSharedTransition(id, item.title || '')
+  try {
+    const transition = document.startViewTransition(async () => {
+      await router.push(destination)
+      await nextTick()
+    })
+    const cleanup = () => {
+      title.style.viewTransitionName = ''
+      endBlogSharedTransition()
+    }
+    void transition.finished.then(cleanup, cleanup)
+  } catch {
+    title.style.viewTransitionName = ''
+    endBlogSharedTransition()
+    void router.push(destination)
+  }
+}
 
 const loading = ref(false)
 const rows = ref<BlogPostListItemVO[]>([])
@@ -19,51 +59,21 @@ const total = ref(0)
 const current = ref(1)
 const pageSize = ref(12)
 const titleKeyword = ref('')
-const tagInput = ref('')
-const lastSynced = ref('')
+const activeTag = ref('')
+const tagCounts = ref<Record<string, number>>({})
+const siteTotal = ref(0)
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 
-const greetingText = computed(() => {
-  const h = new Date().getHours()
-  if (h >= 0 && h < 5) return '深夜好，夜猫子开发者'
-  if (h < 9) return '早上好，欢迎回到星图笔记'
-  if (h < 12) return '上午好，保持好奇与专注'
-  if (h < 14) return '中午好，记得休息一下眼睛'
-  if (h < 18) return '下午好，继续探索题解与思路'
-  if (h < 22) return '傍晚好，黄金时间留给深度阅读'
-  return '入夜了，愿代码与星光同样温柔'
-})
+const tagPills = computed(() =>
+  Object.entries(tagCounts.value)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN'))
+    .slice(0, 14)
+    .map(([tag]) => tag),
+)
 
-const liveReaders = ref(18)
-const activityFlash = ref('信号链路稳定 · 欢迎阅读')
-
-const ACTIVITY_LINES = [
-  '刚刚有人点赞了一篇文章',
-  '有位读者收藏了算法笔记',
-  '新访客正在浏览题解列表',
-  '社区里又完成了一次深度阅读',
-  '有读者从标签筛选跳进了长文',
-]
-
-const tagPills = computed(() => {
-  const m = new Map<string, number>()
-  for (const r of rows.value) {
-    for (const t of r.tags ?? []) {
-      const k = t.trim()
-      if (k) m.set(k, (m.get(k) ?? 0) + 1)
-    }
-  }
-  return [...m.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 10)
-    .map(([t]) => t)
-})
-
-const activeTag = computed(() => tagInput.value.trim())
-
-let liveTimer: number | undefined
-let activityTimer: number | undefined
+const tagCount = computed(() => Object.keys(tagCounts.value).length)
+const hasSearchFilter = computed(() => !!titleKeyword.value.trim() || !!activeTag.value)
 
 const cardsRoot = ref<HTMLElement | null>(null)
 const visibleCardIds = ref<Set<string>>(new Set())
@@ -74,17 +84,7 @@ function formatTime(raw?: string): string {
   if (!raw) return ''
   const d = new Date(raw)
   if (Number.isNaN(d.getTime())) return raw
-  return d.toLocaleDateString('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' })
-}
-
-function formatSynced(): string {
-  return new Date().toLocaleString('zh-CN', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
+  return formatSiteDate(d, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
 async function loadPage() {
@@ -94,10 +94,10 @@ async function loadPage() {
       current: current.value,
       pageSize: pageSize.value,
       titleKeyword: titleKeyword.value.trim() || undefined,
-      tag: tagInput.value.trim() || undefined,
+      tag: activeTag.value || undefined,
     })
     if (!isResultSuccess(res.code)) {
-      Message.error(res.message || '加载失败')
+      Message.error(res.message || l('加载失败', 'Could not load articles'))
       return
     }
     const page = res.data
@@ -105,9 +105,19 @@ async function loadPage() {
     total.value = page?.total ?? 0
     current.value = page?.current ?? current.value
     pageSize.value = page?.size ?? pageSize.value
-    lastSynced.value = formatSynced()
+    if (!titleKeyword.value.trim() && !activeTag.value) {
+      siteTotal.value = total.value
+    }
+    const counts = { ...tagCounts.value }
+    for (const row of rows.value) {
+      for (const raw of row.tags ?? []) {
+        const tag = raw.trim()
+        if (tag) counts[tag] = (counts[tag] ?? 0) + 1
+      }
+    }
+    tagCounts.value = counts
   } catch (e) {
-    Message.error(mapApiError(e, '加载失败'))
+    Message.error(mapApiError(e, l('加载失败', 'Could not load articles')))
   } finally {
     loading.value = false
   }
@@ -118,14 +128,21 @@ function onSearch() {
   void loadPage()
 }
 
+function resetFilters() {
+  titleKeyword.value = ''
+  activeTag.value = ''
+  onSearch()
+}
+
 function selectTagPill(tag: string) {
-  tagInput.value = tag
-  void onSearch()
+  activeTag.value = activeTag.value === tag ? '' : tag
+  onSearch()
 }
 
 function clearTagPill() {
-  tagInput.value = ''
-  void onSearch()
+  if (!activeTag.value) return
+  activeTag.value = ''
+  onSearch()
 }
 
 function goWrite() {
@@ -218,22 +235,9 @@ watch(
 
 onMounted(() => {
   void loadPage()
-  liveReaders.value = 12 + Math.floor(Math.random() * 36)
-  liveTimer = window.setInterval(() => {
-    const delta = Math.random() > 0.55 ? 1 : -1
-    const step = Math.floor(Math.random() * 3)
-    liveReaders.value = Math.min(88, Math.max(6, liveReaders.value + delta * step))
-  }, 9200)
-  activityTimer = window.setInterval(() => {
-    if (Math.random() > 0.4) {
-      activityFlash.value = ACTIVITY_LINES[Math.floor(Math.random() * ACTIVITY_LINES.length)] ?? activityFlash.value
-    }
-  }, 11200)
 })
 
 onBeforeUnmount(() => {
-  if (liveTimer) window.clearInterval(liveTimer)
-  if (activityTimer) window.clearInterval(activityTimer)
   cardObserver?.disconnect()
   cardObserver = null
 })
@@ -243,73 +247,45 @@ onBeforeUnmount(() => {
   <BlogCyberShell>
     <div class="blog-hub">
       <section class="blog-hero panel">
-        <svg class="blog-hero__constellation" viewBox="0 0 800 320" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-          <defs>
-            <linearGradient id="bh-const-stroke" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stop-color="#6366f1" stop-opacity="0" />
-              <stop offset="40%" stop-color="#a855f7" stop-opacity="0.55" />
-              <stop offset="100%" stop-color="#ec4899" stop-opacity="0" />
-            </linearGradient>
-          </defs>
-          <path
-            class="blog-hero__const-path"
-            d="M40 180 L140 120 L260 200 L380 90 L520 160 L640 60 L760 140"
-            fill="none"
-            stroke="url(#bh-const-stroke)"
-            stroke-width="1.2"
-            stroke-linecap="round"
-          />
-          <path
-            class="blog-hero__const-path blog-hero__const-path--b"
-            d="M80 260 L200 220 L340 260 L500 200 L700 240"
-            fill="none"
-            stroke="url(#bh-const-stroke)"
-            stroke-width="0.9"
-            stroke-linecap="round"
-            opacity="0.65"
-          />
-          <circle cx="140" cy="120" r="2.2" fill="#c4b5fd" opacity="0.85" />
-          <circle cx="380" cy="90" r="2" fill="#7dd3fc" opacity="0.9" />
-          <circle cx="640" cy="60" r="2.4" fill="#f472b6" opacity="0.8" />
-          <circle cx="260" cy="200" r="1.6" fill="#e9d5ff" opacity="0.7" />
-        </svg>
         <div class="blog-hero__grid" aria-hidden="true" />
-        <svg class="blog-hero__scribble" viewBox="0 0 120 120" aria-hidden="true">
-          <path
-            d="M12 88 Q40 20 96 44 Q72 96 24 72"
-            fill="none"
-            stroke="rgba(236,72,153,0.35)"
-            stroke-width="2.2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-          <path
-            d="M28 100 L52 76 L76 102"
-            fill="none"
-            stroke="rgba(129,140,248,0.4)"
-            stroke-width="1.8"
-            stroke-linecap="round"
-          />
-        </svg>
         <div class="blog-hero__content">
-          <p class="blog-hero__eyebrow">Tech Blog · 码跃社区</p>
-          <p class="blog-hero__greeting">{{ greetingText }}</p>
-          <h1 class="blog-hero__title blog-hero__title--cosmic">探索算法笔记与赛题解析</h1>
+          <p class="blog-hero__eyebrow">{{ l('码跃社区', 'Community') }}</p>
+          <h1 class="blog-hero__title blog-hero__title--cosmic">
+            {{ l('算法笔记与赛题解析', 'Notes and contest insights') }}
+          </h1>
           <p class="blog-hero__lead blog-hero__lead--cosmic">
-            公开文章流，支持标签检索与标题搜索。登录后可撰写、草稿与发布。
+            {{
+              l(
+                '阅读公开文章，按标题和标签查找解题经验；登录后可整理并发布自己的笔记。',
+                'Read articles, search by title or tag, and publish your own notes after signing in.',
+              )
+            }}
           </p>
-          <div class="blog-hero__live" role="status">
-            <span class="blog-hero__live-dot" aria-hidden="true" />
-            <span class="blog-hero__live-readers">当前约 {{ liveReaders }} 人在线阅读</span>
-            <span class="blog-hero__live-sep" aria-hidden="true">·</span>
-            <span class="blog-hero__activity">{{ activityFlash }}</span>
+          <div class="blog-hero__stats">
+            <span class="blog-hero__stat"
+              ><strong>{{ siteTotal }}</strong> {{ l('篇公开文章', 'public articles') }}</span
+            >
+            <template v-if="tagCount">
+              <span class="blog-hero__stat-sep">·</span>
+              <span class="blog-hero__stat"
+                ><strong>{{ tagCount }}</strong> {{ l('个标签', 'tags') }}</span
+              >
+            </template>
           </div>
           <div class="blog-hero__actions">
-            <button type="button" class="chip-btn chip-btn--primary chip-btn--neon ripple-host blog-magnetic" @click="onWriteClick">
-              写文章
+            <button
+              type="button"
+              class="chip-btn chip-btn--primary chip-btn--neon ripple-host blog-magnetic"
+              @click="onWriteClick"
+            >
+              {{ l('写文章', 'Write article') }}
             </button>
-            <RouterLink v-if="auth.isLoggedIn" :to="{ name: 'blog-my' }" class="chip-btn chip-btn--ghost blog-magnetic">
-              我的博客
+            <RouterLink
+              v-if="auth.isLoggedIn"
+              :to="{ name: 'blog-my' }"
+              class="chip-btn chip-btn--ghost blog-magnetic"
+            >
+              {{ l('我的博客', 'My articles') }}
             </RouterLink>
           </div>
         </div>
@@ -321,39 +297,58 @@ onBeforeUnmount(() => {
             <a-input
               v-model="titleKeyword"
               allow-clear
-              placeholder="搜索标题关键词…"
+              :placeholder="l('搜索标题关键词…', 'Search article titles…')"
               class="blog-toolbar__search"
               @press-enter="onSearch"
             />
-            <a-input
-              v-model="tagInput"
-              allow-clear
-              placeholder="标签（精确匹配）"
-              class="blog-toolbar__tag"
-              @press-enter="onSearch"
-            />
-            <a-button type="primary" class="blog-toolbar__go blog-magnetic" :loading="loading" @click="onSearch">
-              检索
-            </a-button>
+            <button
+              type="button"
+              class="chip-btn chip-btn--primary blog-toolbar__go"
+              :disabled="loading"
+              @click="onSearch"
+            >
+              {{ loading ? l('检索中…', 'Searching…') : l('检索', 'Search') }}
+            </button>
           </div>
-          <div v-if="tagPills.length" class="blog-toolbar__pills" aria-label="热门标签">
-            <button type="button" class="tag-cap" :class="{ 'tag-cap--on': !activeTag }" @click="clearTagPill">全部</button>
+          <div
+            v-if="tagPills.length"
+            class="blog-toolbar__pills"
+            :aria-label="l('按标签筛选', 'Filter by tag')"
+          >
+            <button
+              type="button"
+              class="tag-cap"
+              :class="{ 'tag-cap--on': !activeTag }"
+              @click="clearTagPill"
+            >
+              {{ l('全部', 'All') }}
+            </button>
             <button
               v-for="t in tagPills"
               :key="t"
               type="button"
               class="tag-cap"
               :class="{ 'tag-cap--on': activeTag === t }"
+              :aria-pressed="activeTag === t"
               @click="selectTagPill(t)"
             >
               {{ t }}
             </button>
           </div>
-          <p class="blog-toolbar__meta">
-            共 {{ total }} 篇 · 第 {{ current }} / {{ totalPages }} 页
-            <span v-if="lastSynced" class="blog-toolbar__sync"> · 最后更新于 {{ lastSynced }}</span>
-          </p>
         </section>
+      </div>
+
+      <div v-if="!loading" class="blog-results">
+        <p class="blog-results__count">
+          {{ l('共', 'Total') }} <strong>{{ total }}</strong> {{ l('篇', 'articles') }}
+          <template v-if="activeTag"> · {{ l('标签', 'Tag') }}: {{ activeTag }}</template>
+          <template v-if="titleKeyword.trim()">
+            · {{ l('关键词', 'Keyword') }}: {{ titleKeyword.trim() }}</template
+          >
+        </p>
+        <span v-if="rows.length" class="blog-results__page"
+          >{{ l('第', 'Page') }} {{ current }} / {{ totalPages }} {{ l('页', '') }}</span
+        >
       </div>
 
       <div v-if="loading" class="blog-skeleton panel">
@@ -361,11 +356,60 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else-if="!rows.length" class="blog-empty panel">
-        <p class="blog-empty__title">暂无文章</p>
-        <p class="blog-empty__hint">成为第一位分享者，或调整筛选条件。</p>
-        <button type="button" class="chip-btn chip-btn--primary chip-btn--neon ripple-host blog-magnetic" @click="onWriteClick">
-          去写文章
-        </button>
+        <div class="blog-empty__icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none">
+            <path
+              d="M14 8h13l9 9v23a2 2 0 0 1-2 2H14a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2Z"
+              stroke="currentColor"
+              stroke-width="2.4"
+              stroke-linejoin="round"
+            />
+            <path d="M27 8v9h9" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round" />
+            <path
+              d="M18 27h12M18 33h8"
+              stroke="currentColor"
+              stroke-width="2.4"
+              stroke-linecap="round"
+            />
+          </svg>
+        </div>
+        <p class="blog-empty__title">
+          {{
+            hasSearchFilter
+              ? l('没有找到相关文章', 'No matching articles')
+              : l('还没有公开文章', 'No public articles yet')
+          }}
+        </p>
+        <p class="blog-empty__hint">
+          {{
+            hasSearchFilter
+              ? l(
+                  '换个关键词或标签试试，也可以清除筛选查看全部文章。',
+                  'Try another keyword or tag, or clear the filters.',
+                )
+              : l('第一篇笔记发布后会显示在这里。', 'The first published article will appear here.')
+          }}
+        </p>
+        <div class="blog-empty__actions">
+          <button
+            v-if="hasSearchFilter"
+            type="button"
+            class="chip-btn chip-btn--primary"
+            @click="resetFilters"
+          >
+            {{ l('清除筛选', 'Clear filters') }}
+          </button>
+          <button v-else type="button" class="chip-btn chip-btn--primary" @click="onWriteClick">
+            {{
+              auth.isLoggedIn
+                ? l('写第一篇文章', 'Write the first article')
+                : l('登录后写文章', 'Sign in to write')
+            }}
+          </button>
+          <RouterLink :to="{ name: 'problems' }" class="chip-btn chip-btn--ghost">{{
+            l('去题库看看', 'Browse problems')
+          }}</RouterLink>
+        </div>
       </div>
 
       <div v-else ref="cardsRoot" class="blog-cards">
@@ -373,53 +417,74 @@ onBeforeUnmount(() => {
           v-for="(item, idx) in rows"
           :key="item.id || item.slug"
           :to="{ name: 'blog-detail', params: { id: item.id || '' } }"
-          class="blog-card panel"
-          :class="cardIoClass(item)"
-          :style="{ '--card-i': String(idx) }"
-          :data-card-id="cardId(item)"
+          custom
+          v-slot="{ href }"
         >
-          <div class="blog-card__media">
-            <img
-              v-if="item.coverUrl && resolveMediaUrl(item.coverUrl)"
-              :src="resolveMediaUrl(item.coverUrl)"
-              alt=""
-              class="blog-card__cover"
-            />
-            <div v-else class="blog-card__cover blog-card__cover--placeholder">
-              <span class="blog-card__placeholder-ico" aria-hidden="true">◇</span>
+          <a
+            :href="href"
+            class="blog-card panel"
+            :class="cardIoClass(item)"
+            :style="{ '--card-i': String(idx) }"
+            :data-card-id="cardId(item)"
+            @click="openArticle($event, item)"
+          >
+            <div class="blog-card__media">
+              <img
+                v-if="item.coverUrl && resolveMediaUrl(item.coverUrl)"
+                :src="resolveMediaUrl(item.coverUrl)"
+                alt=""
+                class="blog-card__cover"
+              />
+              <div v-else class="blog-card__cover blog-card__cover--placeholder">
+                <span class="blog-card__placeholder-ico" aria-hidden="true">◇</span>
+              </div>
+              <div class="blog-card__media-overlay" aria-hidden="true" />
+              <div class="blog-card__shine" aria-hidden="true" />
             </div>
-            <div class="blog-card__media-overlay" aria-hidden="true" />
-            <div class="blog-card__shine" aria-hidden="true" />
-          </div>
-          <div class="blog-card__body">
-            <h2 class="blog-card__title">{{ item.title }}</h2>
-            <p class="blog-card__summary">{{ item.summary || '（无摘要）' }}</p>
-            <div class="blog-card__foot">
-              <span class="blog-card__author">{{ item.authorName || '作者' }}</span>
-              <span class="blog-card__dot">·</span>
-              <time class="blog-card__time" :datetime="item.publishedAt">{{ formatTime(item.publishedAt) }}</time>
+            <div class="blog-card__body">
+              <h2 class="blog-card__title">{{ item.title }}</h2>
+              <p class="blog-card__summary">
+                {{ item.summary || l('（无摘要）', '(No summary)') }}
+              </p>
+              <div class="blog-card__foot">
+                <span class="blog-card__author">{{ item.authorName || l('作者', 'Author') }}</span>
+                <span class="blog-card__dot">·</span>
+                <time class="blog-card__time" :datetime="item.publishedAt">{{
+                  formatTime(item.publishedAt)
+                }}</time>
+              </div>
+              <div v-if="item.tags?.length" class="blog-card__tags">
+                <span v-for="tg in item.tags.slice(0, 4)" :key="tg" class="blog-tag">{{ tg }}</span>
+              </div>
+              <div class="blog-card__stats">
+                <span class="blog-card__stat">
+                  <span class="blog-card__stat-ico blog-card__stat-ico--eye" aria-hidden="true" />
+                  <span class="blog-card__stat-num">{{ item.viewCount ?? 0 }}</span>
+                </span>
+                <span class="blog-card__stat">
+                  <span class="blog-card__stat-ico blog-card__stat-ico--heart" aria-hidden="true" />
+                  <span class="blog-card__stat-num">{{ item.likeCount ?? 0 }}</span>
+                </span>
+              </div>
             </div>
-            <div v-if="item.tags?.length" class="blog-card__tags">
-              <span v-for="tg in item.tags.slice(0, 4)" :key="tg" class="blog-tag">{{ tg }}</span>
-            </div>
-            <div class="blog-card__stats">
-              <span class="blog-card__stat">
-                <span class="blog-card__stat-ico blog-card__stat-ico--eye" aria-hidden="true" />
-                <span class="blog-card__stat-num">{{ item.viewCount ?? 0 }}</span>
-              </span>
-              <span class="blog-card__stat">
-                <span class="blog-card__stat-ico blog-card__stat-ico--heart" aria-hidden="true" />
-                <span class="blog-card__stat-num">{{ item.likeCount ?? 0 }}</span>
-              </span>
-            </div>
-          </div>
+          </a>
         </RouterLink>
       </div>
 
       <div v-if="rows.length" class="blog-pager">
-        <a-button class="pager-btn blog-magnetic" :disabled="current <= 1 || loading" @click="goPrev">上一页</a-button>
+        <a-button
+          class="pager-btn blog-magnetic"
+          :disabled="current <= 1 || loading"
+          @click="goPrev"
+          >{{ l('上一页', 'Previous') }}</a-button
+        >
         <span class="blog-pager__label">{{ current }} / {{ totalPages }}</span>
-        <a-button class="pager-btn blog-magnetic" :disabled="current >= totalPages || loading" @click="goNext">下一页</a-button>
+        <a-button
+          class="pager-btn blog-magnetic"
+          :disabled="current >= totalPages || loading"
+          @click="goNext"
+          >{{ l('下一页', 'Next') }}</a-button
+        >
       </div>
     </div>
   </BlogCyberShell>
@@ -467,86 +532,11 @@ onBeforeUnmount(() => {
     0 6px 16px rgba(15, 23, 42, 0.06);
 }
 
-:global(html[data-theme='light']) .blog-hero__constellation {
-  opacity: 0.32;
-}
-
-:global(html[data-theme='light']) .blog-hero__scribble {
-  opacity: 0.38;
-}
-
 .blog-hero {
   position: relative;
   overflow: hidden;
   padding: 36px 40px 42px;
   margin-bottom: 26px;
-}
-
-.blog-hero__constellation {
-  position: absolute;
-  inset: -12% -8% auto -8%;
-  height: min(320px, 48vw);
-  width: calc(100% + 16%);
-  pointer-events: none;
-  opacity: 0.55;
-}
-
-.blog-hero__const-path {
-  stroke-dasharray: 520;
-  stroke-dashoffset: 520;
-  animation: bh-const-draw 14s ease-in-out infinite;
-}
-
-.blog-hero__const-path--b {
-  stroke-dasharray: 420;
-  stroke-dashoffset: 420;
-  animation: bh-const-draw-b 18s ease-in-out infinite;
-  animation-delay: 1.5s;
-}
-
-@keyframes bh-const-draw {
-  0%,
-  15% {
-    stroke-dashoffset: 520;
-    opacity: 0.35;
-  }
-  45%,
-  70% {
-    stroke-dashoffset: 0;
-    opacity: 0.95;
-  }
-  100% {
-    stroke-dashoffset: -420;
-    opacity: 0.25;
-  }
-}
-
-@keyframes bh-const-draw-b {
-  0%,
-  18% {
-    stroke-dashoffset: 420;
-    opacity: 0.2;
-  }
-  50%,
-  75% {
-    stroke-dashoffset: 0;
-    opacity: 0.75;
-  }
-  100% {
-    stroke-dashoffset: -360;
-    opacity: 0.2;
-  }
-}
-
-.blog-hero__scribble {
-  position: absolute;
-  right: 4%;
-  bottom: 8%;
-  width: 88px;
-  height: 88px;
-  opacity: 0.55;
-  pointer-events: none;
-  transform: rotate(-6deg);
 }
 
 .blog-hero__grid {
@@ -563,10 +553,14 @@ onBeforeUnmount(() => {
 
 @keyframes bh-grid-shift {
   from {
-    background-position: 0 0, 0 0;
+    background-position:
+      0 0,
+      0 0;
   }
   to {
-    background-position: 36px 24px, 24px 36px;
+    background-position:
+      36px 24px,
+      24px 36px;
   }
 }
 
@@ -582,15 +576,6 @@ onBeforeUnmount(() => {
   text-transform: uppercase;
   color: var(--app-text-subtle);
   font-weight: 600;
-}
-
-.blog-hero__greeting {
-  margin: 0 0 12px;
-  font-size: 13px;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  color: var(--app-text-muted);
-  opacity: 0.92;
 }
 
 .blog-hero__title {
@@ -611,44 +596,25 @@ onBeforeUnmount(() => {
   max-width: 560px;
 }
 
-.blog-hero__live {
+.blog-hero__stats {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 10px;
-  margin: 0 0 22px;
-  font-size: 12px;
-  letter-spacing: 0.03em;
-  color: var(--app-text-muted);
+  gap: 8px;
+  margin: -6px 0 18px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.76);
 }
 
-.blog-hero__live-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #34d399, #22d3ee);
-  box-shadow: 0 0 12px rgba(52, 211, 153, 0.65);
-  animation: bh-live-pulse 2.4s ease-in-out infinite;
+.blog-hero__stat strong {
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: #fff;
 }
 
-@keyframes bh-live-pulse {
-  0%,
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.15);
-    opacity: 0.75;
-  }
-}
-
-.blog-hero__live-sep {
-  opacity: 0.35;
-}
-
-.blog-hero__activity {
-  color: var(--app-text-subtle);
+.blog-hero__stat-sep {
+  opacity: 0.5;
 }
 
 .blog-hero__actions {
@@ -790,17 +756,21 @@ onBeforeUnmount(() => {
 .blog-toolbar__search {
   flex: 1 1 220px;
   max-width: 420px;
-  border-radius: 12px !important;
-}
-
-.blog-toolbar__tag {
-  flex: 1 1 160px;
-  max-width: 240px;
+  height: 38px;
   border-radius: 12px !important;
 }
 
 .blog-toolbar__go {
+  height: 38px;
+  padding: 0 22px;
   border-radius: 12px;
+  flex: 0 0 auto;
+}
+
+.blog-toolbar__go:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  transform: none;
 }
 
 .blog-toolbar__pills {
@@ -854,15 +824,28 @@ onBeforeUnmount(() => {
     0 0 28px rgba(129, 140, 248, 0.25);
 }
 
-.blog-toolbar__meta {
-  margin: 14px 0 0;
+.blog-results {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 4px 16px;
   font-size: 13px;
   color: var(--app-text-subtle);
 }
 
-.blog-toolbar__sync {
-  font-weight: 500;
-  opacity: 0.88;
+.blog-results__count {
+  margin: 0;
+}
+
+.blog-results__count strong {
+  font-weight: 700;
+  color: var(--app-text);
+}
+
+.blog-results__page {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
 }
 
 .blog-skeleton {
@@ -901,6 +884,31 @@ onBeforeUnmount(() => {
   text-align: center;
   padding: 48px 24px;
   margin-bottom: 26px;
+}
+
+.blog-empty__icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 16px;
+  display: grid;
+  place-items: center;
+  border-radius: 20px;
+  color: var(--app-accent);
+  background: color-mix(in srgb, var(--app-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--app-accent) 22%, transparent);
+}
+
+.blog-empty__icon svg {
+  width: 30px;
+  height: 30px;
+}
+
+.blog-empty__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
 }
 
 .blog-empty__title {
@@ -992,7 +1000,12 @@ onBeforeUnmount(() => {
   position: absolute;
   inset: 0;
   opacity: 0;
-  background: linear-gradient(160deg, rgba(15, 23, 42, 0.05) 0%, rgba(79, 70, 229, 0.22) 45%, rgba(236, 72, 153, 0.28) 100%);
+  background: linear-gradient(
+    160deg,
+    rgba(15, 23, 42, 0.05) 0%,
+    rgba(79, 70, 229, 0.22) 45%,
+    rgba(236, 72, 153, 0.28) 100%
+  );
   transition: opacity 0.4s ease;
   pointer-events: none;
 }
@@ -1185,17 +1198,19 @@ onBeforeUnmount(() => {
 }
 
 :global(html[data-theme='light']) .blog-card.blog-card--dim:not(:hover) {
-  opacity: 0.72;
+  opacity: 1;
+  filter: none;
+}
+
+:global(html[data-theme='light']) .blog-card {
+  animation: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .blog-hero__const-path,
-  .blog-hero__const-path--b,
   .blog-hero__grid,
   .sk-card,
   .blog-card,
-  .blog-card__cover,
-  .blog-hero__live-dot {
+  .blog-card__cover {
     animation: none !important;
   }
 
@@ -1203,12 +1218,6 @@ onBeforeUnmount(() => {
     animation: none !important;
     opacity: 1 !important;
     transform: none !important;
-  }
-
-  .blog-hero__const-path,
-  .blog-hero__const-path--b {
-    stroke-dashoffset: 0 !important;
-    opacity: 0.5 !important;
   }
 }
 </style>

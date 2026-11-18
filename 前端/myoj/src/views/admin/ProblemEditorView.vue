@@ -121,7 +121,17 @@ type StructuredProblem = {
   difficulty?: string
   tags?: string[]
   judgeCase?: Array<{ input?: string; output?: string }>
-  judgeConfig?: { timeLimit?: number; memoryLimit?: number; stackLimit?: number }
+  judgeConfig?: {
+    timeLimit?: number
+    memoryLimit?: number
+    stackLimit?: number
+    analysisVersion?: number
+    countTolerance?: number
+    iouThreshold?: number
+    ocrEditDistance?: number
+    meanGrayTolerance?: number
+    edgeStrengthTolerance?: number
+  }
   rawOcrText?: string
 }
 const COCO_LABEL_ZH: Record<string, string> = {
@@ -184,10 +194,68 @@ const VISION_MODELS = [
     tasks: ['IMAGE_ANALYSIS'],
   },
 ] as const
+type ImageQuestionType =
+  | 'IMAGE_CLASSIFICATION'
+  | 'IMAGE_OBJECT_COUNT'
+  | 'IMAGE_OBJECT_DETECTION'
+  | 'IMAGE_OCR'
+  | 'IMAGE_ANALYSIS'
+type ImageTypeInfo = {
+  title: string
+  group: string
+  description: string
+  output: string
+  scenario: string
+  judging: string
+}
+const IMAGE_TYPE_INFO: Record<ImageQuestionType, ImageTypeInfo> = {
+  IMAGE_CLASSIFICATION: {
+    title: '主目标标签分类题',
+    group: '深度学习目标识别',
+    description: '使用 YOLO 检测结果中置信度最高的目标类别，不是独立的整图分类模型。',
+    output: 'car',
+    scenario: '适合一张图片中存在一个主要目标的标签判断。',
+    judging: '忽略大小写和首尾空格；没有检测到目标时输出 unknown。',
+  },
+  IMAGE_OBJECT_COUNT: {
+    title: '图像目标计数题',
+    group: '深度学习目标识别',
+    description: '统计 YOLO 检测到的全部目标类别及数量，是本系统的核心图像题型。',
+    output: '{"person":2,"car":1}',
+    scenario: '适合人数、车辆、安全帽等多类别数量统计。',
+    judging: '逐类比较数量，并按下方设置允许的数量误差。',
+  },
+  IMAGE_OBJECT_DETECTION: {
+    title: '目标位置检测题',
+    group: '深度学习目标识别',
+    description: '输出目标类别和归一化坐标，用检测框位置与 IoU 完成评测。',
+    output: '[{"label":"car","x1":0.1,"y1":0.2,"x2":0.8,"y2":0.9}]',
+    scenario: '适合同时考查目标类别、数量和空间位置。',
+    judging: '检查字段、类别、框数量及 IoU，坐标必须在 0～1。',
+  },
+  IMAGE_OCR: {
+    title: 'OCR 文字识别题',
+    group: '文字识别',
+    description: 'EasyOCR 负责识别，OpenCV 可用于灰度化、去噪、二值化与倾斜校正。',
+    output: '识别到的纯文本',
+    scenario: '适合票据、标牌、题图和中英文文本识别。',
+    judging: '规范化空格和标点后计算编辑距离。',
+  },
+  IMAGE_ANALYSIS: {
+    title: '图像数值分析题',
+    group: '传统计算机视觉',
+    description:
+      '使用 Pillow、NumPy 或 OpenCV 计算固定图像属性；OPENCV_ANALYSIS 是策略标识，不是训练模型。',
+    output: '{"width":640,"height":480,"mode":"RGB","mean_gray":128.2,"edge_strength":12.6}',
+    scenario: '适合尺寸、颜色模式、平均灰度和边缘强度分析。',
+    judging: '宽高与 mode 精确匹配，灰度和边缘强度分别使用独立误差。',
+  },
+}
 const visionAnnotation = ref<VisionAnnotation | null>(null)
 const qualityReports = ref<Record<string, NonNullable<VisionAnnotation['quality']>>>({})
 const qualityAccepted = ref(false)
 const qualityNote = ref('')
+const candidateConfirmed = ref(false)
 const activeQualityWarnings = computed(() =>
   (form.value.judgeCase || []).flatMap(
     (item) => qualityReports.value[item.input || '']?.warnings || [],
@@ -248,6 +316,53 @@ function createInitialForm(): QuestionAddRequest {
 }
 
 const form = ref<QuestionAddRequest>(createInitialForm())
+function ensureJudgeConfig() {
+  if (!form.value.judgeConfig) {
+    form.value.judgeConfig = { timeLimit: 1000, memoryLimit: 262144, stackLimit: 65536 }
+  }
+  return form.value.judgeConfig
+}
+
+const imageJudgeConfig = computed(() => ensureJudgeConfig())
+const activeImageTypeInfo = computed<ImageTypeInfo | null>(() => {
+  const type = form.value.questionType as ImageQuestionType
+  return IMAGE_TYPE_INFO[type] || null
+})
+const dominantVisionBox = computed(
+  () => [...(visionAnnotation.value?.boxes || [])].sort((a, b) => b.confidence - a.confidence)[0],
+)
+
+function configureImageJudge(type: string | undefined, legacyTolerance?: number) {
+  if (!type?.startsWith('IMAGE_')) return
+  const config = ensureJudgeConfig()
+  if (type === 'IMAGE_OBJECT_COUNT') {
+    config.countTolerance ??= Math.max(0, legacyTolerance ?? 0)
+    form.value.countTolerance = config.countTolerance
+  } else if (type === 'IMAGE_OBJECT_DETECTION') {
+    config.iouThreshold ??= legacyTolerance && legacyTolerance > 0 ? legacyTolerance / 100 : 0.5
+    form.value.countTolerance = Math.round(config.iouThreshold * 100)
+  } else if (type === 'IMAGE_OCR') {
+    config.ocrEditDistance ??= Math.max(0, legacyTolerance ?? 2)
+    form.value.countTolerance = config.ocrEditDistance
+  } else if (type === 'IMAGE_ANALYSIS') {
+    config.analysisVersion = 2
+    config.meanGrayTolerance ??= 0.5
+    config.edgeStrengthTolerance ??= 1
+    form.value.countTolerance = 0
+  } else {
+    form.value.countTolerance = 0
+  }
+}
+
+function syncLegacyImageTolerance() {
+  const type = form.value.questionType
+  const config = ensureJudgeConfig()
+  if (type === 'IMAGE_OBJECT_COUNT') form.value.countTolerance = config.countTolerance ?? 0
+  else if (type === 'IMAGE_OBJECT_DETECTION')
+    form.value.countTolerance = Math.round((config.iouThreshold ?? 0.5) * 100)
+  else if (type === 'IMAGE_OCR') form.value.countTolerance = config.ocrEditDistance ?? 2
+  else form.value.countTolerance = 0
+}
 const availableVisionModels = computed(() =>
   VISION_MODELS.filter((item) =>
     (item.tasks as readonly string[]).includes(form.value.questionType || ''),
@@ -372,6 +487,9 @@ function validate(): boolean {
     return (Message.warning('图片质量有提醒，请确认并填写继续使用的原因'), false)
   }
   if (form.value.questionType?.startsWith('IMAGE_')) {
+    if (!candidateConfirmed.value) {
+      return (Message.warning('请先人工复核并确认候选标准答案'), false)
+    }
     const cases = form.value.judgeCase || []
     const uniqueImages = new Set(cases.map((item) => item.input?.trim()).filter(Boolean))
     if (
@@ -436,6 +554,7 @@ async function uploadQuestionImage(event: Event) {
     qualityReports.value = {}
     qualityAccepted.value = false
     qualityNote.value = ''
+    candidateConfirmed.value = false
     await inspectQuality(res.data.data)
     form.value.judgeCase = []
     generatedPreview.value = null
@@ -514,6 +633,7 @@ async function uploadHiddenImages(event: Event) {
   input.value = ''
   if (!files.length) return
   hiddenImagesUploading.value = true
+  candidateConfirmed.value = false
   let completed = 0
   try {
     if (!form.value.judgeCase) form.value.judgeCase = []
@@ -671,6 +791,7 @@ async function detectObjects() {
   const imageUrl = form.value.imageUrl?.trim()
   if (!imageUrl) return void Message.warning('请先上传题图')
   visionDetecting.value = true
+  candidateConfirmed.value = false
   try {
     const token = getToken()
     const res = await axios.post<{ code?: number; message?: string; data?: VisionAnnotation }>(
@@ -996,13 +1117,12 @@ function fillVisionProblem(annotation: VisionAnnotation, imageUrl: string) {
     y2,
   }))
   if (type === 'IMAGE_CLASSIFICATION') {
-    form.value.title = `${COCO_LABEL_ZH[dominant] || dominant}图像分类`
+    form.value.title = `${COCO_LABEL_ZH[dominant] || dominant}主目标标签识别`
     form.value.content = buildGenericVisionStatement(
       '识别图片中的主要目标类别',
       '输出一个 YOLO 英文类别名称，例如 `car`。',
     )
     form.value.answer = buildClassificationAnswer()
-    form.value.countTolerance = 0
     form.value.judgeCase = [{ input: imageUrl, output: dominant, sample: true }]
   } else if (type === 'IMAGE_OBJECT_DETECTION') {
     form.value.title = `${visionSceneTitle(orderedCounts)}与位置检测`
@@ -1011,7 +1131,6 @@ function fillVisionProblem(annotation: VisionAnnotation, imageUrl: string) {
       '输出 JSON 数组，每项包含 `label`、`x1`、`y1`、`x2`、`y2`；坐标归一化到 0～1。',
     )
     form.value.answer = buildDetectionAnswer()
-    form.value.countTolerance = 50
     form.value.judgeCase = [{ input: imageUrl, output: JSON.stringify(boxes), sample: true }]
   } else if (type === 'IMAGE_OCR') {
     form.value.title = '题图文字 OCR 识别'
@@ -1020,7 +1139,6 @@ function fillVisionProblem(annotation: VisionAnnotation, imageUrl: string) {
       '按阅读顺序输出识别到的纯文本，不要输出解释或 JSON。',
     )
     form.value.answer = buildOcrAnswer()
-    form.value.countTolerance = 2
     form.value.judgeCase = [
       { input: imageUrl, output: annotation.ocr_text?.trim() || '未识别到文字', sample: true },
     ]
@@ -1031,7 +1149,6 @@ function fillVisionProblem(annotation: VisionAnnotation, imageUrl: string) {
       '输出 JSON，字段为 `width`、`height`、`mode`、`mean_gray`、`edge_strength`。',
     )
     form.value.answer = buildAnalysisAnswer()
-    form.value.countTolerance = 2
     form.value.judgeCase = [
       { input: imageUrl, output: JSON.stringify(annotation.image_analysis || {}), sample: true },
     ]
@@ -1039,7 +1156,6 @@ function fillVisionProblem(annotation: VisionAnnotation, imageUrl: string) {
     form.value.title = visionSceneTitle(orderedCounts)
     form.value.content = buildVisionStatement(orderedCounts)
     form.value.answer = buildVisionReferenceAnswer()
-    form.value.countTolerance = 0
     form.value.judgeCase = [
       { input: imageUrl, output: JSON.stringify(orderedCounts), sample: true },
     ]
@@ -1049,7 +1165,14 @@ function fillVisionProblem(annotation: VisionAnnotation, imageUrl: string) {
     memoryLimit: 1_572_864,
     stackLimit: 65_536,
     analysisVersion: type === 'IMAGE_ANALYSIS' ? 2 : undefined,
+    countTolerance: type === 'IMAGE_OBJECT_COUNT' ? 0 : undefined,
+    iouThreshold: type === 'IMAGE_OBJECT_DETECTION' ? 0.5 : undefined,
+    ocrEditDistance: type === 'IMAGE_OCR' ? 2 : undefined,
+    meanGrayTolerance: type === 'IMAGE_ANALYSIS' ? 0.5 : undefined,
+    edgeStrengthTolerance: type === 'IMAGE_ANALYSIS' ? 1 : undefined,
   }
+  syncLegacyImageTolerance()
+  candidateConfirmed.value = false
   tags.value = tags.value.filter(
     (tag) => !(PROBLEM_DIFFICULTIES as readonly string[]).includes(tag),
   )
@@ -1185,6 +1308,8 @@ async function loadQuestionForEdit() {
     tags.value = Array.isArray(item.tags) ? item.tags : []
     qualityAccepted.value = Boolean(item.qualityReview?.accepted)
     qualityNote.value = String(item.qualityReview?.reason || '')
+    candidateConfirmed.value = Boolean(item.qualityReview?.candidateConfirmed)
+    configureImageJudge(item.questionType, item.countTolerance ?? 0)
     const generation = item as typeof item & { generationSource?: string; generationModel?: string }
     imageGenerationSource.value = generation.generationSource || ''
     imageGenerationModel.value = generation.generationModel || ''
@@ -1209,6 +1334,7 @@ function buildProblemPayload(): QuestionAddRequest & {
   generationSource?: string
   generationModel?: string
 } {
+  if (form.value.questionType?.startsWith('IMAGE_')) syncLegacyImageTolerance()
   return {
     ...form.value,
     generationSource: form.value.questionType?.startsWith('IMAGE_')
@@ -1219,21 +1345,19 @@ function buildProblemPayload(): QuestionAddRequest & {
     content: normalizeOjStatement(form.value.content || '').trim(),
     answer: form.value.answer?.trim(),
     tags: [...tags.value],
-    qualityReview:
-      form.value.questionType?.startsWith('IMAGE_') && Object.keys(qualityReports.value).length
-        ? {
-            version: 'opencv-quality-v1',
-            reports: Object.fromEntries(
-              (form.value.judgeCase || [])
-                .filter((item) => Boolean(qualityReports.value[item.input || '']))
-                .map((item) => [item.input, qualityReports.value[item.input || '']]),
-            ),
-            accepted: qualityAccepted.value,
-            reason: qualityNote.value.trim(),
-          }
-        : form.value.questionType?.startsWith('IMAGE_')
-          ? form.value.qualityReview
-          : undefined,
+    qualityReview: form.value.questionType?.startsWith('IMAGE_')
+      ? {
+          version: 'opencv-quality-v1',
+          reports: Object.fromEntries(
+            (form.value.judgeCase || [])
+              .filter((item) => Boolean(qualityReports.value[item.input || '']))
+              .map((item) => [item.input, qualityReports.value[item.input || '']]),
+          ),
+          accepted: qualityAccepted.value,
+          reason: qualityNote.value.trim(),
+          candidateConfirmed: candidateConfirmed.value,
+        }
+      : undefined,
     judgeCase: (form.value.judgeCase || []).map((c) => ({
       input: c.input?.trim() || '',
       output: c.output?.trim() || '',
@@ -1489,7 +1613,7 @@ watch(
 
 watch(
   () => form.value.questionType,
-  (type) => {
+  (type, previousType) => {
     if (type?.startsWith('IMAGE_') && !tags.value.includes('图像识别')) tags.value.push('图像识别')
     if (!type?.startsWith('IMAGE_')) tags.value = tags.value.filter((tag) => tag !== '图像识别')
     if (type === 'IMAGE_OCR') form.value.visionModelKey = 'EASYOCR_ZH_EN'
@@ -1499,6 +1623,10 @@ watch(
       !['YOLO_GENERAL', 'YOLO_HELMET'].includes(form.value.visionModelKey || '')
     )
       form.value.visionModelKey = 'YOLO_GENERAL'
+    if (type?.startsWith('IMAGE_')) {
+      if (previousType && previousType !== type) candidateConfirmed.value = false
+      configureImageJudge(type)
+    }
   },
 )
 </script>
@@ -1594,11 +1722,17 @@ watch(
               <a-form-item label="题目类型" class="question-type-selector">
                 <a-select v-model="form.questionType">
                   <a-option value="TEXT">传统文本编程题</a-option>
-                  <a-option value="IMAGE_OBJECT_COUNT">图像目标计数题</a-option>
-                  <a-option value="IMAGE_CLASSIFICATION">图像分类题</a-option>
-                  <a-option value="IMAGE_OBJECT_DETECTION">目标检测框题</a-option>
-                  <a-option value="IMAGE_OCR">OCR 文字识别题</a-option>
-                  <a-option value="IMAGE_ANALYSIS">图像属性分析题</a-option>
+                  <a-optgroup label="深度学习目标识别">
+                    <a-option value="IMAGE_CLASSIFICATION">主目标标签分类题</a-option>
+                    <a-option value="IMAGE_OBJECT_COUNT">图像目标计数题</a-option>
+                    <a-option value="IMAGE_OBJECT_DETECTION">目标位置检测题</a-option>
+                  </a-optgroup>
+                  <a-optgroup label="文字识别">
+                    <a-option value="IMAGE_OCR">OCR 文字识别题</a-option>
+                  </a-optgroup>
+                  <a-optgroup label="传统计算机视觉">
+                    <a-option value="IMAGE_ANALYSIS">图像数值分析题</a-option>
+                  </a-optgroup>
                 </a-select>
                 <p class="question-type-selector__hint">
                   <span v-if="form.questionType === 'TEXT'"
@@ -1607,6 +1741,29 @@ watch(
                   <span v-else>图像题将使用下方的模型选择、题图上传和自动标注工具。</span>
                 </p>
               </a-form-item>
+              <section v-if="activeImageTypeInfo" class="image-type-guide" aria-live="polite">
+                <div class="image-type-guide__head">
+                  <span>{{ activeImageTypeInfo.group }}</span>
+                  <strong>{{ activeImageTypeInfo.title }}</strong>
+                </div>
+                <p>{{ activeImageTypeInfo.description }}</p>
+                <dl>
+                  <div>
+                    <dt>输出示例</dt>
+                    <dd>
+                      <code>{{ activeImageTypeInfo.output }}</code>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>适用场景</dt>
+                    <dd>{{ activeImageTypeInfo.scenario }}</dd>
+                  </div>
+                  <div>
+                    <dt>判题方式</dt>
+                    <dd>{{ activeImageTypeInfo.judging }}</dd>
+                  </div>
+                </dl>
+              </section>
               <Transition name="form-reveal">
                 <section v-if="form.questionType === 'TEXT'" class="smart-import-card">
                   <AiModelPicker :disabled="smartImportRunning || aiGenerating" />
@@ -1940,6 +2097,15 @@ watch(
                         <span>{{ visionAnnotation.boxes?.length || 0 }} 个目标</span>
                         <span>{{ visionAnnotation.inferenceMs ?? '-' }} ms</span>
                       </div>
+                      <p
+                        v-if="form.questionType === 'IMAGE_CLASSIFICATION'"
+                        class="vision-result__primary"
+                      >
+                        <strong>主要类别：</strong>{{ dominantVisionBox?.label || 'unknown' }}
+                        <span v-if="dominantVisionBox">
+                          · 置信度 {{ (dominantVisionBox.confidence * 100).toFixed(1) }}%
+                        </span>
+                      </p>
                       <div class="vision-result__chips">
                         <span v-for="(count, label) in visionAnnotation.counts || {}" :key="label">
                           {{ label }} × {{ count }}
@@ -1988,13 +2154,20 @@ watch(
                       <p>
                         所有出题字段已自动生成。发布前请核对检测框和目标数量，必要时可直接修改。
                       </p>
+                      <label class="candidate-confirmation">
+                        <input v-model="candidateConfirmed" type="checkbox" />
+                        <span>
+                          <strong>候选标准答案已经人工复核</strong>
+                          <small>我已逐组核对公开与隐藏图片、输出格式和目标结果。</small>
+                        </span>
+                      </label>
                     </div>
                     <div v-if="visionAnnotation" class="hidden-case-uploader">
                       <div>
                         <strong>隐藏评测图片</strong>
                         <p>
-                          至少再上传 1
-                          张不同图片。系统会自动识别标准答案，学生端只知道图片数量，不会看到图片和输出。
+                          至少再上传 1 张不同图片，建议配置 2 张隐藏图片。系统会自动生成候选答案，
+                          经人工复核后才可发布；学生端不会看到隐藏图片和输出。
                         </p>
                       </div>
                       <label class="vision-upload__button hidden-case-uploader__button">
@@ -2010,21 +2183,68 @@ watch(
                     </div>
                   </div>
                 </a-form-item>
-                <a-form-item
-                  :label="
-                    form.questionType === 'IMAGE_OBJECT_DETECTION'
-                      ? '检测框 IoU 阈值（百分比）'
-                      : form.questionType === 'IMAGE_OCR'
-                        ? '允许字符编辑距离'
-                        : '结果允许误差'
-                  "
-                >
-                  <a-input-number v-model="form.countTolerance" :min="0" :max="100" />
-                  <p class="vision-help">
-                    计数题表示数量误差；检测题表示 IoU 百分比；OCR
-                    表示允许不同的字符数；属性题表示数值绝对误差。
-                  </p>
-                </a-form-item>
+                <div v-if="activeImageTypeInfo" class="image-judge-settings">
+                  <a-form-item
+                    v-if="form.questionType === 'IMAGE_OBJECT_COUNT'"
+                    label="每个类别允许的数量误差"
+                  >
+                    <a-input-number v-model="imageJudgeConfig.countTolerance" :min="0" :max="100" />
+                    <p class="vision-help">0 表示所有类别数量必须完全一致；建议核心实验使用 0。</p>
+                  </a-form-item>
+                  <a-form-item
+                    v-else-if="form.questionType === 'IMAGE_OBJECT_DETECTION'"
+                    label="检测框 IoU 阈值"
+                  >
+                    <a-input-number
+                      v-model="imageJudgeConfig.iouThreshold"
+                      :min="0.1"
+                      :max="0.95"
+                      :step="0.05"
+                      :precision="2"
+                    />
+                    <p class="vision-help">默认 0.50；越高表示检测框位置要求越严格。</p>
+                  </a-form-item>
+                  <a-form-item
+                    v-else-if="form.questionType === 'IMAGE_OCR'"
+                    label="允许的字符编辑距离"
+                  >
+                    <a-input-number
+                      v-model="imageJudgeConfig.ocrEditDistance"
+                      :min="0"
+                      :max="100"
+                    />
+                    <p class="vision-help">规范化空格与标点后，允许增加、删除或替换的字符数。</p>
+                  </a-form-item>
+                  <div
+                    v-else-if="form.questionType === 'IMAGE_ANALYSIS'"
+                    class="image-judge-settings__grid"
+                  >
+                    <a-form-item label="平均灰度允许误差">
+                      <a-input-number
+                        v-model="imageJudgeConfig.meanGrayTolerance"
+                        :min="0"
+                        :max="255"
+                        :step="0.1"
+                        :precision="2"
+                      />
+                    </a-form-item>
+                    <a-form-item label="边缘强度允许误差">
+                      <a-input-number
+                        v-model="imageJudgeConfig.edgeStrengthTolerance"
+                        :min="0"
+                        :max="255"
+                        :step="0.1"
+                        :precision="2"
+                      />
+                    </a-form-item>
+                    <p class="vision-help image-judge-settings__wide">
+                      width、height 必须精确一致，mode 必须匹配；两个数值字段分别使用独立误差。
+                    </p>
+                  </div>
+                  <div v-else class="image-judge-settings__notice">
+                    主目标标签按文本匹配，无需数量、IoU 或数值误差设置。
+                  </div>
+                </div>
               </div>
 
               <a-form-item label="OJ 分类">
@@ -2960,6 +3180,65 @@ watch(
   font-size: 12px;
   line-height: 1.55;
 }
+.image-type-guide {
+  margin: -2px 0 18px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, #0f9d8b 28%, var(--app-border));
+  border-radius: 15px;
+  background: color-mix(in srgb, #0f9d8b 5%, var(--app-surface));
+}
+.image-type-guide__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.image-type-guide__head span {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #0f9d8b 14%, var(--app-surface));
+  color: #087f70;
+  font-size: 11px;
+  font-weight: 800;
+}
+.image-type-guide__head strong {
+  color: var(--app-text);
+  font-size: 15px;
+}
+.image-type-guide > p {
+  margin: 8px 0 12px;
+  color: var(--app-text-muted);
+  line-height: 1.65;
+}
+.image-type-guide dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+.image-type-guide dl > div {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--app-border);
+  border-radius: 11px;
+  background: var(--app-surface);
+}
+.image-type-guide dt {
+  margin-bottom: 5px;
+  color: var(--app-text-subtle);
+  font-size: 11px;
+  font-weight: 800;
+}
+.image-type-guide dd {
+  margin: 0;
+  color: var(--app-text);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.image-type-guide code {
+  color: #087f70;
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+}
 .form-reveal-enter-active,
 .form-reveal-leave-active {
   transition:
@@ -3532,6 +3811,32 @@ watch(
   white-space: nowrap;
   background: linear-gradient(135deg, #7c3aed, #2563eb);
 }
+.image-judge-settings {
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--app-border);
+  border-radius: 15px;
+  background: var(--app-surface-soft);
+}
+.image-judge-settings :deep(.arco-form-item) {
+  margin-bottom: 0;
+}
+.image-judge-settings__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+.image-judge-settings__wide {
+  grid-column: 1 / -1;
+}
+.image-judge-settings__notice {
+  padding: 11px 13px;
+  border-left: 3px solid #0f9d8b;
+  border-radius: 8px;
+  background: color-mix(in srgb, #0f9d8b 7%, var(--app-surface));
+  color: var(--app-text-muted);
+  font-size: 12px;
+}
 .case-visibility {
   display: inline-flex;
   align-items: center;
@@ -3637,6 +3942,9 @@ watch(
 .vision-result__chips {
   margin-top: 8px;
 }
+.vision-result__primary {
+  color: var(--app-text) !important;
+}
 .quality-review {
   margin-top: 12px;
   padding: 12px;
@@ -3666,6 +3974,30 @@ watch(
   font-size: 12px;
   line-height: 1.5;
 }
+.candidate-confirmation {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid color-mix(in srgb, #0f9d8b 35%, var(--app-border));
+  border-radius: 11px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  cursor: pointer;
+}
+.candidate-confirmation input {
+  margin-top: 3px;
+  accent-color: #0f9d8b;
+}
+.candidate-confirmation span {
+  display: grid;
+  gap: 3px;
+}
+.candidate-confirmation small {
+  color: var(--app-text-muted);
+  line-height: 1.45;
+}
 
 .vision-autofill-list {
   display: grid;
@@ -3686,6 +4018,13 @@ watch(
 }
 
 @media (max-width: 720px) {
+  .image-type-guide dl,
+  .image-judge-settings__grid {
+    grid-template-columns: 1fr;
+  }
+  .image-judge-settings__wide {
+    grid-column: auto;
+  }
   .vision-fields {
     padding: 12px;
   }
