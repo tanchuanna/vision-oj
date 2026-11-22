@@ -23,4 +23,8 @@ COPY Sandbox/docker/python-vision/models/hard-hat-best.pt /models/hard-hat-best.
 COPY Sandbox/docker/python-vision/models/easyocr/craft_mlt_25k.pth /opt/easyocr/model/craft_mlt_25k.pth
 COPY Sandbox/docker/python-vision/models/easyocr/zh_sim_g2.pth /opt/easyocr/model/zh_sim_g2.pth
 
+# The sandbox mounts a small writable tmpfs here while keeping the rest of
+# the container root filesystem read-only.
+RUN mkdir -p /opt/easyocr/user_network
+
 WORKDIR /app

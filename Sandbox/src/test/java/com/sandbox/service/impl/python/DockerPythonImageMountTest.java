@@ -50,4 +50,12 @@ class DockerPythonImageMountTest {
         assertFalse(Files.exists(context.imageDir.toPath()));
         assertFalse(Files.exists(context.workDir.toPath()));
     }
+
+    @Test
+    void easyOcrGetsOnlyItsOwnTemporaryWritableDirectory() {
+        var tmpFs = DockerPythonCodeSandbox.buildTmpFs();
+        assertTrue(tmpFs.containsKey("/opt/easyocr/user_network"));
+        assertTrue(tmpFs.get("/opt/easyocr/user_network").contains("mode=1777"));
+        assertFalse(tmpFs.containsKey("/opt/easyocr/model"));
+    }
 }

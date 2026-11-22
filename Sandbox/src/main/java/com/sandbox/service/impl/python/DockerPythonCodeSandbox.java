@@ -275,8 +275,7 @@ public class DockerPythonCodeSandbox extends AbstractTemplateCodeSandbox {
 
     private static String createSandboxContainer(
             DockerClient client, String hostWorkDir, String hostImageDir, String image, boolean imageTask) {
-        Map<String, String> tmpFs = new HashMap<>();
-        tmpFs.put("/tmp", "rw,noexec,nosuid,size=64m");
+        Map<String, String> tmpFs = buildTmpFs();
         HostConfig hostConfig = HostConfig.newHostConfig()
                 .withNetworkMode("none")
                 .withReadonlyRootfs(true)
@@ -301,6 +300,15 @@ public class DockerPythonCodeSandbox extends AbstractTemplateCodeSandbox {
                 .exec();
         client.startContainerCmd(resp.getId()).exec();
         return resp.getId();
+    }
+
+    static Map<String, String> buildTmpFs() {
+        Map<String, String> tmpFs = new HashMap<>();
+        tmpFs.put("/tmp", "rw,noexec,nosuid,size=64m");
+        // EasyOCR creates this directory when Reader starts, even when its
+        // model weights are already bundled in the read-only image.
+        tmpFs.put("/opt/easyocr/user_network", "rw,noexec,nosuid,size=16m,mode=1777");
+        return tmpFs;
     }
 
     static List<Bind> buildBinds(String hostWorkDir, String hostImageDir) {

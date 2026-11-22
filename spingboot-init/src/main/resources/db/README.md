@@ -53,4 +53,29 @@
 
 执行前先备份，并确认后端实际连接的数据库。总脚本包含演示数据，因此不要把它当作“只补一张表”的增量脚本直接导入正在使用的生产库。`CREATE TABLE IF NOT EXISTS` 也不会自动修正已有表的所有历史差异；如果线上结构和总脚本不同，应先比较字段与索引，再决定如何升级。
 
-此前的独立迁移 SQL 和本地演示账号 SQL 已移除。应用启动时仍可能由代码执行它自身的兼容性补列逻辑；这不属于本目录的第二份 SQL 文件。
+此前的独立迁移 SQL 和本地演示账号 SQL 已移除。应用启动时仍可能由代码执行它自身的兼容性补列逻辑；这不属于本目录的第二份建库 SQL。
+
+## 可选：新增 60 道原创练习题
+
+`seed_60_questions.sql` 包含 10 道普通编程题，以及目标计数、主目标标签、目标检测、OCR、图像数值分析各 10 道。图片是 `scripts/build_seed_60_questions.py` 确定性生成的 **100 张原创测试图**；不是从其他 OJ 复制的题目，也不宣称彩色矩形图片已被 YOLO 正确识别。前三类图像题使用有明确像素规则的入门题面，OCR 使用七段数码管，分析题使用像素统计。每题公开和隐藏图片不同，参考 Python 程序已逐图运行并校验不同输出。老师仍应在面向学生发布前复核题面和标准答案。
+
+**SQL 不能上传图片。先把 `scripts/seed60-assets/` 下的全部 100 张 PNG 上传到目标 MinIO bucket 的 `question-seed-60-v1/` 前缀，再执行 SQL。** `scripts/UploadSeedImages.java` 提供上传和对象大小核验工具；运行时需设置 `MINIO_ENDPOINT`、`MINIO_ACCESS_KEY`、`MINIO_SECRET_KEY`、`MINIO_BUCKET` 四个环境变量。不要把真实密钥写入仓库。上传后确认图片可以通过 MinIO 的公开访问地址读取。
+
+在已建好的 `test` 库执行时，先备份，再进入 MySQL 客户端，并在**同一个连接**中运行：
+
+```sql
+SET @oj_seed_image_base = 'http://127.0.0.1:9000/mayue-oj';
+SOURCE seed_60_questions.sql;
+```
+
+上面的地址仅是本地示例，必须换成与当前 MinIO `public-url`、bucket 对应的**公开 bucket 地址**，末尾不加 `/`。从本目录启动 MySQL 客户端，或把 `SOURCE` 后的路径改成实际 SQL 路径。服务器的 MinIO 是另一个实例时，要先向服务器 bucket 上传同一批图片，再用服务器的公开 bucket 地址导入；**不能直接把本地 SQL 导入服务器并沿用 `127.0.0.1` 图片地址**。
+
+导入后检查：
+
+```sql
+SELECT question_type, COUNT(*) FROM question
+WHERE id BETWEEN 300001 AND 300060 AND is_delete = 0
+GROUP BY question_type;
+```
+
+每类应为 10 道。数据包使用固定 ID 和 `INSERT IGNORE`，重复执行不覆盖现有题目；如果目标库已使用这些 ID，应先检查冲突，不要依赖忽略冲突来判断导入成功。

@@ -45,6 +45,12 @@
     </dependencyManagement>
 
     <dependencies>
+        <!--   腾讯云oos     -->
+        <dependency>
+            <groupId>com.qcloud</groupId>
+            <artifactId>cos_api</artifactId>
+            <version>5.6.227</version>
+        </dependency>
         <!--短信验证码所需jar包-->
         <dependency>
             <groupId>com.aliyun</groupId>
