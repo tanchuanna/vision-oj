@@ -33,6 +33,19 @@ class QuestionSolutionServiceTest {
     }
 
     @Test
+    void legacySummaryDoesNotExposeCodeToReaders() {
+        QuestionSolution solution = publishedSolution();
+        solution.setSummary("先统计每个数字出现次数 include <bits/stdc++.h> using namespace std; int main() {");
+
+        var listItem = QuestionSolutionServiceImpl.toListItem(solution);
+        var hintDetail = QuestionSolutionServiceImpl.toDetail(solution, false, false, null);
+
+        assertEquals("先统计每个数字出现次数", listItem.getSummary());
+        assertEquals(listItem.getSummary(), hintDetail.getSummary());
+        assertNull(hintDetail.getContent());
+    }
+
+    @Test
     void editingPublishedSolutionAlwaysReturnsToPendingReview() {
         QuestionSolution existing = publishedSolution();
         SolutionSaveRequest request = saveRequest();

@@ -28,10 +28,23 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 public class QuestionSolutionServiceImpl extends ServiceImpl<QuestionSolutionMapper, QuestionSolution>
         implements QuestionSolutionService {
+
+    private static final Pattern SUMMARY_CODE_START = Pattern.compile(
+            "(?i)```|(?:#\\s*)?include\\s*[<\\\"]|\\busing\\s+namespace\\s+std\\s*;|\\b(?:int|signed)\\s+main\\s*\\(");
+
+    static String readableSummary(String summary) {
+        String text = StringUtils.trimToEmpty(summary);
+        Matcher code = SUMMARY_CODE_START.matcher(text);
+        if (code.find()) text = text.substring(0, code.start());
+        text = text.replaceAll("\\s+", " ").trim();
+        return text.isEmpty() ? "这篇题解包含完整的解题思路与参考代码" : text;
+    }
 
     @Resource private QuestionSolutionAccessService accessService;
     @Resource private QuestionService questionService;
@@ -71,7 +84,7 @@ public class QuestionSolutionServiceImpl extends ServiceImpl<QuestionSolutionMap
     static void applySave(QuestionSolution solution, SolutionSaveRequest request, boolean newRecord) {
         validateContent(request);
         solution.setTitle(request.getTitle().trim());
-        solution.setSummary(request.getSummary().trim());
+        solution.setSummary(readableSummary(request.getSummary()));
         solution.setHintContent(request.getHintContent().trim());
         solution.setContent(request.getContent().trim());
         if (newRecord) {
@@ -94,7 +107,7 @@ public class QuestionSolutionServiceImpl extends ServiceImpl<QuestionSolutionMap
         vo.setQuestionId(String.valueOf(solution.getQuestionId()));
         vo.setUserId(String.valueOf(solution.getUserId()));
         vo.setTitle(solution.getTitle());
-        vo.setSummary(solution.getSummary());
+        vo.setSummary(readableSummary(solution.getSummary()));
         vo.setHintContent(solution.getHintContent());
         vo.setReviewStatus(solution.getReviewStatus());
         vo.setOfficial(Objects.equals(solution.getIsOfficial(), 1));

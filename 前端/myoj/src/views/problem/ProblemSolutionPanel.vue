@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import { useAuthStore } from '@/stores/auth'
 import { renderMarkdownToHtml } from '@/utils/renderMarkdown'
@@ -53,6 +53,48 @@ const form = reactive<SolutionSavePayload>({
   hintContent: '',
   content: '',
 })
+const contentEditor = ref<HTMLTextAreaElement | null>(null)
+const solutionMarkdown = ref<HTMLElement | null>(null)
+
+/** Existing articles may contain pasted C++ without Markdown fences. Format only the reader view. */
+function formatLegacyCode(content: string): string {
+  if (!content || content.includes('```')) return content
+  const include = content.search(/#include\s*[<"]/)
+  if (include < 0 || !/\b(?:int|signed)\s+main\s*\(/.test(content.slice(include))) return content
+  const intro = content.slice(0, include).trim()
+  const code = content.slice(include).trim()
+  return `${intro ? `${intro}\n\n` : ''}\`\`\`cpp\n${code}\n\`\`\``
+}
+
+function insertCodeBlock() {
+  const textarea = contentEditor.value
+  const start = textarea?.selectionStart ?? form.content.length
+  const end = textarea?.selectionEnd ?? start
+  const before = form.content.slice(0, start)
+  const after = form.content.slice(end)
+  const separator =
+    before && !before.endsWith('\n\n') ? (before.endsWith('\n') ? '\n' : '\n\n') : ''
+  const block = '```cpp\n// 在这里粘贴代码\n```'
+  form.content = `${before}${separator}${block}${after.startsWith('\n') ? '' : '\n'}${after}`
+  void nextTick(() => {
+    textarea?.focus()
+    const cursor = before.length + separator.length + '```cpp\n'.length
+    textarea?.setSelectionRange(cursor, cursor + '// 在这里粘贴代码'.length)
+  })
+}
+
+async function highlightSolutionCode() {
+  await nextTick()
+  const root = solutionMarkdown.value
+  if (!root || !root.querySelector('pre code')) return
+  const PrismModule = await import('prismjs')
+  await import('prismjs/components/prism-clike')
+  await import('prismjs/components/prism-cpp')
+  await import('prismjs/components/prism-java')
+  await import('prismjs/components/prism-python')
+  const Prism = PrismModule.default
+  root.querySelectorAll<HTMLElement>('pre code').forEach((code) => Prism.highlightElement(code))
+}
 
 const statusText = computed(() => {
   const s = selected.value?.reviewStatus
@@ -66,8 +108,60 @@ const statusText = computed(() => {
           ? l('已驳回', 'Rejected')
           : ''
 })
-const fullHtml = computed(() => renderMarkdownToHtml(selected.value?.content || ''))
+const fullHtml = computed(() =>
+  renderMarkdownToHtml(formatLegacyCode(selected.value?.content || '')),
+)
 const hintHtml = computed(() => renderMarkdownToHtml(selected.value?.hintContent || ''))
+const detailSummary = computed(() => {
+  const raw = selected.value?.summary || ''
+  const summary = cleanSummary(raw)
+  const contentIntro = cleanSummary(selected.value?.content || '').slice(0, summary.length)
+  // The article already starts with this text; showing it again in the header adds clutter.
+  return hasCodeInSummary(raw) || (summary && summary === contentIntro) ? '' : summary
+})
+const readableCode = computed(() => {
+  const content = selected.value?.content || ''
+  const fenced = content.match(/```[^\n]*\n([\s\S]*?)\n```/)
+  if (fenced) return fenced[1] || ''
+  const include = content.search(/#include\s*[<"]/)
+  return include >= 0 && /\b(?:int|signed)\s+main\s*\(/.test(content.slice(include))
+    ? content.slice(include).trim()
+    : ''
+})
+watch(fullHtml, () => void highlightSolutionCode(), { flush: 'post' })
+
+async function copySolutionCode() {
+  if (!readableCode.value) return
+  try {
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(readableCode.value)
+        Message.success(l('代码已复制', 'Code copied'))
+        return
+      } catch {
+        // Some browsers expose the API but reject writes without a secure context.
+      }
+    }
+    const textarea = document.createElement('textarea')
+    textarea.value = readableCode.value
+    textarea.setAttribute('readonly', '')
+    textarea.style.position = 'fixed'
+    textarea.style.left = '-9999px'
+    const previousFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null
+    document.body.appendChild(textarea)
+    try {
+      textarea.select()
+      if (!document.execCommand('copy')) throw new Error('Copy command failed')
+    } finally {
+      textarea.remove()
+      previousFocus?.focus()
+    }
+    Message.success(l('代码已复制', 'Code copied'))
+  } catch {
+    Message.warning(l('复制失败，请手动选择代码', 'Copy failed; select the code manually'))
+  }
+}
 
 function avatar(url?: string) {
   return resolveMediaUrl(url || '') || ''
@@ -80,12 +174,20 @@ function dateText(raw?: string) {
 function generatedTitle() {
   return `${props.questionTitle?.trim() || l('本题', 'This problem')} · ${l('解题思路', 'Solution approach')}`
 }
-function generatedSummary(content: string, hint: string) {
-  const plain = (content || hint)
-    .replace(/```[\s\S]*?```/g, ' ')
+const summaryCodeStart =
+  /```|(?:#\s*)?include\s*[<"]|\busing\s+namespace\s+std\s*;|\b(?:int|signed)\s+main\s*\(/i
+function hasCodeInSummary(value: string): boolean {
+  return summaryCodeStart.test(value)
+}
+function cleanSummary(value: string): string {
+  const codeStart = value.search(summaryCodeStart)
+  return (codeStart >= 0 ? value.slice(0, codeStart) : value)
     .replace(/[#>*_`\[\]()~-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+function generatedSummary(content: string, hint: string) {
+  const plain = cleanSummary(content) || cleanSummary(hint)
   return (
     plain ||
     l('分享本题的分析过程、算法思路与实现方法', 'Share your analysis, approach and implementation')
@@ -461,7 +563,12 @@ onMounted(load)
           <span v-if="item.official" class="official-badge">{{ l('官方题解', 'Official') }}</span
           ><span v-if="reviewMode" class="pending-badge">{{ l('待审核', 'Pending') }}</span>
         </div>
-        <p>{{ item.summary }}</p>
+        <p>
+          {{
+            cleanSummary(item.summary) ||
+            l('查看这篇题解的思路与实现', 'Read the approach and implementation')
+          }}
+        </p>
         <footer>
           <span class="author"
             ><span class="avatar"
@@ -496,7 +603,7 @@ onMounted(load)
             {{ reviewMode ? l('题解审核', 'Review') : l('解题思路', 'Solution') }}
           </p>
           <h2>{{ selected.title }}</h2>
-          <p class="solution-detail__summary">{{ selected.summary }}</p>
+          <p v-if="detailSummary" class="solution-detail__summary">{{ detailSummary }}</p>
           <div class="solution-detail__author">
             <span class="avatar avatar--large"
               ><img
@@ -540,8 +647,16 @@ onMounted(load)
         <section v-if="selected.accessLevel === 'FULL'" class="solution-content-card">
           <div class="solution-content-card__title">
             <span>▤</span><strong>{{ l('题解正文', 'Full solution') }}</strong>
+            <button
+              v-if="readableCode"
+              type="button"
+              class="copy-solution-code"
+              @click="copySolutionCode"
+            >
+              {{ l('复制代码', 'Copy code') }}
+            </button>
           </div>
-          <div class="solution-markdown" v-html="fullHtml" />
+          <div ref="solutionMarkdown" class="solution-markdown" v-html="fullHtml" />
         </section>
         <section v-else class="hint-view">
           <div class="hint-view__head">
@@ -721,6 +836,7 @@ onMounted(load)
               >{{ l('完整题解', 'Full solution') }}
               <small>{{ form.content.length }} / 100000</small></span
             ><textarea
+              ref="contentEditor"
               v-model="form.content"
               maxlength="100000"
               rows="16"
@@ -732,6 +848,9 @@ onMounted(load)
               "
             />
           </label>
+          <button type="button" class="insert-code-block" @click="insertCodeBlock">
+            {{ l('插入 C++ 代码块', 'Insert C++ code block') }}
+          </button>
           <p v-if="selected?.reviewReason" class="reject-reason">
             {{ l('上次驳回原因：', 'Previous rejection: ') }}{{ selected.reviewReason }}
           </p>
@@ -1483,6 +1602,24 @@ onMounted(load)
   color: var(--app-accent);
   font-size: 19px;
 }
+.copy-solution-code {
+  min-height: 44px;
+  margin-left: auto;
+  border: 1px solid var(--app-border);
+  border-radius: 10px;
+  padding: 0 12px;
+  background: var(--app-surface);
+  color: var(--app-accent);
+  font-weight: 700;
+  cursor: pointer;
+}
+.copy-solution-code:hover {
+  border-color: var(--app-accent);
+}
+.copy-solution-code:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 2px;
+}
 .solution-markdown {
   line-height: 1.85;
 }
@@ -1496,12 +1633,49 @@ onMounted(load)
   margin: 0.8em 0;
 }
 .solution-markdown :deep(pre) {
-  border: 1px solid rgba(98, 199, 183, 0.16);
-  border-radius: 12px;
-  padding: 15px;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #244955;
+  border-radius: 14px;
+  margin: 18px 0;
+  padding: 18px 20px;
+  background: #102733;
+  color: #e6f4f1;
+  box-shadow: 0 8px 24px rgba(16, 39, 51, 0.12);
 }
 .solution-markdown :deep(code) {
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.solution-markdown :deep(pre code) {
+  display: block;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: transparent;
+  color: inherit;
+}
+.solution-markdown :deep(:not(pre) > code) {
+  border-radius: 5px;
+  padding: 2px 5px;
+  background: color-mix(in srgb, var(--app-accent) 9%, var(--app-surface));
+  color: var(--app-accent);
+  font-size: 0.9em;
+}
+.solution-markdown :deep(pre .token.keyword),
+.solution-markdown :deep(pre .token.operator) {
+  color: #7dd3fc;
+}
+.solution-markdown :deep(pre .token.string),
+.solution-markdown :deep(pre .token.char) {
+  color: #fcd68b;
+}
+.solution-markdown :deep(pre .token.comment) {
+  color: #91a9ad;
+}
+.solution-markdown :deep(pre .token.function),
+.solution-markdown :deep(pre .token.class-name) {
+  color: #a7e7c7;
 }
 .solution-detail .hint-view {
   margin-top: 16px;
@@ -1889,6 +2063,26 @@ html[data-theme='dark'] .review-notice {
 }
 .editor-field:nth-of-type(2) textarea {
   min-height: 310px;
+}
+.insert-code-block {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin: 12px 28px 0;
+  border: 1px solid var(--app-border-strong);
+  border-radius: 10px;
+  padding: 0 14px;
+  background: var(--app-surface-strong);
+  color: var(--app-accent);
+  font-weight: 700;
+  cursor: pointer;
+}
+.insert-code-block:hover {
+  border-color: var(--app-accent);
+}
+.insert-code-block:focus-visible {
+  outline: 2px solid var(--app-accent);
+  outline-offset: 2px;
 }
 .editor-sheet > .reject-reason {
   margin: 14px 28px 0 !important;
