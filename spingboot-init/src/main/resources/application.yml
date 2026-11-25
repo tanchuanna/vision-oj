@@ -60,6 +60,8 @@ springdoc:
   packages-to-scan: com.spingbootinit.controller
 
 judge:
+  dispatch:
+    poll-ms: 1000
   mq:
     mode: ${JUDGE_MQ_MODE:async}
     stream-key: judge:stream

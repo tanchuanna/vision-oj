@@ -80,6 +80,11 @@ public class JudeServiceImpl implements JudgeService {
             throw new BusinessException(ResultCode.NOT_FOUND_ERROR.getCode(), "提交记录不存在");
         }
 
+        // 至少一次投递下重复消息属于正常情况，直接返回以便 MQ 正常确认。
+        if (!Objects.equals(questionSubmit.getStatus(), QuestionSubmitStatusEnum.WAITING.getValue())) {
+            return questionSubmit;
+        }
+
         Long questionId = questionSubmit.getQuestionId();
         Question question = questionService.getById(questionId);
         if(question == null){
@@ -97,8 +102,8 @@ public class JudeServiceImpl implements JudgeService {
 
 
         if(!update){
-            log.warn("判题并发冲突，提交已被其他线程处理，id: {}", questionSubmitId);
-            throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "提交已被处理，请勿重复提交");
+            log.debug("提交已被其他消费者领取，忽略重复消息 id={}", questionSubmitId);
+            return questionSubmitService.getById(questionSubmitId);
         }
 
         // 重新获取更新后的提交记录

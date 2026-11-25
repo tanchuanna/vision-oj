@@ -166,6 +166,20 @@ CREATE TABLE IF NOT EXISTS `question_submit` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='代码提交';
 
 -- ---------------------------------------------------------------------------
+-- 判题本地消息表：与提交记录、题目计数在同一事务写入。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS `judge_task_outbox` (
+    `submission_id` BIGINT NOT NULL COMMENT '对应提交 id，一次提交只保存一条任务',
+    `attempts` INT NOT NULL DEFAULT 0 COMMENT '已领取投递次数',
+    `next_attempt_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '下次可投递时间兼领取租期',
+    `last_error` VARCHAR(128) DEFAULT NULL COMMENT '仅记录异常类型，不存敏感信息',
+    `create_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `update_time` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (`submission_id`),
+    KEY `idx_judge_task_due` (`next_attempt_at`, `submission_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='判题任务本地消息表';
+
+-- ---------------------------------------------------------------------------
 -- 题解（完整内容仅对当题已 AC 用户开放）
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS `question_solution` (

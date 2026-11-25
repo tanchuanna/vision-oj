@@ -116,6 +116,12 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- 隔离的事务/并发集成测试，不连接本机或线上 MySQL。 -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
         <!--  knife4j  -->
         <dependency>
             <groupId>com.github.xiaoymin</groupId>

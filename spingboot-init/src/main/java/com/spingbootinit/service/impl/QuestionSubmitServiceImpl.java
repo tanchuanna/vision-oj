@@ -4,7 +4,8 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.spingbootinit.common.exception.BusinessException;
 import com.spingbootinit.common.result.ResultCode;
-import com.spingbootinit.judo.mq.JudgeTaskTriggerFactory;
+import com.spingbootinit.mapper.JudgeTaskOutboxMapper;
+import com.spingbootinit.mapper.QuestionMapper;
 import com.spingbootinit.mapper.QuestionSubmitMapper;
 import com.spingbootinit.model.dto.questionsubmit.QuestionSubmitAddRequest;
 import com.spingbootinit.model.entity.Question;
@@ -18,8 +19,8 @@ import com.spingbootinit.service.QuestionService;
 import com.spingbootinit.service.QuestionSubmitService;
 import jakarta.annotation.Resource;
 import org.apache.commons.lang3.StringUtils;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Date;
 import java.util.List;
@@ -37,8 +38,10 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
     private ContestService contestService;
 
     @Resource
-    @Lazy
-    private JudgeTaskTriggerFactory judgeTaskTriggerFactory;
+    private QuestionMapper questionMapper;
+
+    @Resource
+    private JudgeTaskOutboxMapper judgeTaskOutboxMapper;
 
     @Override
     public QuestionStatisticsVO getQuestionStatistics(long questionId, Long currentUserId) {
@@ -99,6 +102,7 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
      * @return 提交记录的 id
      */
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public QuestionSubmit QuestionSubmit(QuestionSubmitAddRequest questionSubmitAddRequest ,long currentUserId) {
         if (questionSubmitAddRequest == null) {
             throw new BusinessException(ResultCode.PARAMS_ERROR);
@@ -119,8 +123,6 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
                     "图像类题目目前仅支持 Python");
         }
 
-        question.setSubmitNum(question.getSubmitNum() + 1);
-        questionService.updateById(question);
         QuestionSubmit questionSubmit = new QuestionSubmit();
         questionSubmit.setQuestionId(questionId);
         questionSubmit.setCode(code);
@@ -140,9 +142,14 @@ public class QuestionSubmitServiceImpl extends ServiceImpl<QuestionSubmitMapper,
             throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "提交失败，请稍后重试");
         }
 
-        judgeTaskTriggerFactory.enqueue(questionSubmit.getId());
-
-
+        // 数据库原子自增，避免并发请求读到同一个旧值；后续失败会一起回滚。
+        if (questionMapper.incrementSubmitNum(questionId) != 1) {
+            throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "题目状态已变化，请刷新后重试");
+        }
+        // 不在数据库事务中调用 MQ。任务意图与记录、计数一起提交，后台负责重试投递。
+        if (judgeTaskOutboxMapper.insertTask(questionSubmit.getId()) != 1) {
+            throw new BusinessException(ResultCode.OPERATION_ERROR.getCode(), "判题任务保存失败，请稍后重试");
+        }
         return questionSubmit;
     }
 

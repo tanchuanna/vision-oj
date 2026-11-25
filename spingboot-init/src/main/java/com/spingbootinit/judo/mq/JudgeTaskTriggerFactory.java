@@ -44,7 +44,6 @@ public class JudgeTaskTriggerFactory {
     /** 提交代码后调用：把 submitId 交给当前模式处理 */
     public void enqueue(Long submitId) {
         JudgeTaskTrigger trigger = triggers.get(properties.getMode());
-        System.out.println("trigger:" + trigger);
         if (trigger == null) {
             throw new BusinessException(ResultCode.SYSTEM_ERROR.getCode(),
                     "未知 judge.mq.mode=" + properties.getMode()
