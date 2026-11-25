@@ -1,123 +1,173 @@
-# 码跃 OJ（MaYue OJ）
+<div align="center">
 
-**让编程训练从“提交一道题”延伸到“命题、练习、评测、复盘”的完整过程。**
+# 码跃 OJ · MaYue OJ
 
-码跃 OJ 是一套面向编程教学和竞赛训练的在线判题系统，也是毕业设计课题 **《融合图像识别的智能化在线编程判题系统设计与实现》** 的实现项目。它保留传统 OJ 的题库、在线编码和自动评测，同时把图像目标计数、检测、文字识别等任务变成学生可以编程解决、教师可以配置并验证的题目。
+**算法编程与图像编程，在同一个工作台完成。**
 
-**适用场景：** 高校程序设计课程与实验、算法练习、校内竞赛，以及计算机视觉课程中的实践题。项目提供可部署的完整源码，可作为教学平台继续扩展。
+面向编程教学与计算机视觉实践的在线评测平台
 
-`Vue 3` · `Spring Boot 3` · `MySQL` · `Redis` · `MinIO` · `YOLOv8` · `EasyOCR` · `OpenCV` · `Docker Sandbox`
+[在线演示](http://192.140.175.206/) · [页面展示](#页面展示) · [核心功能](#核心功能) · [系统架构](#系统架构) · [运行部署](#运行与部署) · [项目文档](#文档)
+
+`Vue 3` · `Spring Boot 3` · `Docker` · `YOLOv8` · `EasyOCR` · `OpenCV`
+
+</div>
+
+[![码跃 OJ 首页：算法题与图像题都能在线评测](docs/images/showcase/01-home.jpg)](docs/images/showcase/01-home.jpg)
+
+码跃 OJ 是毕业设计课题 **《融合图像识别的智能化在线编程判题系统设计与实现》** 的实现项目。除了题库、在线编码、竞赛和提交复盘，它还把图像识别任务组织成有公开样例、隐藏用例和明确输出协议的编程题，让学生通过代码处理图片，再由系统自动评测。
+
+**核心场景：** 教师准备题图并复核候选答案，学生编写程序解决视觉任务，系统隔离执行代码并返回判定；老师可继续查看关联学生的学习与提交情况。
+
+## 页面展示
+
+以下图片均于 **2026-11-25** 从实际部署的网站截取，点击可查看原图。列表中标注“演示学生”的账号及“示例练习赛”用于功能展示，不代表真实用户规模或正式赛事。线上截图与当前源码的版本可能存在差异；截图不替代性能、权限及安全验收。
+
+### 图像编程工作台
+
+左侧查看公开题图，右侧编写 Python，通过运行结果核对输出。下图使用页面原有代码运行安全帽计数题，公开样例显示通过；这只验证了该次公开样例运行，不代表隐藏评测或全部题型都通过。
+
+[![图像目标计数工作台：安全帽题图、Python 代码与公开样例通过结果](docs/images/showcase/03-image-judge.jpg)](docs/images/showcase/03-image-judge.jpg)
+
+### 智能辅助命题
+
+<table>
+<tr>
+<td width="44%" valign="top">
+<h4>从一张图片，到可评测的编程题</h4>
+<p>选择通用目标检测或安全帽检测模型，上传题图，获取候选识别结果，再由命题人员复核。</p>
+<p>题图生成与目标识别分开配置：生成图片用于准备素材，识别结果用于辅助形成参考答案，最终判题依据仍须人工确认。</p>
+<p>支持图片上传、本地 GPU 与可配置的云端生图入口；外部服务需要单独部署或配置。</p>
+<p><strong>截图只展示题图配置区域，未展示隐藏用例、隐藏答案或 API 密钥。</strong></p>
+</td>
+<td width="56%" valign="top">
+<a href="docs/images/showcase/04-vision-authoring.jpg"><img src="docs/images/showcase/04-vision-authoring.jpg" alt="图像辅助命题：题图来源、图片预览与一键识别入口" width="100%"></a>
+</td>
+</tr>
+</table>
+
+### 练习、复盘与教学管理
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<a href="docs/images/showcase/02-problem-library.jpg"><img src="docs/images/showcase/02-problem-library.jpg" alt="题库：按题型、难度、知识点筛选题目" width="100%"></a>
+<p><strong>题库检索</strong> · 普通题与五类图像题统一浏览，按题型、难度和知识点缩小范围。</p>
+</td>
+<td width="50%" valign="top">
+<a href="docs/images/showcase/05-submission-overview.jpg"><img src="docs/images/showcase/05-submission-overview.jpg" alt="提交复盘：指标卡、每日趋势、判题结果与语言分布" width="100%"></a>
+<p><strong>提交复盘</strong> · 提交与通过趋势、结果分布和语言统计，支持个人及授权管理范围。</p>
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<a href="docs/images/showcase/06-student-management.jpg"><img src="docs/images/showcase/06-student-management.jpg" alt="学生管理：学习概览、学生目录、练习与提交入口" width="100%"></a>
+<p><strong>教学管理</strong> · 查看学生学习概况，通过目录进入资料、练习和提交记录；图中账号为明确标注的演示账号。</p>
+</td>
+<td width="50%" valign="top">
+<a href="docs/images/showcase/07-contests.jpg"><img src="docs/images/showcase/07-contests.jpg" alt="比赛中心：赛程状态与已归档示例练习赛" width="100%"></a>
+<p><strong>比赛中心</strong> · 浏览赛程、参赛入口和已结束赛事；图中为已归档的示例练习赛。</p>
+</td>
+</tr>
+</table>
+
+截图来源、页面路径和更新注意事项见 [展示图说明](./docs/images/showcase/README.md)。
 
 ## 核心功能
 
-| 场景 | 用户能做什么 | 设计价值 |
+| 模块 | 提供的能力 |
+| --- | --- |
+| 在线编程 | Monaco 代码编辑器；Python、Java、C++；运行公开样例、自定义输入与正式提交；时间、内存及错误反馈 |
+| 图像编程题 | 一套题图传输与隔离执行流程，配套五类输出协议；公开图用于调试，隐藏图用于正式评测 |
+| 辅助命题 | 题图上传、视觉识别、候选答案、人工复核与发布预检；可选 AI 题面整理与题图生成 |
+| 提交与复盘 | 状态轮询、结果筛选、只读代码详情、ECharts 学习趋势与分布统计 |
+| 教学工作台 | 学生、老师、管理员三角色；师生关系与数据范围；学生学习记录、题目管理和练习入口 |
+| 竞赛与交流 | 比赛、榜单、题解、博客、评论和站内消息，支持训练后的复盘与分享 |
+| AI 学习辅助 | 结合题目、代码和评测结果提供提示或诊断；支持个人模型配置，实际可用性取决于服务及 Key 配置 |
+
+### 五类图像题，各有明确的判题规则
+
+| 题型 | 学生输出 | 评测方式 |
 | --- | --- | --- |
-| 在线练习与竞赛 | 浏览题库，在 Monaco 编辑器编写 Python、Java、C++，运行公开样例并提交；查看判题结果、提交记录和题目统计 | 把练习、反馈与复盘放在同一个工作台 |
-| 教师命题 | 创建普通题和图像题，上传或生成题图，获取视觉服务给出的候选识别结果，人工确认答案，再配置公开与隐藏用例 | 缩短视觉题准备流程，同时保留人工审核 |
-| 多策略图像判题 | 按题型校验目标数量、主目标标签、检测框、OCR 文本或图像数值；支持对应的数量、IoU、编辑距离与数值容差 | 让不同视觉任务有明确的输出协议和判题规则 |
-| 学习管理 | 老师查看有师生关系的学生及其学习、提交情况；管理员管理角色、用户、题目和系统资源 | 支持教学管理，也限制不同角色的数据范围 |
-| 辅助与交流 | 做题助手结合题目和代码提供提示或修复建议；题解、博客、评论和站内消息承载经验交流 | 为卡题、复盘和知识分享提供入口 |
+| **图像目标计数**（核心题型） | 类别到数量的 JSON，如 `{"helmet":3}` | 逐类别计数比较与数量容差 |
+| 主目标标签分类 | 一个英文类别标签，如 `helmet` | 忽略大小写和首尾空白的标签匹配 |
+| 目标位置检测 | 包含标签和归一化坐标的 JSON 数组 | 类别、框数量与 IoU 匹配 |
+| OCR 文字识别 | 纯文本 | 文本规范化与编辑距离 |
+| 图像数值分析 | 宽、高、模式、平均灰度、边缘强度等固定字段 | 字段校验及独立数值容差 |
 
-图像题的重点是**“视觉模型辅助命题，学生程序接受规则评测”**：YOLOv8、EasyOCR 和 OpenCV 生成待确认的候选结果，教师复核后形成标准答案；学生代码在受限 Docker 环境运行，判题服务按明确规则比对输出，不由大模型主观打分。公开样例用于调试，隐藏用例用于正式评测。
+主目标标签取自 **YOLO 检测结果中置信度最高的目标**，并非独立的整图分类模型。`OPENCV_ANALYSIS` 是图像分析策略标识，不是训练模型；具体属性由 Pillow、NumPy 或 OpenCV 按项目实现计算。
 
-## 项目亮点
+## 系统架构
 
-- **一套流程覆盖五类视觉任务：** 目标计数、主目标标签分类、目标位置检测、OCR 文字识别、图像数值分析。主目标标签来自 YOLO 检测结果中置信度最高的目标，并非独立整图分类模型。
-- **命题与判题解耦：** 独立视觉服务负责候选标注，Spring Boot 负责业务与评测策略，Docker Sandbox 负责隔离运行用户代码；题图由 MinIO 统一存储。
-- **教学角色与数据权限：** 学生、老师、管理员使用同一登录入口，后端根据数据库角色和师生关系授权；老师管理自己的题目与关联学生，管理员负责全站管理。
-- **可展示的工程链路：** 从题图上传、候选标注、人工复核、公开样例运行，到隐藏用例评测和结果反馈，具备毕业设计演示与后续产品迭代的基础。
+```mermaid
+flowchart LR
+    User[学生 / 老师 / 管理员] --> Web[Vue 3 前端]
+    Web --> API[Spring Boot 主服务]
+    API --> DB[(MySQL)]
+    API --> Redis[(Redis)]
+    API --> Storage[MinIO 题图存储]
+    API --> Vision[FastAPI 视觉服务]
+    Vision --> Models[YOLOv8 / EasyOCR / 图像分析]
+    DB --> Outbox[待分发判题任务]
+    Outbox --> Dispatch[后台分发与重试]
+    Dispatch --> Transport[async / Redis Stream / RabbitMQ]
+    Transport --> Judge[判题服务与题型策略]
+    Judge --> Sandbox[Docker Sandbox]
+    Sandbox --> Runtime[Java / Python / C++ 用户程序]
+    Sandbox --> Judge
+    Judge --> DB
+```
 
-## 系统角色
+浏览器只调用主服务。视觉服务用于辅助命题，代码沙箱用于运行学生程序；正式评分按命题人员确认的标准答案和规则进行，不交给大模型主观打分。更细的部署与模块划分见 [架构文档](./docs/ARCHITECTURE.md)。
 
-| 角色 | 主要工作 |
+### 关键工程设计
+
+- **命题与评测分离：** 图片识别生成候选答案，人工复核后固定；正式提交重新运行学生程序，按题型策略比较结果。
+- **受限代码执行：** Docker 环境设置网络隔离、非 root、只读文件与资源限制，题图由后端准备后传入；具体边界与部署要求见 [Sandbox 说明](./Sandbox/README.md)。
+- **可靠提交链路：** 当前源码把提交记录、题目提交数原子自增、待分发任务写入同一数据库事务；后台投递失败后重试，消费端条件更新防重。提供至少一次投递，不宣称 MySQL 与外部 MQ 的强原子事务。
+- **权限与数据范围：** 前端负责入口展示，后端根据账号角色、师生关系及资源归属限制访问。个人记录与管理范围分开，完整代码按授权返回。
+- **可解释反馈：** 结果同时提供判定、耗时、内存和对应题型的失败原因；公开样例与隐藏评测分开处理。
+
+可靠提交升级需要执行 [新增任务表 SQL](./spingboot-init/src/main/resources/db/migrations/V20261125__judge_task_outbox.sql)。源码中实现的改进不等于已更新到线上截图对应的部署版本。
+
+## 技术与目录
+
+| 部分 | 技术与职责 |
 | --- | --- |
-| 学生 | 做题、运行样例、提交代码、查看个人记录与反馈、使用学习辅助功能 |
-| 老师 | 命题和管理自己创建的题目，查看关联学生的学习与提交情况，组织教学活动 |
-| 管理员 | 管理用户与角色、师生关系、全站题目和系统资源 |
+| `前端/myoj/` | Vue 3、TypeScript、Vite、Pinia、Monaco Editor、ECharts、Prism；练习、管理与交互界面 |
+| `spingboot-init/` | Java 17、Spring Boot 3、MyBatis-Plus；身份权限、命题、提交、判题编排与统计 |
+| `Sandbox/` | Spring Boot + Docker；隔离执行 Java、Python 和 C++ |
+| `vision-ai/` | Python、FastAPI、YOLOv8、EasyOCR、Pillow、NumPy、OpenCV；候选识别与图像分析 |
+| 基础服务 | MySQL、Redis、MinIO；数据、缓存与题图存储，RabbitMQ 为可选分发方式 |
+| `deploy/ubuntu/`、`docs/` | Linux 部署示例、架构、实验记录和验收说明 |
 
-判题节点是后台服务，不是用户角色：它按时间和内存限制运行代码，并向主服务返回执行结果。
+## 验证与边界
 
-## 图像题闭环
+功能截图展示产品流程，实验数据说明性能边界，两者分开记录。
 
-任务书要求、当前实测差距和复测方法见 [任务书验收对照](docs/TASKBOOK_ACCEPTANCE.md)。
-
-```text
-上传/拍照/AI 生成题图
-          ↓
-      MinIO 存储
-          ↓
-YOLOv8 / EasyOCR / OpenCV 自动标注
-          ↓
-生成待复核的题面、分类和标准答案
-          ↓
-公开样例 + 隐藏图像测试用例
-          ↓
-学生代码进入 Docker Sandbox 运行
-          ↓
-判题策略比较学生输出与标准结果
-          ↓
-AC / WA / CE / RE / TLE / MLE
-```
-
-其中，自动标注用于减轻教师录题工作量，发布前须由出题人核对图片和标准输出；正式提交使用隐藏图片重新运行学生程序，检查代码是否能处理新输入。
-
-## 其他能力
-
-- 竞赛、排行榜、题解、博客、评论和站内通知。
-- 用户名或已绑定邮箱登录；支持邮箱绑定、更换和找回密码。邮件功能需要配置 SMTP 环境变量。
-- 可选的做题 AI 助手和题图生成；个人模型 Key 由服务端保存和调用，功能能否使用取决于实际部署与配置。
-- 可切换 COCO 通用检测模型与校园安全帽检测模型；模型真实效果与系统验收状态见下节。
-
----
-
-## 实验与验收状态
-
-功能实现不等于任务书指标达标。下表只列已有证据；完整要求、复测方法与原始记录见 [任务书验收对照](./docs/TASKBOOK_ACCEPTANCE.md)。
-
-| 项目 | 当前状态 |
+| 项目 | 已有证据与限制 |
 | --- | --- |
-| 校园安全帽模型 mAP@0.5 | 独立测试集 883 张，三类平均值 **0.6763**，未达到任务书的 0.80；`person` 类仍是主要短板。见 [原始评估记录](./docs/evidence/hard_hat_test.json) |
-| OCR 文字准确率 | 尚无独立人工转写测试结果，不能声称达到 90% |
-| 判题与人工标注一致率 | 尚无独立人工标注对照结果，不能声称达到 95% |
-| 完整提交响应时间与 20 人并发 | 尚无覆盖完整服务链路的实测报告 |
+| 本次页面核验 | 实际访问线上页面；安全帽计数题的一次公开样例运行显示通过。未以此代替隐藏评测、全题型验收或并发测试 |
+| 提交一致性改进 | 2026-11-25 本地后端回归 **152 项测试通过**并完成 JAR 打包；新增事务、并发和恢复测试使用隔离 H2，不代表真实 MySQL/MQ/沙箱联调完成 |
+| 安全帽模型 | 独立测试集 883 张，mAP@0.5 为 **0.6763**，未达到任务书 0.80 目标；见 [原始评估](./docs/evidence/hard_hat_test.json) |
+| OCR 与人工一致率 | 仓库尚无完整的独立人工对照证据，不能声称已达到任务书准确率指标 |
+| 完整链路与并发 | 本仓库尚未归档覆盖所有题型的完整性能验收报告；不能把接口受理耗时视为判题完成耗时，也不能把虚拟用户数等同于真实活跃人数 |
 
-本仓库提供模型训练、评估和并发测试脚本；上述缺口属于毕业设计后续实验工作，不以演示截图或单元测试代替。
+任务书要求、评测方法和待验证事项见 [验收对照](./docs/TASKBOOK_ACCEPTANCE.md)。项目可用于毕业设计演示与工程实践交流；不把“功能多”作为企业级稳定性或量化指标达标的证明。
 
----
+## 运行与部署
 
-## 架构
+本地完整运行需要 JDK 17+、Maven、Node、Python、MySQL、Redis、MinIO 和 Docker，并准备视觉模型文件。**新建库使用总脚本，已有库升级使用对应迁移；上线前先备份、联调并保留回滚版本。**
 
-主服务 `spingboot-init` 负责业务、题目和提交记录；`vision-ai` 为出题提供 YOLOv8、EasyOCR、OpenCV 识别；**Sandbox** 通过 Docker 运行用户代码。前端只调用主服务，判题沙箱和视觉服务由主服务在内网调用。
+- [数据库初始化与升级](./spingboot-init/src/main/resources/db/README.md)
+- [Sandbox 使用与隔离执行](./Sandbox/README.md)
+- [视觉服务配置与部署](./vision-ai/README.md)
+- [Ubuntu 判题节点部署](./deploy/ubuntu/README.md)
+- [源码交付清单](./DELIVERY_CHECKLIST.md)
 
-```
-浏览器 → Vue 前端 → Spring Boot 主 API (:8888) → MySQL / Redis / MinIO
-                         │               │
-                         │               └→ vision-ai (:8090) → YOLOv8 / EasyOCR / OpenCV
-                         └→ Sandbox (:8080) → Docker → Java / Python / C++ 用户程序
-```
+毕业设计交付前可运行 `powershell -ExecutionPolicy Bypass -File .\tools\create-delivery-package.ps1`，生成排除私有配置、依赖缓存和构建产物的源码包。主服务目录 `spingboot-init` 保留历史拼写，未为展示调整包名。
 
-更细的部署图、时序图、表结构见 [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
-
-图像智能判题闭环见 [docs/VISION_JUDGE_DESIGN.md](./docs/VISION_JUDGE_DESIGN.md)，毕业论文与实验准备见 [docs/GRADUATION_THESIS_GUIDE.md](./docs/GRADUATION_THESIS_GUIDE.md)，Ubuntu 一键部署 Sandbox 见 [deploy/ubuntu/README.md](./deploy/ubuntu/README.md)。
-
-毕业设计提交时不要直接打包虚拟环境和依赖缓存。运行 `powershell -ExecutionPolicy Bypass -File .\tools\create-delivery-package.ps1` 可在项目同级目录生成不含密钥、缓存和编译产物的精简压缩包，清单见 [DELIVERY_CHECKLIST.md](./DELIVERY_CHECKLIST.md)。
-
-> **判题服务建议部署在 Linux + Docker。** 主站和前端可在 Windows 开发；生产环境不要把 Sandbox 端口直接暴露公网。说明见 [Sandbox/README.md](./Sandbox/README.md)。
-
----
-
-## 目录
-
-```text
-前端/myoj/          # Vue 3 前端
-spingboot-init/     # 主业务 API（目录名是历史拼写，未改包名）
-Sandbox/            # 判题沙箱
-vision-ai/          # 图像识别与自动标注 HTTP 服务
-deploy/ubuntu/      # Ubuntu 部署脚本与示例配置
-docs/               # 架构、实验与部署资料
-```
-
----
+<details>
+<summary><strong>展开本地运行、模型准备与生产部署步骤</strong></summary>
 
 ## 本地运行
 
@@ -198,12 +248,16 @@ cd 前端/myoj && npm install && npm run dev
 
 ### 生产部署概览
 
+已有库升级当前可靠提交链路时，先备份并停止旧后端，执行 [判题任务迁移](./spingboot-init/src/main/resources/db/migrations/V20261125__judge_task_outbox.sql)，再部署新版 JAR。不要只替换 JAR 而遗漏新增任务表；新建库使用完整 `schema.sql`。
+
 - 前端运行 `npm run build` 后由 Nginx 提供静态页面；`/api/` 转发到仅供本机访问的主服务，参考 [Nginx 示例](./前端/myoj/deploy/nginx.example.conf)。
 - 主服务使用 `prod` Profile；JAR 内的 `application-prod.yml` 只有环境变量占位，不含真实密码。MySQL、Redis、MinIO、Sandbox 和 `vision-ai` 的地址及密钥由服务器环境变量提供。不要把真实配置打进 JAR 或提交 Git。
 - Sandbox 在 Linux + Docker 上运行，`vision-ai` 可复用已构建的 Python 视觉镜像；二者的端口不对公网开放。见 [Ubuntu 部署说明](./deploy/ubuntu/README.md)与 [视觉服务部署说明](./vision-ai/README.md)。
 - 本地 ComfyUI、百炼生图和做题助手都是可选功能，按实际部署情况启用；未部署时不要在演示中声称可用。
 
 ---
+
+</details>
 
 ## 文档
 
